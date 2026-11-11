@@ -13,10 +13,11 @@ export class GameMap {
   }
 
   private buildMap(rapier: typeof RAPIER, world: RAPIER.World): void {
-    const groundGeo = new THREE.BoxGeometry(300, 2, 300);
+    // 1. Clean flat asphalt testing ground as originally designed
+    const groundGeo = new THREE.BoxGeometry(320, 2, 320);
     const groundMat = new THREE.MeshStandardMaterial({
-      color: 0x2e353b,
-      roughness: 0.85,
+      color: 0x272b30,
+      roughness: 0.9,
       metalness: 0.1
     });
     const ground = new THREE.Mesh(groundGeo, groundMat);
@@ -25,83 +26,183 @@ export class GameMap {
     this.group.add(ground);
     this.createStaticTrimesh(ground, rapier, world);
 
-    const gridHelper = new THREE.GridHelper(300, 60, 0x556677, 0x3d4852);
-    gridHelper.position.y = 0.02;
-    this.group.add(gridHelper);
+    const grid = new THREE.GridHelper(320, 64, 0x4f5b66, 0x343d46);
+    grid.position.y = 0.02;
+    this.group.add(grid);
 
-    const rampMat = new THREE.MeshStandardMaterial({
-      color: 0xe67e22,
-      roughness: 0.5,
+    // 2. Obstacle Course: Speed breakers, staggered ramps, curbs & jumps
+    this.createSpeedBreakers(rapier, world);
+    this.createStaggeredArticulationBumps(rapier, world);
+    this.createTestRamps(rapier, world);
+    this.createPerimeterBarriers(rapier, world);
+  }
+
+  private createSpeedBreakers(rapier: typeof RAPIER, world: RAPIER.World): void {
+    // Yellow/black striped safety speed breakers across the central test lane
+    const speedBreakerMat = new THREE.MeshStandardMaterial({
+      color: 0xf1c40f,
+      roughness: 0.6,
       metalness: 0.2
     });
 
-    const ramp1 = this.createRampMesh(14, 3, 24, rampMat);
-    ramp1.position.set(0, 1.5, 30);
-    ramp1.rotation.x = -Math.PI * 0.08;
-    this.group.add(ramp1);
-    this.createStaticTrimesh(ramp1, rapier, world);
+    const breakerZPositions = [15, 25, 35, 45, 55];
+    for (let i = 0; i < breakerZPositions.length; i++) {
+      const z = breakerZPositions[i];
+      // Rounded speed bump using a half-cylinder geometry
+      const bumpHeight = 0.22 + i * 0.04; // Gradually higher speed bumps to test suspension compression
+      const bumpWidth = 1.2;
+      const bumpLength = 16;
 
-    const ramp2 = this.createRampMesh(18, 5, 28, rampMat);
-    ramp2.position.set(-35, 2.5, -40);
-    ramp2.rotation.y = Math.PI * 0.25;
-    ramp2.rotation.x = -Math.PI * 0.1;
-    this.group.add(ramp2);
-    this.createStaticTrimesh(ramp2, rapier, world);
+      const bumpGeo = new THREE.CylinderGeometry(bumpWidth * 0.5, bumpWidth * 0.5, bumpLength, 16, 1, false, 0, Math.PI);
+      bumpGeo.rotateZ(Math.PI / 2);
+      bumpGeo.rotateY(Math.PI / 2);
 
-    const ramp3 = this.createRampMesh(16, 4, 25, rampMat);
-    ramp3.position.set(45, 2.0, -20);
-    ramp3.rotation.y = -Math.PI * 0.4;
-    ramp3.rotation.x = -Math.PI * 0.09;
-    this.group.add(ramp3);
-    this.createStaticTrimesh(ramp3, rapier, world);
+      const bump = new THREE.Mesh(bumpGeo, speedBreakerMat);
+      bump.scale.set(1.0, bumpHeight / (bumpWidth * 0.5), 1.0);
+      bump.position.set(0, 0, z);
+      bump.castShadow = true;
+      bump.receiveShadow = true;
+      this.group.add(bump);
+      this.createStaticTrimesh(bump, rapier, world);
+    }
+  }
 
-    const obsMat = new THREE.MeshStandardMaterial({
+  private createStaggeredArticulationBumps(rapier: typeof RAPIER, world: RAPIER.World): void {
+    // Staggered left/right bumps to specifically test individual tyre up-and-down travel
+    const bumpMat = new THREE.MeshStandardMaterial({
       color: 0x3498db,
+      roughness: 0.5,
+      metalness: 0.3
+    });
+
+    for (let i = 0; i < 10; i++) {
+      const z = 80 + i * 4.5;
+      const isLeft = i % 2 === 0;
+      const x = isLeft ? -1.8 : 1.8;
+
+      const moundGeo = new THREE.SphereGeometry(1.6, 16, 12, 0, Math.PI * 2, 0, Math.PI * 0.5);
+      const mound = new THREE.Mesh(moundGeo, bumpMat);
+      mound.scale.set(1.1, 0.28, 1.6);
+      mound.position.set(x, 0, z);
+      mound.castShadow = true;
+      mound.receiveShadow = true;
+      this.group.add(mound);
+      this.createStaticTrimesh(mound, rapier, world);
+    }
+  }
+
+  private createTestRamps(rapier: typeof RAPIER, world: RAPIER.World): void {
+    const rampMat = new THREE.MeshStandardMaterial({
+      color: 0xe67e22,
       roughness: 0.4,
       metalness: 0.3
     });
 
-    const obstacleConfigs = [
-      { size: [6, 4, 6], pos: [20, 2, 20] },
-      { size: [8, 5, 8], pos: [-25, 2.5, 20] },
-      { size: [12, 3, 6], pos: [0, 1.5, -30] },
-      { size: [4, 6, 20], pos: [-40, 3, 10] },
-      { size: [4, 6, 20], pos: [40, 3, 10] }
-    ];
+    // 1. Moderate Jump Ramp (Straight ahead at z = 140)
+    const jumpRamp = this.createWedgeMesh(10, 2.4, 14, rampMat);
+    jumpRamp.position.set(0, 0, 140);
+    this.group.add(jumpRamp);
+    this.createStaticTrimesh(jumpRamp, rapier, world);
 
-    for (const conf of obstacleConfigs) {
-      const boxGeo = new THREE.BoxGeometry(conf.size[0], conf.size[1], conf.size[2]);
-      const mesh = new THREE.Mesh(boxGeo, obsMat);
-      mesh.position.set(conf.pos[0], conf.pos[1], conf.pos[2]);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      this.group.add(mesh);
-      this.createStaticTrimesh(mesh, rapier, world);
-    }
+    // 2. High-speed Smooth Launch Ramp (West lane)
+    const launchRamp = this.createWedgeMesh(12, 3.8, 18, rampMat);
+    launchRamp.position.set(-35, 0, 40);
+    launchRamp.rotation.y = Math.PI;
+    this.group.add(launchRamp);
+    this.createStaticTrimesh(launchRamp, rapier, world);
 
-    const wallMat = new THREE.MeshStandardMaterial({
-      color: 0x7f8c8d,
-      roughness: 0.9
+    // 3. Side Bank Wedge (East lane)
+    const sideBank = this.createWedgeMesh(10, 1.8, 25, rampMat);
+    sideBank.position.set(35, 0, -30);
+    this.group.add(sideBank);
+    this.createStaticTrimesh(sideBank, rapier, world);
+
+    // 4. Stepped curb obstacles (South area)
+    const curbMat = new THREE.MeshStandardMaterial({
+      color: 0x95a5a6,
+      roughness: 0.7,
+      metalness: 0.2
     });
-    const perimeterWalls = [
-      { size: [300, 8, 4], pos: [0, 4, 150] },
-      { size: [300, 8, 4], pos: [0, 4, -150] },
-      { size: [4, 8, 300], pos: [150, 4, 0] },
-      { size: [4, 8, 300], pos: [-150, 4, 0] }
-    ];
 
-    for (const wall of perimeterWalls) {
-      const wallGeo = new THREE.BoxGeometry(wall.size[0], wall.size[1], wall.size[2]);
-      const mesh = new THREE.Mesh(wallGeo, wallMat);
-      mesh.position.set(wall.pos[0], wall.pos[1], wall.pos[2]);
-      mesh.receiveShadow = true;
-      this.group.add(mesh);
-      this.createStaticTrimesh(mesh, rapier, world);
+    const stepHeights = [0.15, 0.25, 0.35, 0.45];
+    for (let i = 0; i < stepHeights.length; i++) {
+      const h = stepHeights[i];
+      const step = new THREE.Mesh(new THREE.BoxGeometry(14, h, 3.5), curbMat);
+      step.position.set(0, h * 0.5, -25 - i * 6);
+      step.castShadow = true;
+      step.receiveShadow = true;
+      this.group.add(step);
+      this.createStaticTrimesh(step, rapier, world);
     }
   }
 
-  private createRampMesh(w: number, h: number, d: number, mat: THREE.Material): THREE.Mesh {
-    const geo = new THREE.BoxGeometry(w, h, d);
+  private createPerimeterBarriers(rapier: typeof RAPIER, world: RAPIER.World): void {
+    const wallMat = new THREE.MeshStandardMaterial({
+      color: 0x7f8c8d,
+      roughness: 0.8
+    });
+
+    const half = 150;
+    const configs = [
+      { size: [300, 2.5, 2], pos: [0, 1.25, half] },
+      { size: [300, 2.5, 2], pos: [0, 1.25, -half] },
+      { size: [2, 2.5, 300], pos: [half, 1.25, 0] },
+      { size: [2, 2.5, 300], pos: [-half, 1.25, 0] }
+    ];
+
+    for (const conf of configs) {
+      const wall = new THREE.Mesh(
+        new THREE.BoxGeometry(conf.size[0], conf.size[1], conf.size[2]),
+        wallMat
+      );
+      wall.position.set(conf.pos[0], conf.pos[1], conf.pos[2]);
+      wall.castShadow = true;
+      wall.receiveShadow = true;
+      this.group.add(wall);
+      this.createStaticTrimesh(wall, rapier, world);
+    }
+  }
+
+  private createWedgeMesh(
+    width: number,
+    height: number,
+    length: number,
+    mat: THREE.Material
+  ): THREE.Mesh {
+    const halfW = width * 0.5;
+    const halfL = length * 0.5;
+
+    // Build right triangular prism ramp
+    const vertices = new Float32Array([
+      // Bottom face
+      -halfW, 0, -halfL,
+       halfW, 0, -halfL,
+       halfW, 0,  halfL,
+      -halfW, 0,  halfL,
+
+      // Top back edge
+      -halfW, height, halfL,
+       halfW, height, halfL
+    ]);
+
+    const indices = [
+      // Bottom
+      0, 1, 2,  0, 2, 3,
+      // Slanted ramp face
+      0, 4, 5,  0, 5, 1,
+      // Back vertical face
+      2, 5, 4,  2, 4, 3,
+      // Left side triangle
+      0, 3, 4,
+      // Right side triangle
+      1, 5, 2
+    ];
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+
     const mesh = new THREE.Mesh(geo, mat);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -117,27 +218,25 @@ export class GameMap {
     const geometry = mesh.geometry.clone();
     geometry.applyMatrix4(mesh.matrixWorld);
 
-    const positionAttribute = geometry.attributes.position;
-    const vertices = new Float32Array(positionAttribute.array);
-
+    const positions = geometry.attributes.position.array as Float32Array;
     let indices: Uint32Array;
+
     if (geometry.index) {
       indices = new Uint32Array(geometry.index.array);
     } else {
-      indices = new Uint32Array(positionAttribute.count);
-      for (let i = 0; i < indices.length; i++) {
-        indices[i] = i;
-      }
+      const count = positions.length / 3;
+      indices = new Uint32Array(count);
+      for (let i = 0; i < count; i++) indices[i] = i;
     }
 
-    const bodyDesc = rapier.RigidBodyDesc.fixed();
-    const body = world.createRigidBody(bodyDesc);
-    const colliderDesc = rapier.ColliderDesc.trimesh(vertices, indices);
-    colliderDesc.setFriction(0.85);
-    colliderDesc.setRestitution(0.1);
-    world.createCollider(colliderDesc, body);
+    const groundBodyDesc = rapier.RigidBodyDesc.fixed();
+    const groundBody = world.createRigidBody(groundBodyDesc);
 
-    this.rigidBodies.push(body);
-    geometry.dispose();
+    const groundColliderDesc = rapier.ColliderDesc.trimesh(positions, indices)
+      .setFriction(0.8)
+      .setRestitution(0.02);
+
+    world.createCollider(groundColliderDesc, groundBody);
+    this.rigidBodies.push(groundBody);
   }
 }
