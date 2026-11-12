@@ -221,6 +221,7 @@ export class RemoteCar {
   }
 
   public onRespawn(pos: [number, number, number], yaw: number): void {
+    this.interpolator.clear();
     this.targetPos.set(pos[0], pos[1], pos[2]);
     const halfYaw = yaw * 0.5;
     this.targetQuat.set(0, Math.sin(halfYaw), 0, Math.cos(halfYaw));

@@ -29,26 +29,39 @@ const MIME_TYPES = {
 };
 
 const server = http.createServer((req, res) => {
-  const urlPath = req.url ? req.url.split('?')[0] : '/';
-  
+  const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const urlPath = decodeURIComponent(parsedUrl.pathname);
+
   if (urlPath === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('OK');
     return;
   }
 
-  // Serve static dist if available (for production all-in-one deployment)
-  let filePath = path.join(DIST_DIR, urlPath === '/' ? 'index.html' : urlPath);
-  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-    const ext = path.extname(filePath);
+  // Safe path resolution inside DIST_DIR preventing path traversal
+  const safeRelativePath = path.normalize(urlPath).replace(/^(\.\.[/\\])+/, '');
+  let targetPath = path.join(DIST_DIR, safeRelativePath === '/' || safeRelativePath === '\\' ? 'index.html' : safeRelativePath);
+
+  // If file doesn't exist or is a folder, fallback to index.html for SPA routing
+  if (!fs.existsSync(targetPath) || fs.statSync(targetPath).isDirectory()) {
+    targetPath = path.join(DIST_DIR, 'index.html');
+  }
+
+  if (fs.existsSync(targetPath) && fs.statSync(targetPath).isFile()) {
+    const ext = path.extname(targetPath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': contentType });
-    fs.createReadStream(filePath).pipe(res);
+    const isAsset = urlPath.startsWith('/assets/');
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Cache-Control': isAsset ? 'public, max-age=31536000, immutable' : 'no-cache',
+      'X-Content-Type-Options': 'nosniff'
+    });
+    fs.createReadStream(targetPath).pipe(res);
     return;
   }
 
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Off-Road 4x4 Co-op WebSocket Relay Server is running.');
+  res.end('Off-Road 4x4 Co-op Server is running. Run `npm run build` to generate production client assets.');
 });
 
 const wss = new WebSocketServer({ server });
@@ -68,11 +81,30 @@ const rooms = new Map();
 let nextClientId = 1;
 
 wss.on('connection', (ws) => {
+  // Disable Nagle's algorithm for immediate low-latency packet delivery
+  if (ws._socket) {
+    ws._socket.setNoDelay(true);
+  }
+
   const clientId = `p_${nextClientId++}_${Math.random().toString(36).substring(2, 6)}`;
   /** @type {ClientSession | null} */
   let currentSession = null;
 
-  ws.on('message', (raw) => {
+  ws.on('message', (raw, isBinary) => {
+    // 1. High-Performance Zero-Copy Binary Relay for vehicle transforms
+    if (isBinary) {
+      if (!currentSession) return;
+      const roomMembers = rooms.get(currentSession.room);
+      if (!roomMembers) return;
+      for (const [id, peerSession] of roomMembers) {
+        if (id !== currentSession.id && peerSession.ws.readyState === WebSocket.OPEN) {
+          peerSession.ws.send(raw, { binary: true });
+        }
+      }
+      return;
+    }
+
+    // 2. Control Messages (JSON)
     let msg;
     try {
       msg = JSON.parse(raw.toString());

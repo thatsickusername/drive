@@ -1,8 +1,10 @@
 import { ClientMessage, ServerMessage, VehicleTransformState, PlayerSlotInfo } from './protocol';
+import { BinaryVehicleSync } from './binary-sync';
 
 export interface NetworkCallbacks {
   onInit: (self: PlayerSlotInfo, peers: PlayerSlotInfo[], room: string) => void;
   onPeerJoined: (peer: PlayerSlotInfo) => void;
+  onPeerBinaryState: (slotIndex: number, state: VehicleTransformState) => void;
   onPeerState: (peerId: string, state: VehicleTransformState) => void;
   onPeerRespawn: (peerId: string, pos: [number, number, number], yaw: number) => void;
   onPeerLeft: (peerId: string) => void;
@@ -18,6 +20,7 @@ export class NetworkManager {
   private pingMs = 0;
   private isConnected = false;
   private reconnectTimer: number | null = null;
+  private seq = 0;
 
   constructor(roomCode: string, callbacks: NetworkCallbacks) {
     this.roomCode = roomCode;
@@ -34,6 +37,7 @@ export class NetworkManager {
     const wsUrl = this.getWebSocketUrl();
     try {
       this.ws = new WebSocket(wsUrl);
+      this.ws.binaryType = 'arraybuffer';
     } catch {
       this.callbacks.onStatusChange('error', this.pingMs);
       this.scheduleReconnect();
@@ -48,6 +52,16 @@ export class NetworkManager {
     };
 
     this.ws.onmessage = (event) => {
+      // 1. High-Performance Binary Transform Frame
+      if (event.data instanceof ArrayBuffer) {
+        const decoded = BinaryVehicleSync.decode(event.data);
+        if (decoded) {
+          this.callbacks.onPeerBinaryState(decoded.slotIndex, decoded.state);
+        }
+        return;
+      }
+
+      // 2. Control Messages (JSON)
       try {
         const msg: ServerMessage = JSON.parse(event.data);
         this.handleMessage(msg);
@@ -109,9 +123,10 @@ export class NetworkManager {
     }
   }
 
-  public sendState(state: VehicleTransformState): void {
+  public sendState(slotIndex: number, state: VehicleTransformState): void {
     if (this.isConnected && this.ws?.readyState === WebSocket.OPEN) {
-      this.send({ type: 'state', state });
+      const buffer = BinaryVehicleSync.encode(slotIndex, ++this.seq, state);
+      this.ws.send(buffer);
     }
   }
 

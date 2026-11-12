@@ -16,6 +16,7 @@ class Game {
   // Multiplayer Subsystems
   private network!: NetworkManager;
   private remoteCars = new Map<string, RemoteCar>();
+  private slotToRemote = new Map<number, RemoteCar>();
   private selfSlot: PlayerSlotInfo | null = null;
   private roomCode: string = 'TRAIL-1';
   private netStatus: string = 'Connecting...';
@@ -89,6 +90,7 @@ class Game {
           if (!this.remoteCars.has(peer.id)) {
             const remote = new RemoteCar(this.renderer.scene, this.physics.rapier, this.physics.world, peer);
             this.remoteCars.set(peer.id, remote);
+            this.slotToRemote.set(peer.slotIndex, remote);
           }
         }
         this.updateNetworkHUD();
@@ -97,8 +99,15 @@ class Game {
         if (!this.remoteCars.has(peer.id)) {
           const remote = new RemoteCar(this.renderer.scene, this.physics.rapier, this.physics.world, peer);
           this.remoteCars.set(peer.id, remote);
+          this.slotToRemote.set(peer.slotIndex, remote);
         }
         this.updateNetworkHUD();
+      },
+      onPeerBinaryState: (slotIndex, state) => {
+        const remote = this.slotToRemote.get(slotIndex);
+        if (remote) {
+          remote.interpolator.push(state);
+        }
       },
       onPeerState: (peerId, state) => {
         const remote = this.remoteCars.get(peerId);
@@ -115,6 +124,7 @@ class Game {
       onPeerLeft: (peerId) => {
         const remote = this.remoteCars.get(peerId);
         if (remote) {
+          this.slotToRemote.delete(remote.slotInfo.slotIndex);
           remote.destroy();
           this.remoteCars.delete(peerId);
         }
@@ -290,10 +300,21 @@ class Game {
       remoteCar.update(currentTime);
     }
 
-    // Stream local car transform over network at 25Hz (~40ms interval)
-    if (this.network && currentTime - this.lastNetworkSendTime >= 40) {
-      this.lastNetworkSendTime = currentTime;
-      this.network.sendState(this.car.getTransformState(currentTime));
+    // High-Frequency Binary Transform Broadcast (60Hz active / 16ms, 12Hz idle / 80ms)
+    if (this.network && this.selfSlot) {
+      const linvel = this.car.body.linvel();
+      const isMoving =
+        this.inputs.forward ||
+        this.inputs.backward ||
+        this.inputs.left ||
+        this.inputs.right ||
+        Math.hypot(linvel.x, linvel.z) > 0.04;
+      const targetInterval = isMoving ? 16 : 80;
+
+      if (currentTime - this.lastNetworkSendTime >= targetInterval) {
+        this.lastNetworkSendTime = currentTime;
+        this.network.sendState(this.selfSlot.slotIndex, this.car.getTransformState(currentTime));
+      }
     }
 
     // Camera follow update
