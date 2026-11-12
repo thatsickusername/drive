@@ -16,11 +16,7 @@ class Game {
     left: false,
     right: false,
     brake: false,
-    lowRange: false,
-    diffLock: true,
-    airDown: false,
-    winchAttachToggle: false,
-    winchReel: false
+    lowRange: false
   };
 
   private lastTime: number = 0;
@@ -98,18 +94,6 @@ class Game {
         case 'KeyL': // Toggle 4WD Low / High range
           this.inputs.lowRange = !this.inputs.lowRange;
           break;
-        case 'KeyK': // Toggle Axle Diff Lock
-          this.inputs.diffLock = !this.inputs.diffLock;
-          break;
-        case 'KeyT': // Toggle Tire Pressure (32 PSI Trail vs 14 PSI Crawl)
-          this.inputs.airDown = !this.inputs.airDown;
-          break;
-        case 'KeyF': // Toggle Bumper Winch Anchor
-          this.inputs.winchAttachToggle = true;
-          break;
-        case 'KeyE': // Hold to Reel In Winch
-          this.inputs.winchReel = true;
-          break;
         case 'KeyR':
           this.car.reset(0, 3.5, 0);
           break;
@@ -136,12 +120,6 @@ class Game {
           break;
         case 'Space':
           this.inputs.brake = false;
-          break;
-        case 'KeyF':
-          this.inputs.winchAttachToggle = false;
-          break;
-        case 'KeyE':
-          this.inputs.winchReel = false;
           break;
       }
     });
@@ -225,21 +203,6 @@ class Game {
     const rpmBar = '█'.repeat(filledSegments) + '░'.repeat(barSegments - filledSegments);
     const rpmColor = tele.rpm > 4800 ? '#e74c3c' : (tele.rpm > 3500 ? '#f1c40f' : '#2ecc71');
 
-    const diffBadge = tele.diffLocked
-      ? '<span style="background:#27ae60;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">DIFF LOCK: ON [K]</span>'
-      : '<span style="background:#7f8c8d;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">DIFF: OPEN [K]</span>';
-
-    const tireBadge = tele.tirePressurePsi < 20
-      ? '<span style="background:#d35400;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">14 PSI (AIRED DOWN +24% GRIP) [T]</span>'
-      : '<span style="background:#2980b9;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">32 PSI (TRAIL) [T]</span>';
-
-    let winchBadge = '<span style="color:#7f8c8d;">[WINCH: READY - PRESS F]</span>';
-    if (tele.winchStatus === 'WINCHING') {
-      winchBadge = `<span style="background:#e74c3c;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">WINCH: REELING IN (${tele.winchDistance}m) [E]</span>`;
-    } else if (tele.winchStatus === 'ATTACHED') {
-      winchBadge = `<span style="background:#f39c12;color:#000;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">WINCH: ATTACHED (${tele.winchDistance}m) - HOLD E TO PULL</span>`;
-    }
-
     this.hudElement.innerHTML = `
       <div style="font-weight:bold;margin-bottom:6px;color:#fff;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:3px;">
         OVER THE HILL // OFF-ROAD TRIAL DYNAMICS
@@ -249,15 +212,13 @@ class Game {
         RPM: <span style="color:${rpmColor};font-weight:bold;">${tele.rpm}</span>
         <span style="font-size:10px;color:${rpmColor};font-family:monospace;letter-spacing:1px;margin-left:6px;">[${rpmBar}]</span>
       </div>
-      <div style="margin-top:3px;">Drivetrain: ${diffBadge} | Tire PSI: ${tireBadge}</div>
-      <div style="margin-top:2px;">Recovery: ${winchBadge}</div>
       <div style="margin-top:2px;">Terrain: ${surfaceBadge} | Speed: <strong>${tele.speedKmh} km/h</strong></div>
       <div>Pitch: ${pitchDeg}&deg; | Roll: ${rollDeg}&deg;</div>
       <div style="margin-top:6px;font-weight:bold;color:#bbb;">Suspension Articulation:</div>
       <div>FL: ${suspFL}% | FR: ${suspFR}% || RL: ${suspRL}% | RR: ${suspRR}%</div>
       <div style="margin-top:4px;font-weight:bold;color:#bbb;">Wheel Slip Ratios (Combined Friction Ellipse):</div>
       <div>FL: ${slipFL} | FR: ${slipFR} || RL: ${slipRL} | RR: ${slipRR}</div>
-      <div style="margin-top:6px;color:#888;font-size:11px;">[W/S] Throttle/Brake | [Space] Handbrake | [L] 4H/4L | [K] Diff Lock | [T] Tire PSI | [F] Winch Cable | [E] Reel Winch | [R] Reset</div>
+      <div style="margin-top:6px;color:#888;font-size:11px;">[W/S] Throttle/Brake | [Space] Handbrake | [L] 4H/4L | [R] Reset</div>
     `;
   }
 

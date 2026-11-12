@@ -9,10 +9,6 @@ export interface VehicleInputs {
   brake: boolean;
   handbrake?: boolean;
   lowRange?: boolean;
-  diffLock?: boolean;
-  airDown?: boolean;
-  winchAttachToggle?: boolean;
-  winchReel?: boolean;
 }
 
 export interface WheelConfig {
@@ -65,10 +61,6 @@ export interface DrivetrainTelemetry {
   isHandbrake: boolean;
   isFootBraking: boolean;
   surfaceName: string;
-  diffLocked: boolean;
-  tirePressurePsi: number;
-  winchStatus: 'DETACHED' | 'ATTACHED' | 'WINCHING';
-  winchDistance: number;
 }
 
 export class Engine {
@@ -150,7 +142,6 @@ export class Car {
   // Drivetrain & Vehicle parameters
   public lowRange: boolean = false;
   public diffLock: boolean = true;
-  public tirePressurePsi: number = 32; // 32 PSI Trail vs 14 PSI Crawl
   private currentSteer = 0;
 
   // Dynamic Cabin Bushing Compliance
@@ -158,12 +149,6 @@ export class Car {
   private cabinPitch = 0;
   private cabinRoll = 0;
   private lastLinvel = new THREE.Vector3();
-
-  // Recovery Winch System
-  public winchAnchor: THREE.Vector3 | null = null;
-  public winchCableLine: THREE.Line;
-  public isWinching: boolean = false;
-  private prevWinchToggle: boolean = false;
 
   // Drivetrain & Engine Subsystems
   public engine: Engine = new Engine();
@@ -203,14 +188,7 @@ export class Car {
     // 1. Build Visual Chassis with rubber-bushing mounted cabin
     this.buildChassisMesh();
 
-    // 2. Setup Recovery Winch Cable Line
-    const cableMat = new THREE.LineBasicMaterial({ color: 0xf39c12, linewidth: 2 });
-    const cableGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
-    this.winchCableLine = new THREE.Line(cableGeo, cableMat);
-    this.winchCableLine.visible = false;
-    scene.add(this.winchCableLine);
-
-    // 3. Setup Rapier Chassis Body
+    // 2. Setup Rapier Chassis Body
     const bodyDesc = rapier.RigidBodyDesc.dynamic()
       .setTranslation(0, 1.8, 0)
       .setCanSleep(false)
@@ -237,7 +215,7 @@ export class Car {
       true
     );
 
-    // 4. Setup Wheels & Suspension geometry
+    // 3. Setup Wheels & Suspension geometry
     this.setupWheels(scene);
 
     scene.add(this.mesh);
@@ -273,14 +251,6 @@ export class Car {
     bumper.position.set(0, 0.3, 2.05);
     bumper.castShadow = true;
     this.cabinMesh.add(bumper);
-
-    // Front Bumper Winch Housing & Drum
-    const winchDrumGeo = new THREE.CylinderGeometry(0.09, 0.09, 0.42, 14);
-    winchDrumGeo.rotateZ(Math.PI / 2);
-    const winchDrumMat = new THREE.MeshStandardMaterial({ color: 0xc0392b, metalness: 0.7, roughness: 0.3 });
-    const winchDrum = new THREE.Mesh(winchDrumGeo, winchDrumMat);
-    winchDrum.position.set(0, 0.42, 2.15);
-    this.cabinMesh.add(winchDrum);
 
     const hlMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const hlLeft = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.1, 16), hlMat);
@@ -409,8 +379,6 @@ export class Car {
 
   public updateFixed(inputs: VehicleInputs, dt: number): void {
     if (inputs.lowRange !== undefined) this.lowRange = inputs.lowRange;
-    if (inputs.diffLock !== undefined) this.diffLock = inputs.diffLock;
-    if (inputs.airDown !== undefined) this.tirePressurePsi = inputs.airDown ? 14 : 32;
 
     const rot = this.body.rotation();
     const chassisQuat = new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
@@ -420,57 +388,6 @@ export class Car {
     const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(chassisQuat);
     const rightDir = new THREE.Vector3(1, 0, 0).applyQuaternion(chassisQuat);
     const upDir = new THREE.Vector3(0, 1, 0).applyQuaternion(chassisQuat);
-
-    // Bumper point for recovery winch
-    const bumperPos = chassisPos.clone().add(forwardDir.clone().multiplyScalar(2.05)).add(upDir.clone().multiplyScalar(0.38));
-
-    if (inputs.winchAttachToggle && !this.prevWinchToggle) {
-      if (this.winchAnchor) {
-        this.winchAnchor = null;
-        this.isWinching = false;
-      } else {
-        // Cast winch cable ray forward to attach to rocks/obstacles/terrain
-        const winchRay = new this.rapier.Ray(
-          new this.rapier.Vector3(bumperPos.x, bumperPos.y, bumperPos.z),
-          new this.rapier.Vector3(forwardDir.x, forwardDir.y, forwardDir.z)
-        );
-        const hit = this.world.castRay(winchRay, 25.0, true, undefined, undefined, this.collider);
-        if (hit && hit.timeOfImpact < 25.0) {
-          const pt = winchRay.pointAt(hit.timeOfImpact);
-          this.winchAnchor = new THREE.Vector3(pt.x, pt.y, pt.z);
-        } else {
-          // Cast ground anchor point 18m ahead
-          const groundRay = new this.rapier.Ray(
-            new this.rapier.Vector3(bumperPos.x + forwardDir.x * 18.0, bumperPos.y + 4.0, bumperPos.z + forwardDir.z * 18.0),
-            new this.rapier.Vector3(0, -1, 0)
-          );
-          const gHit = this.world.castRay(groundRay, 8.0, true, undefined, undefined, this.collider);
-          if (gHit) {
-            const pt = groundRay.pointAt(gHit.timeOfImpact);
-            this.winchAnchor = new THREE.Vector3(pt.x, pt.y, pt.z);
-          }
-        }
-      }
-    }
-    this.prevWinchToggle = !!inputs.winchAttachToggle;
-
-    if (this.winchAnchor && inputs.winchReel) {
-      this.isWinching = true;
-      const cableVec = this.winchAnchor.clone().sub(bumperPos);
-      const dist = cableVec.length();
-      if (dist > 1.2) {
-        const pullDir = cableVec.normalize();
-        const winchForce = 24000; // 24 kN heavy duty recovery pull
-        const impulse = pullDir.multiplyScalar(winchForce * dt);
-        this.body.applyImpulseAtPoint(
-          new this.rapier.Vector3(impulse.x, impulse.y, impulse.z),
-          new this.rapier.Vector3(bumperPos.x, bumperPos.y, bumperPos.z),
-          true
-        );
-      }
-    } else {
-      this.isWinching = false;
-    }
 
     const linvel = this.body.linvel();
     const forwardSpeed = new THREE.Vector3(linvel.x, linvel.y, linvel.z).dot(forwardDir);
@@ -778,9 +695,7 @@ export class Car {
 
         // Phase 5: Surface-dependent friction coefficient & depth resistance
         const surface = this.getSurfaceAtPoint(primaryHitPoint.x, primaryHitPoint.z);
-        // Airing down (14 PSI) broadens tire contact patch, providing +24% grip on terrain
-        const psiGripMultiplier = this.tirePressurePsi < 20 ? 1.24 : 1.0;
-        const maxFrictionForce = totalSuspensionForce * surface.friction * psiGripMultiplier;
+        const maxFrictionForce = totalSuspensionForce * surface.friction;
 
         // Depth resistance drag (e.g. mud displacement drag)
         if (surface.depthDrag > 0 && Math.abs(forwardVelocity) > 0.05) {
@@ -793,28 +708,12 @@ export class Car {
           );
         }
 
-        // Drive torque distribution: 4WD with selectable differential lock
-        const axleTotalTorque = conf.isFront
-          ? (isHandbrake ? drivelineTorque : drivelineTorque * 0.5)
-          : (isHandbrake ? 0 : drivelineTorque * 0.5);
-
+        // Drive torque distribution: 4WD (50% front / 50% rear, decoupled under handbrake)
         let wheelDriveTorque = 0;
-        const partnerIdx = i % 2 === 0 ? i + 1 : i - 1;
-        const partner = this.wheels[partnerIdx];
-
-        if (this.diffLock) {
-          // Locked Spool Differential: Rigid 50/50 torque split + cross-wheel angular coupling
-          wheelDriveTorque = axleTotalTorque * 0.5;
-          if (partner) {
-            const speedDiff = w.angularVelocity - partner.angularVelocity;
-            w.angularVelocity -= speedDiff * 0.25 * Math.min(1.0, dt * 10.0);
-          }
+        if (isHandbrake) {
+          wheelDriveTorque = conf.isFront ? (drivelineTorque / 2) : 0;
         } else {
-          // Open Differential: Torque is limited by the wheel with least normal force / traction
-          const thisLoad = w.isOnGround ? Math.max(80, w.normalForce) : 40;
-          const partnerLoad = (partner && partner.isOnGround) ? Math.max(80, partner.normalForce) : 40;
-          const openDiffTractionRatio = Math.min(1.0, Math.min(thisLoad, partnerLoad) / Math.max(thisLoad, partnerLoad));
-          wheelDriveTorque = (axleTotalTorque * 0.5) * Math.max(0.18, openDiffTractionRatio);
+          wheelDriveTorque = drivelineTorque / 4;
         }
 
         // Dynamic handbrake drift: rear wheels have reduced lateral holding floor when handbrake is pulled
@@ -1090,9 +989,6 @@ export class Car {
     this.transmission.currentGear = 1;
     this.isHandbrakeActive = false;
     this.isFootBrakingActive = false;
-    this.winchAnchor = null;
-    this.isWinching = false;
-    this.winchCableLine.visible = false;
     this.cabinPitch = 0;
     this.cabinRoll = 0;
     this.cabinMesh.rotation.set(0, 0, 0);
@@ -1117,9 +1013,6 @@ export class Car {
     for (const w of this.wheels) {
       sumSlip += Math.abs(w.slipRatio);
     }
-    const distToWinch = this.winchAnchor
-      ? Number(this.mesh.position.distanceTo(this.winchAnchor).toFixed(1))
-      : 0;
 
     return {
       rpm: Math.round(this.engine.rpm),
@@ -1132,11 +1025,7 @@ export class Car {
       avgSlipRatio: Number((sumSlip / 4).toFixed(2)),
       isHandbrake: this.isHandbrakeActive,
       isFootBraking: this.isFootBrakingActive,
-      surfaceName: this.lastSurfaceType,
-      diffLocked: this.diffLock,
-      tirePressurePsi: this.tirePressurePsi,
-      winchStatus: this.isWinching ? 'WINCHING' : (this.winchAnchor ? 'ATTACHED' : 'DETACHED'),
-      winchDistance: distToWinch
+      surfaceName: this.lastSurfaceType
     };
   }
 
@@ -1184,20 +1073,9 @@ export class Car {
 
       w.wheelMesh.rotation.x = w.spinAngle;
 
-      // Dynamic visual tire squish against rocks/ground
-      const squish = Math.min(0.22, (w.normalForce / 12000) * (this.tirePressurePsi < 20 ? 1.45 : 0.85));
+      // Dynamic visual tire squish against rocks/ground based on suspension compression load
+      const squish = Math.min(0.22, w.normalForce / 12000);
       w.wheelMesh.scale.set(1.0 + squish * 0.35, 1.0 - squish * 0.42, 1.0 + squish * 0.35);
-    }
-
-    // 4. Update Recovery Winch Cable Visual Line
-    if (this.winchAnchor) {
-      this.winchCableLine.visible = true;
-      const bumperWorld = this.mesh.position.clone()
-        .add(forwardDir.clone().multiplyScalar(2.05))
-        .add(upDir.clone().multiplyScalar(0.38));
-      this.winchCableLine.geometry.setFromPoints([bumperWorld, this.winchAnchor]);
-    } else {
-      this.winchCableLine.visible = false;
     }
   }
 }
