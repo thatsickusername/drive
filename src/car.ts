@@ -61,6 +61,10 @@ export interface DrivetrainTelemetry {
   isHandbrake: boolean;
   isFootBraking: boolean;
   surfaceName: string;
+  handlingState: 'NEUTRAL' | 'UNDERSTEER' | 'OVERSTEER';
+  frontSlipAngleDeg: number;
+  rearSlipAngleDeg: number;
+  steerAngleDeg: number;
 }
 
 export class Engine {
@@ -192,8 +196,8 @@ export class Car {
     const bodyDesc = rapier.RigidBodyDesc.dynamic()
       .setTranslation(0, 1.02, 0)
       .setCanSleep(false)
-      .setLinearDamping(0.2)
-      .setAngularDamping(2.8);
+      .setLinearDamping(0.04)
+      .setAngularDamping(0.35);
 
     this.body = world.createRigidBody(bodyDesc);
 
@@ -394,19 +398,19 @@ export class Car {
     const linearSpeed = Math.hypot(linvel.x, linvel.z);
 
     // Phase 4: Dynamic Speed-Sensitive Steering Lock & Caster Self-Centering
-    // Crawler low-speed (<10km/h): full ~32° angle for tight obstacle maneuvering
-    // Higher trail speed (>50km/h): clamped to ~13° to prevent snap rollovers
-    const steerSpeedRatio = Math.min(1.0, linearSpeed / 18.0);
-    const dynamicMaxSteer = THREE.MathUtils.lerp(0.56, 0.22, steerSpeedRatio);
-    const dynamicSteerSpeed = THREE.MathUtils.lerp(5.2, 3.2, steerSpeedRatio);
+    // Full authentic off-road lock (~40° = 0.70 rad) for tight 10.5m turning circle
+    // High trail speed clamp (~22° = 0.38 rad) with agile response rate (7.8 rad/s)
+    const steerSpeedRatio = Math.min(1.0, linearSpeed / 22.0);
+    const dynamicMaxSteer = THREE.MathUtils.lerp(0.70, 0.38, steerSpeedRatio);
+    const dynamicSteerSpeed = THREE.MathUtils.lerp(7.8, 5.2, steerSpeedRatio);
 
     let targetSteer = 0;
     if (inputs.left) targetSteer += dynamicMaxSteer;
     if (inputs.right) targetSteer -= dynamicMaxSteer;
 
-    // Pneumatic caster trail return: wheels naturally pull straight when steering is released
+    // Pneumatic caster trail return: wheels naturally snap back straight when steering is released
     const casterReturnBoost = (!inputs.left && !inputs.right)
-      ? (1.0 + Math.min(2.5, Math.abs(forwardSpeed) * 0.18))
+      ? (1.0 + Math.min(3.5, Math.abs(forwardSpeed) * 0.22))
       : 1.0;
     const steerStep = dynamicSteerSpeed * casterReturnBoost * dt;
 
@@ -530,6 +534,13 @@ export class Car {
       const engTorque = this.engine.getTorque(driverThrottle) * torqueMultiplier;
       const gearSign = this.transmission.currentGear === -1 ? -1 : 1;
       drivelineTorque = engTorque * Math.abs(totalRatio) * 0.92 * gearSign;
+    }
+
+    // Aerodynamic quadratic drag opposing motion (0.5 * rho * Cd * A * v^2)
+    if (Math.abs(forwardSpeed) > 0.4) {
+      const aeroDragForce = 1.20 * forwardSpeed * Math.abs(forwardSpeed);
+      const aeroImpulse = forwardDir.clone().multiplyScalar(-aeroDragForce * dt);
+      this.body.applyImpulse(new this.rapier.Vector3(aeroImpulse.x, aeroImpulse.y, aeroImpulse.z), true);
     }
 
     // Standstill damping to prevent rolling creep or micro-jitter when stopping or stopped
@@ -691,26 +702,29 @@ export class Car {
         w.slipAngle = slipAngle;
         w.lateralSlip = lateralVelocity;
 
-        // B. Pacejka-derived combined slip friction ellipse
-        const sPeak = 0.16;
-        const alphaPeak = 0.20; // ~11.5 deg
+        // B. Pacejka-derived combined slip friction ellipse with front/rear handling bias
+        // Front tires saturate earlier in slip angle (~9.2° = 0.16 rad) -> promotes understeer at limit entry
+        // Rear tires maintain slip grip up to ~11.5° (0.20 rad) -> allows predictable slip angle buildup and counter-steer drift
+        const sPeak = conf.isFront ? 0.15 : 0.17;
+        const alphaPeak = conf.isFront ? 0.16 : 0.20;
 
         const normS = slipRatio / sPeak;
         const normAlpha = slipAngle / alphaPeak;
         const totalSlipMag = Math.sqrt(normS * normS + normAlpha * normAlpha);
 
-        // Realistic traction response curve: smooth progressive grip rising to peak, and retaining 78% sliding grip on skid
+        // Realistic traction response curve: smooth progressive grip rising to peak, and retaining sliding grip on skid
         let tractionResponse = 1.0;
         if (totalSlipMag <= 1.0) {
           tractionResponse = totalSlipMag * (2.0 - totalSlipMag);
         } else {
-          const slideFloor = 0.78;
+          const slideFloor = conf.isFront ? 0.72 : 0.76;
           tractionResponse = slideFloor + (1.0 - slideFloor) / (1.0 + 0.45 * (totalSlipMag - 1.0));
         }
 
-        // Phase 5: Surface-dependent friction coefficient & depth resistance
+        // Phase 5: Surface-dependent friction coefficient & dynamic normal load sensitivity
         const surface = this.getSurfaceAtPoint(primaryHitPoint.x, primaryHitPoint.z);
-        const maxFrictionForce = totalSuspensionForce * surface.friction;
+        const loadSensitivity = Math.max(0.80, 1.0 - (totalSuspensionForce / 14000) * 0.16);
+        const maxFrictionForce = totalSuspensionForce * surface.friction * loadSensitivity;
 
         // Depth resistance drag (e.g. mud displacement drag)
         if (surface.depthDrag > 0 && Math.abs(forwardVelocity) > 0.05) {
@@ -723,18 +737,20 @@ export class Car {
           );
         }
 
-        // Drive torque distribution: 4WD (50% front / 50% rear, decoupled under handbrake)
+        // Drive torque distribution: 40% front / 60% rear in 4H (dynamic power oversteer), 50/50 locked in 4L crawl
         let wheelDriveTorque = 0;
         if (isHandbrake) {
-          wheelDriveTorque = conf.isFront ? (drivelineTorque / 2) : 0;
-        } else {
+          wheelDriveTorque = conf.isFront ? (drivelineTorque * 0.5) : 0;
+        } else if (this.lowRange) {
           wheelDriveTorque = drivelineTorque / 4;
+        } else {
+          wheelDriveTorque = conf.isFront ? (drivelineTorque * 0.20) : (drivelineTorque * 0.30);
         }
 
         // Dynamic handbrake drift: rear wheels have reduced lateral holding floor when handbrake is pulled
         let handbrakeLateralScale = 1.0;
         if (isHandbrake && !conf.isFront) {
-          handbrakeLateralScale = 0.32;
+          handbrakeLateralScale = 0.26;
         }
 
         // Combined friction ellipse partitioning
@@ -902,7 +918,8 @@ export class Car {
     const absSteer = Math.abs(steerInput);
 
     const radius = wheelbase / Math.tan(absSteer);
-    const insideAngle = Math.atan(wheelbase / (radius - trackWidth * 0.5));
+    const safeInsideRadius = Math.max(0.35, radius - trackWidth * 0.5);
+    const insideAngle = Math.atan(wheelbase / safeInsideRadius);
     const outsideAngle = Math.atan(wheelbase / (radius + trackWidth * 0.5));
 
     if (sign > 0) {
@@ -1051,6 +1068,19 @@ export class Car {
       sumSlip += Math.abs(w.slipRatio);
     }
 
+    const frontSlipDeg = Math.abs((((this.wheels[0]?.slipAngle ?? 0) + (this.wheels[1]?.slipAngle ?? 0)) * 0.5) * (180 / Math.PI));
+    const rearSlipDeg = Math.abs((((this.wheels[2]?.slipAngle ?? 0) + (this.wheels[3]?.slipAngle ?? 0)) * 0.5) * (180 / Math.PI));
+    const steerDeg = Number((this.currentSteer * (180 / Math.PI)).toFixed(1));
+
+    let handlingState: 'NEUTRAL' | 'UNDERSTEER' | 'OVERSTEER' = 'NEUTRAL';
+    if (speedKmh > 10) {
+      if (rearSlipDeg > frontSlipDeg + 2.2 && rearSlipDeg > 4.0) {
+        handlingState = 'OVERSTEER';
+      } else if (frontSlipDeg > rearSlipDeg + 1.8 && frontSlipDeg > 4.5) {
+        handlingState = 'UNDERSTEER';
+      }
+    }
+
     return {
       rpm: Math.round(this.engine.rpm),
       gearName: this.transmission.getGearName(),
@@ -1062,7 +1092,11 @@ export class Car {
       avgSlipRatio: Number((sumSlip / 4).toFixed(2)),
       isHandbrake: this.isHandbrakeActive,
       isFootBraking: this.isFootBrakingActive,
-      surfaceName: this.lastSurfaceType
+      surfaceName: this.lastSurfaceType,
+      handlingState,
+      frontSlipAngleDeg: Number(frontSlipDeg.toFixed(1)),
+      rearSlipAngleDeg: Number(rearSlipDeg.toFixed(1)),
+      steerAngleDeg: steerDeg
     };
   }
 

@@ -89,9 +89,7 @@ class Game {
           this.inputs.right = true;
           break;
         case 'Space':
-          if (!e.repeat) {
-            this.inputs.brake = !this.inputs.brake;
-          }
+          this.inputs.brake = true;
           break;
         case 'KeyL': // Toggle 4WD Low / High range
           this.inputs.lowRange = !this.inputs.lowRange;
@@ -120,6 +118,9 @@ class Game {
         case 'KeyD':
         case 'ArrowRight':
           this.inputs.right = false;
+          break;
+        case 'Space':
+          this.inputs.brake = false;
           break;
       }
     });
@@ -203,6 +204,14 @@ class Game {
     const rpmBar = '█'.repeat(filledSegments) + '░'.repeat(barSegments - filledSegments);
     const rpmColor = tele.rpm > 4800 ? '#e74c3c' : (tele.rpm > 3500 ? '#f1c40f' : '#2ecc71');
 
+    // Handling status badge
+    let handlingBadge = '<span style="color:#2ecc71;">NEUTRAL</span>';
+    if (tele.handlingState === 'OVERSTEER') {
+      handlingBadge = '<span style="background:#e74c3c;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;">OVERSTEER // DRIFT</span>';
+    } else if (tele.handlingState === 'UNDERSTEER') {
+      handlingBadge = '<span style="background:#f39c12;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;">UNDERSTEER // PUSH</span>';
+    }
+
     this.hudElement.innerHTML = `
       <div style="font-weight:bold;margin-bottom:6px;color:#fff;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:3px;">
         OVER THE HILL // OFF-ROAD TRIAL DYNAMICS
@@ -213,12 +222,13 @@ class Game {
         <span style="font-size:10px;color:${rpmColor};font-family:monospace;letter-spacing:1px;margin-left:6px;">[${rpmBar}]</span>
       </div>
       <div style="margin-top:2px;">Terrain: ${surfaceBadge} | Speed: <strong>${tele.speedKmh} km/h</strong></div>
+      <div style="margin-top:2px;">Dynamics: ${handlingBadge} | Steer: <strong>${tele.steerAngleDeg}&deg;</strong> (F: ${tele.frontSlipAngleDeg}&deg; | R: ${tele.rearSlipAngleDeg}&deg;)</div>
       <div>Pitch: ${pitchDeg}&deg; | Roll: ${rollDeg}&deg;</div>
       <div style="margin-top:6px;font-weight:bold;color:#bbb;">Suspension Articulation:</div>
       <div>FL: ${suspFL}% | FR: ${suspFR}% || RL: ${suspRL}% | RR: ${suspRR}%</div>
       <div style="margin-top:4px;font-weight:bold;color:#bbb;">Wheel Slip Ratios (Combined Friction Ellipse):</div>
       <div>FL: ${slipFL} | FR: ${slipFR} || RL: ${slipRL} | RR: ${slipRR}</div>
-      <div style="margin-top:6px;color:#888;font-size:11px;">[W/S] Throttle/Brake | [Space] Park Brake (Toggle) | [L] 4H/4L | [R] Reset</div>
+      <div style="margin-top:6px;color:#888;font-size:11px;">[W/S] Throttle/Brake | [Space] Handbrake / Drift (Hold) | [L] 4H/4L | [R] Reset</div>
     `;
   }
 
