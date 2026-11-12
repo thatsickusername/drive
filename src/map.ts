@@ -30,11 +30,13 @@ export class GameMap {
     grid.position.y = 0.02;
     this.group.add(grid);
 
-    // 2. Obstacle Course: Speed breakers, staggered ramps, curbs & jumps
+    // 2. Obstacle Course: Speed breakers, staggered articulation mounds, ramps, mud bog & rock crawl
     this.createSpeedBreakers(rapier, world);
     this.createStaggeredArticulationBumps(rapier, world);
     this.createTestRamps(rapier, world);
     this.createPerimeterBarriers(rapier, world);
+    this.createMudBogZone(rapier, world);
+    this.createRockCrawlZone(rapier, world);
   }
 
   private createSpeedBreakers(rapier: typeof RAPIER, world: RAPIER.World): void {
@@ -207,6 +209,64 @@ export class GameMap {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     return mesh;
+  }
+
+  private createMudBogZone(rapier: typeof RAPIER, world: RAPIER.World): void {
+    const mudMat = new THREE.MeshStandardMaterial({
+      color: 0x3d2817, // Deep muddy brown
+      roughness: 0.95,
+      metalness: 0.05
+    });
+
+    // Mud bog basin on the West Lane
+    const mudGeo = new THREE.BoxGeometry(28, 0.45, 60);
+    const mudMesh = new THREE.Mesh(mudGeo, mudMat);
+    mudMesh.position.set(-50, 0.12, -20);
+    mudMesh.receiveShadow = true;
+    this.group.add(mudMesh);
+    this.createStaticTrimesh(mudMesh, rapier, world);
+
+    // Mud approach ramps
+    const rampMat = new THREE.MeshStandardMaterial({ color: 0x4d331e, roughness: 0.9 });
+    const entryRamp = this.createWedgeMesh(28, 0.35, 6, rampMat);
+    entryRamp.position.set(-50, 0, 13);
+    this.group.add(entryRamp);
+    this.createStaticTrimesh(entryRamp, rapier, world);
+
+    const exitRamp = this.createWedgeMesh(28, 0.35, 6, rampMat);
+    exitRamp.rotation.y = Math.PI;
+    exitRamp.position.set(-50, 0, -53);
+    this.group.add(exitRamp);
+    this.createStaticTrimesh(exitRamp, rapier, world);
+  }
+
+  private createRockCrawlZone(rapier: typeof RAPIER, world: RAPIER.World): void {
+    const rockMat = new THREE.MeshStandardMaterial({
+      color: 0x5b646b,
+      roughness: 0.88,
+      metalness: 0.12
+    });
+
+    // Rock boulders and stone slabs across the East Lane
+    const rockLocations = [
+      { x: 45, z: 25, rx: 2.2, ry: 0.55, rz: 2.5 },
+      { x: 52, z: 34, rx: 1.8, ry: 0.65, rz: 2.0 },
+      { x: 44, z: 42, rx: 2.6, ry: 0.70, rz: 2.4 },
+      { x: 50, z: 52, rx: 2.1, ry: 0.60, rz: 2.2 },
+      { x: 46, z: 62, rx: 2.8, ry: 0.80, rz: 2.9 }
+    ];
+
+    for (const r of rockLocations) {
+      const rockGeo = new THREE.DodecahedronGeometry(1.6, 1);
+      const rockMesh = new THREE.Mesh(rockGeo, rockMat);
+      rockMesh.scale.set(r.rx, r.ry, r.rz);
+      rockMesh.position.set(r.x, r.ry * 0.4, r.z);
+      rockMesh.rotation.set(0.3, r.x * 0.2, 0.1);
+      rockMesh.castShadow = true;
+      rockMesh.receiveShadow = true;
+      this.group.add(rockMesh);
+      this.createStaticTrimesh(rockMesh, rapier, world);
+    }
   }
 
   private createStaticTrimesh(

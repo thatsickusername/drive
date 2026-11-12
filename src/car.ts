@@ -188,9 +188,9 @@ export class Car {
     // 1. Build Visual Chassis with rubber-bushing mounted cabin
     this.buildChassisMesh();
 
-    // 2. Setup Rapier Chassis Body
+    // 2. Setup Rapier Chassis Body (calibrated spawn height resting smoothly on ground)
     const bodyDesc = rapier.RigidBodyDesc.dynamic()
-      .setTranslation(0, 1.8, 0)
+      .setTranslation(0, 1.02, 0)
       .setCanSleep(false)
       .setLinearDamping(0.2)
       .setAngularDamping(2.8);
@@ -481,6 +481,9 @@ export class Car {
 
     const totalRatio = this.transmission.getRatio(this.lowRange);
 
+    // Standstill & idle detection: if vehicle is stopped and driver is off the throttle, lock to idle
+    const isStationary = linearSpeed < 0.22 && driverThrottle === 0;
+
     // Compute input shaft RPM via fluid torque converter
     let avgGroundedOmega = 0;
     let groundedCountForOmega = 0;
@@ -490,7 +493,9 @@ export class Car {
         groundedCountForOmega++;
       }
     }
-    const refWheelOmega = groundedCountForOmega > 0 ? (avgGroundedOmega / groundedCountForOmega) : (linearSpeed / 0.48);
+    const refWheelOmega = isStationary
+      ? 0
+      : (groundedCountForOmega > 0 ? (avgGroundedOmega / groundedCountForOmega) : (linearSpeed / 0.48));
     const transInputOmega = refWheelOmega * Math.abs(totalRatio);
     const transInputRpm = transInputOmega * (60 / (2 * Math.PI));
 
@@ -503,11 +508,13 @@ export class Car {
         this.engine.idleRpm + driverThrottle * (stallRpm - this.engine.idleRpm),
         transInputRpm * 0.98
       );
+    } else if (isStationary) {
+      targetRpm = this.engine.idleRpm;
     } else {
       targetRpm = Math.max(this.engine.idleRpm, transInputRpm * 0.92);
     }
 
-    const revSpeed = driverThrottle > 0 ? 16.0 : 10.0;
+    const revSpeed = driverThrottle > 0 ? 16.0 : (isStationary ? 14.0 : 10.0);
     this.engine.rpm += (targetRpm - this.engine.rpm) * Math.min(1.0, dt * revSpeed);
     this.engine.rpm = Math.max(this.engine.idleRpm, Math.min(this.engine.rpm, this.engine.maxRpm));
 
@@ -525,13 +532,21 @@ export class Car {
       drivelineTorque = engTorque * Math.abs(totalRatio) * 0.92 * gearSign;
     }
 
-    // Standstill damping to prevent rolling creep when stopping or stopped
-    if (serviceBrakeIntensity > 0 && Math.abs(forwardSpeed) < 0.25) {
+    // Standstill damping to prevent rolling creep or micro-jitter when stopping or stopped
+    if (serviceBrakeIntensity > 0 || isHandbrake) {
+      if (linearSpeed < 0.35) {
+        const lv = this.body.linvel();
+        const damp = linearSpeed < 0.06 ? 0.0 : 0.35;
+        this.body.setLinvel(new this.rapier.Vector3(lv.x * damp, lv.y, lv.z * damp), true);
+        const av = this.body.angvel();
+        this.body.setAngvel(new this.rapier.Vector3(av.x * damp, av.y * damp, av.z * damp), true);
+      }
+    } else if (driverThrottle === 0 && linearSpeed < 0.16) {
       const lv = this.body.linvel();
-      this.body.setLinvel(new this.rapier.Vector3(lv.x * 0.65, lv.y, lv.z * 0.65), true);
-    } else if (!inputs.forward && !inputs.backward && Math.abs(forwardSpeed) < 0.15) {
-      const lv = this.body.linvel();
-      this.body.setLinvel(new this.rapier.Vector3(lv.x * 0.85, lv.y, lv.z * 0.85), true);
+      const damp = linearSpeed < 0.04 ? 0.0 : 0.5;
+      this.body.setLinvel(new this.rapier.Vector3(lv.x * damp, lv.y, lv.z * damp), true);
+      const av = this.body.angvel();
+      this.body.setAngvel(new this.rapier.Vector3(av.x * damp, av.y * damp, av.z * damp), true);
     }
 
     let wheelsGroundedCount = 0;
@@ -724,8 +739,22 @@ export class Car {
 
         // Combined friction ellipse partitioning
         const safeSlipMag = Math.max(0.0001, totalSlipMag);
-        const fxLongitudinal = maxFrictionForce * tractionResponse * (normS / safeSlipMag);
-        const fyLateral = maxFrictionForce * tractionResponse * (normAlpha / safeSlipMag) * handbrakeLateralScale;
+        let fxLongitudinal = maxFrictionForce * tractionResponse * (normS / safeSlipMag);
+        let fyLateral = maxFrictionForce * tractionResponse * (normAlpha / safeSlipMag) * handbrakeLateralScale;
+
+        // Regularize near-zero speed friction chatter at standstill
+        const contactSpeed = Math.hypot(forwardVelocity, lateralVelocity);
+        if (driverThrottle === 0) {
+          if (contactSpeed < 0.04 && Math.abs(wheelTangentialSpeed) < 0.04) {
+            fxLongitudinal = 0;
+            fyLateral = 0;
+            w.angularVelocity = 0;
+          } else if (contactSpeed < 0.25) {
+            const blend = Math.max(0, (contactSpeed - 0.04) / 0.21);
+            fxLongitudinal *= blend;
+            fyLateral *= blend;
+          }
+        }
 
         // C. Wheel Rotational Dynamics & Inertia Integration
         // 1. Service foot brake (front-biased: 60% front, 40% rear)
@@ -894,15 +923,19 @@ export class Car {
     const compDelta = leftComp - rightComp;
 
     // Solid live beam axle: upward displacement of one wheel pivots the axle, forcing the opposing wheel downward
-    if (Math.abs(compDelta) > 0.005) {
+    if (Math.abs(compDelta) > 0.02) {
       const rot = this.body.rotation();
       const chassisQuat = new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
       const chassisPosRapier = this.body.translation();
       const chassisPos = new THREE.Vector3(chassisPosRapier.x, chassisPosRapier.y, chassisPosRapier.z);
       const upDir = new THREE.Vector3(0, 1, 0).applyQuaternion(chassisQuat);
+      const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(chassisQuat);
+
+      const angvel = this.body.angvel();
+      const rollRate = new THREE.Vector3(angvel.x, angvel.y, angvel.z).dot(forwardDir);
 
       const axleTransferStiffness = 4200;
-      const transferForce = compDelta * axleTransferStiffness;
+      const transferForce = (compDelta - Math.sign(compDelta) * 0.02) * axleTransferStiffness - rollRate * 1200;
 
       const leftMount = left.config.mountPoint.clone().applyQuaternion(chassisQuat).add(chassisPos);
       const rightMount = right.config.mountPoint.clone().applyQuaternion(chassisQuat).add(chassisPos);
@@ -957,29 +990,32 @@ export class Car {
 
       if (hit && hit.timeOfImpact < maxBellyDist) {
         const penetration = maxBellyDist - hit.timeOfImpact;
-        const linvel = this.body.linvel();
-        const velVec = new THREE.Vector3(linvel.x, linvel.y, linvel.z);
+        if (penetration > 0.015) {
+          const linvel = this.body.linvel();
+          const velVec = new THREE.Vector3(linvel.x, linvel.y, linvel.z);
+          const vertVel = velVec.dot(upDir);
 
-        // Upward support force preventing clipping through boulders/ridges
-        const normalForce = penetration * 42000;
-        const upImpulse = upDir.clone().multiplyScalar(normalForce * dt);
+          // Upward support force preventing clipping through boulders/ridges with velocity damping
+          const normalForce = Math.max(0, (penetration - 0.015) * 42000 - vertVel * 2500);
+          const upImpulse = upDir.clone().multiplyScalar(normalForce * dt);
 
-        // Skid plate sliding drag friction (mu ~ 0.32)
-        const forwardVel = velVec.dot(forwardDir);
-        const dragForce = -Math.sign(forwardVel) * Math.min(Math.abs(forwardVel) * 1500, normalForce * 0.32);
-        const dragImpulse = forwardDir.clone().multiplyScalar(dragForce * dt);
+          // Skid plate sliding drag friction (mu ~ 0.32)
+          const forwardVel = velVec.dot(forwardDir);
+          const dragForce = -Math.sign(forwardVel) * Math.min(Math.abs(forwardVel) * 1500, normalForce * 0.32);
+          const dragImpulse = forwardDir.clone().multiplyScalar(dragForce * dt);
 
-        const totalImpulse = upImpulse.add(dragImpulse);
-        this.body.applyImpulseAtPoint(
-          new this.rapier.Vector3(totalImpulse.x, totalImpulse.y, totalImpulse.z),
-          new this.rapier.Vector3(probeWorld.x, probeWorld.y, probeWorld.z),
-          true
-        );
+          const totalImpulse = upImpulse.add(dragImpulse);
+          this.body.applyImpulseAtPoint(
+            new this.rapier.Vector3(totalImpulse.x, totalImpulse.y, totalImpulse.z),
+            new this.rapier.Vector3(probeWorld.x, probeWorld.y, probeWorld.z),
+            true
+          );
+        }
       }
     }
   }
 
-  public reset(x = 0, y = 2.0, z = 0): void {
+  public reset(x = 0, y = 1.02, z = 0): void {
     this.body.setTranslation(new RAPIER.Vector3(x, y, z), true);
     this.body.setRotation(new RAPIER.Quaternion(0, 0, 0, 1), true);
     this.body.setLinvel(new RAPIER.Vector3(0, 0, 0), true);
@@ -1008,7 +1044,8 @@ export class Car {
 
   public getDrivetrainTelemetry(): DrivetrainTelemetry {
     const linvel = this.body.linvel();
-    const speedKmh = Math.hypot(linvel.x, linvel.z) * 3.6;
+    const speed = Math.hypot(linvel.x, linvel.z);
+    const speedKmh = speed < 0.04 ? 0.0 : speed * 3.6;
     let sumSlip = 0;
     for (const w of this.wheels) {
       sumSlip += Math.abs(w.slipRatio);
@@ -1073,9 +1110,10 @@ export class Car {
 
       w.wheelMesh.rotation.x = w.spinAngle;
 
-      // Dynamic visual tire squish against rocks/ground based on suspension compression load
-      const squish = Math.min(0.22, w.normalForce / 12000);
-      w.wheelMesh.scale.set(1.0 + squish * 0.35, 1.0 - squish * 0.42, 1.0 + squish * 0.35);
+      // Dynamic visual tire squish against rocks/ground based on suspension compression load (temporarily commented out)
+      // const squish = Math.min(0.22, w.normalForce / 12000);
+      // w.wheelMesh.scale.set(1.0 + squish * 0.35, 1.0 - squish * 0.42, 1.0 + squish * 0.35);
+      w.wheelMesh.scale.set(1, 1, 1);
     }
   }
 }

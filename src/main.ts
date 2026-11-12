@@ -89,13 +89,16 @@ class Game {
           this.inputs.right = true;
           break;
         case 'Space':
-          this.inputs.brake = true;
+          if (!e.repeat) {
+            this.inputs.brake = !this.inputs.brake;
+          }
           break;
         case 'KeyL': // Toggle 4WD Low / High range
           this.inputs.lowRange = !this.inputs.lowRange;
           break;
         case 'KeyR':
-          this.car.reset(0, 3.5, 0);
+          this.inputs.brake = false;
+          this.car.reset(0, 1.02, 0);
           break;
       }
     });
@@ -117,9 +120,6 @@ class Game {
         case 'KeyD':
         case 'ArrowRight':
           this.inputs.right = false;
-          break;
-        case 'Space':
-          this.inputs.brake = false;
           break;
       }
     });
@@ -181,7 +181,7 @@ class Game {
     // Status badges
     let brakeBadge = '';
     if (tele.isHandbrake) {
-      brakeBadge += ' <span style="background:#e74c3c;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">HANDBRAKE</span>';
+      brakeBadge += ' <span style="background:#e74c3c;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">[P] PARK</span>';
     }
     if (tele.isFootBraking) {
       brakeBadge += ' <span style="background:#e67e22;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">FOOT BRAKE</span>';
@@ -218,7 +218,7 @@ class Game {
       <div>FL: ${suspFL}% | FR: ${suspFR}% || RL: ${suspRL}% | RR: ${suspRR}%</div>
       <div style="margin-top:4px;font-weight:bold;color:#bbb;">Wheel Slip Ratios (Combined Friction Ellipse):</div>
       <div>FL: ${slipFL} | FR: ${slipFR} || RL: ${slipRL} | RR: ${slipRR}</div>
-      <div style="margin-top:6px;color:#888;font-size:11px;">[W/S] Throttle/Brake | [Space] Handbrake | [L] 4H/4L | [R] Reset</div>
+      <div style="margin-top:6px;color:#888;font-size:11px;">[W/S] Throttle/Brake | [Space] Park Brake (Toggle) | [L] 4H/4L | [R] Reset</div>
     `;
   }
 
