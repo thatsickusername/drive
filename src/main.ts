@@ -17,7 +17,10 @@ class Game {
     right: false,
     brake: false,
     lowRange: false,
-    diffLock: true
+    diffLock: true,
+    airDown: false,
+    winchAttachToggle: false,
+    winchReel: false
   };
 
   private lastTime: number = 0;
@@ -95,6 +98,18 @@ class Game {
         case 'KeyL': // Toggle 4WD Low / High range
           this.inputs.lowRange = !this.inputs.lowRange;
           break;
+        case 'KeyK': // Toggle Axle Diff Lock
+          this.inputs.diffLock = !this.inputs.diffLock;
+          break;
+        case 'KeyT': // Toggle Tire Pressure (32 PSI Trail vs 14 PSI Crawl)
+          this.inputs.airDown = !this.inputs.airDown;
+          break;
+        case 'KeyF': // Toggle Bumper Winch Anchor
+          this.inputs.winchAttachToggle = true;
+          break;
+        case 'KeyE': // Hold to Reel In Winch
+          this.inputs.winchReel = true;
+          break;
         case 'KeyR':
           this.car.reset(0, 3.5, 0);
           break;
@@ -121,6 +136,12 @@ class Game {
           break;
         case 'Space':
           this.inputs.brake = false;
+          break;
+        case 'KeyF':
+          this.inputs.winchAttachToggle = false;
+          break;
+        case 'KeyE':
+          this.inputs.winchReel = false;
           break;
       }
     });
@@ -162,8 +183,7 @@ class Game {
     const pitchDeg = THREE.MathUtils.radToDeg(euler.x).toFixed(1);
     const rollDeg = THREE.MathUtils.radToDeg(euler.z).toFixed(1);
 
-    const linvel = this.car.body.linvel();
-    const speedKmh = (Math.hypot(linvel.x, linvel.z) * 3.6).toFixed(1);
+    const tele = this.car.getDrivetrainTelemetry();
 
     const w = this.car.wheels;
     const suspFL = (w[0]?.compression * 100).toFixed(0);
@@ -171,17 +191,73 @@ class Game {
     const suspRL = (w[2]?.compression * 100).toFixed(0);
     const suspRR = (w[3]?.compression * 100).toFixed(0);
 
-    const gearMode = this.inputs.lowRange ? '<span style="color:#f39c12">4L (CRAWL)</span>' : '<span style="color:#2ecc71">4H (HIGH)</span>';
+    const slipFL = (w[0]?.slipRatio ?? 0).toFixed(2);
+    const slipFR = (w[1]?.slipRatio ?? 0).toFixed(2);
+    const slipRL = (w[2]?.slipRatio ?? 0).toFixed(2);
+    const slipRR = (w[3]?.slipRatio ?? 0).toFixed(2);
+
+    const tcaseLabel = tele.transferCaseMode === '4L'
+      ? '<span style="color:#f39c12;font-weight:bold;">4L (LOW CRAWL 2.72:1)</span>'
+      : '<span style="color:#2ecc71;font-weight:bold;">4H (HIGH RANGE 1.0:1)</span>';
+
+    // Status badges
+    let brakeBadge = '';
+    if (tele.isHandbrake) {
+      brakeBadge += ' <span style="background:#e74c3c;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">HANDBRAKE</span>';
+    }
+    if (tele.isFootBraking) {
+      brakeBadge += ' <span style="background:#e67e22;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">FOOT BRAKE</span>';
+    }
+
+    let surfaceBadge = '<span style="color:#95a5a6;">ASPHALT</span>';
+    if (tele.surfaceName === 'MUD') {
+      surfaceBadge = '<span style="color:#e67e22;font-weight:bold;">MUD BOG (SLIP HAZARD)</span>';
+    } else if (tele.surfaceName === 'ROCK') {
+      surfaceBadge = '<span style="color:#9b59b6;font-weight:bold;">ROCK CRAWL (HIGH GRIP)</span>';
+    } else if (tele.surfaceName === 'OBSTACLE') {
+      surfaceBadge = '<span style="color:#3498db;font-weight:bold;">ARTICULATION COURSE</span>';
+    }
+
+    // Visual RPM meter
+    const rpmFraction = Math.min(1.0, Math.max(0, (tele.rpm - 850) / (5400 - 850)));
+    const barSegments = 16;
+    const filledSegments = Math.round(rpmFraction * barSegments);
+    const rpmBar = '█'.repeat(filledSegments) + '░'.repeat(barSegments - filledSegments);
+    const rpmColor = tele.rpm > 4800 ? '#e74c3c' : (tele.rpm > 3500 ? '#f1c40f' : '#2ecc71');
+
+    const diffBadge = tele.diffLocked
+      ? '<span style="background:#27ae60;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">DIFF LOCK: ON [K]</span>'
+      : '<span style="background:#7f8c8d;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">DIFF: OPEN [K]</span>';
+
+    const tireBadge = tele.tirePressurePsi < 20
+      ? '<span style="background:#d35400;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">14 PSI (AIRED DOWN +24% GRIP) [T]</span>'
+      : '<span style="background:#2980b9;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">32 PSI (TRAIL) [T]</span>';
+
+    let winchBadge = '<span style="color:#7f8c8d;">[WINCH: READY - PRESS F]</span>';
+    if (tele.winchStatus === 'WINCHING') {
+      winchBadge = `<span style="background:#e74c3c;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">WINCH: REELING IN (${tele.winchDistance}m) [E]</span>`;
+    } else if (tele.winchStatus === 'ATTACHED') {
+      winchBadge = `<span style="background:#f39c12;color:#000;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">WINCH: ATTACHED (${tele.winchDistance}m) - HOLD E TO PULL</span>`;
+    }
 
     this.hudElement.innerHTML = `
-      <div style="font-weight:bold;margin-bottom:4px;color:#fff;">OFF-ROAD TRIAL DYNAMICS</div>
-      <div>Transfer Case: ${gearMode} [Press L to toggle]</div>
-      <div>Speed: ${speedKmh} km/h</div>
-      <div>Pitch / Roll: ${pitchDeg}&deg; / ${rollDeg}&deg;</div>
-      <div style="margin-top:6px;font-weight:bold;">Suspension Compression:</div>
-      <div>FL: ${suspFL}% | FR: ${suspFR}%</div>
-      <div>RL: ${suspRL}% | RR: ${suspRR}%</div>
-      <div style="margin-top:4px;color:#888;font-size:11px;">[WASD] Drive | [Space] Brake | [R] Reset</div>
+      <div style="font-weight:bold;margin-bottom:6px;color:#fff;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:3px;">
+        OVER THE HILL // OFF-ROAD TRIAL DYNAMICS
+      </div>
+      <div>Gear: <strong style="color:#3498db;font-size:14px;">[${tele.gearName}]</strong> | Transfer Case: ${tcaseLabel} [L] ${brakeBadge}</div>
+      <div style="margin-top:2px;">
+        RPM: <span style="color:${rpmColor};font-weight:bold;">${tele.rpm}</span>
+        <span style="font-size:10px;color:${rpmColor};font-family:monospace;letter-spacing:1px;margin-left:6px;">[${rpmBar}]</span>
+      </div>
+      <div style="margin-top:3px;">Drivetrain: ${diffBadge} | Tire PSI: ${tireBadge}</div>
+      <div style="margin-top:2px;">Recovery: ${winchBadge}</div>
+      <div style="margin-top:2px;">Terrain: ${surfaceBadge} | Speed: <strong>${tele.speedKmh} km/h</strong></div>
+      <div>Pitch: ${pitchDeg}&deg; | Roll: ${rollDeg}&deg;</div>
+      <div style="margin-top:6px;font-weight:bold;color:#bbb;">Suspension Articulation:</div>
+      <div>FL: ${suspFL}% | FR: ${suspFR}% || RL: ${suspRL}% | RR: ${suspRR}%</div>
+      <div style="margin-top:4px;font-weight:bold;color:#bbb;">Wheel Slip Ratios (Combined Friction Ellipse):</div>
+      <div>FL: ${slipFL} | FR: ${slipFR} || RL: ${slipRL} | RR: ${slipRR}</div>
+      <div style="margin-top:6px;color:#888;font-size:11px;">[W/S] Throttle/Brake | [Space] Handbrake | [L] 4H/4L | [K] Diff Lock | [T] Tire PSI | [F] Winch Cable | [E] Reel Winch | [R] Reset</div>
     `;
   }
 
