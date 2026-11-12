@@ -508,32 +508,39 @@ export class Car {
 
     const stoppedThreshold = 0.35; // m/s (~1.2 km/h) transition threshold
 
+    const forwardIntensity = (inputs.throttleAnalog !== undefined && inputs.throttleAnalog > 0.05)
+      ? inputs.throttleAnalog
+      : 1.0;
+    const backwardIntensity = (inputs.brakeAnalog !== undefined && inputs.brakeAnalog > 0.05)
+      ? inputs.brakeAnalog
+      : 1.0;
+
     if (inputs.forward && inputs.backward) {
       // Both pedals pressed: Brake override
-      serviceBrakeIntensity = 1.0;
+      serviceBrakeIntensity = Math.max(forwardIntensity, backwardIntensity);
       driverThrottle = 0;
     } else if (inputs.forward) {
       if (forwardSpeed < -stoppedThreshold) {
-        // Moving backward, user presses W -> Brake to stop
-        serviceBrakeIntensity = 1.0;
+        // Moving backward, user presses W/RT -> Brake to stop
+        serviceBrakeIntensity = forwardIntensity;
         driverThrottle = 0;
       } else {
         // Stopped or moving forward -> Accelerate forward in Drive
         if (this.transmission.currentGear === -1) {
           this.transmission.currentGear = 1;
         }
-        driverThrottle = 1.0;
+        driverThrottle = forwardIntensity;
         serviceBrakeIntensity = 0;
       }
     } else if (inputs.backward) {
       if (forwardSpeed > stoppedThreshold) {
-        // Moving forward, user presses S -> Brake to stop
-        serviceBrakeIntensity = 1.0;
+        // Moving forward, user presses S/LT -> Brake to stop
+        serviceBrakeIntensity = backwardIntensity;
         driverThrottle = 0;
       } else {
         // Stopped or moving backward -> Accelerate backward in Reverse
         this.transmission.currentGear = -1;
-        driverThrottle = 1.0;
+        driverThrottle = backwardIntensity;
         serviceBrakeIntensity = 0;
       }
     } else {

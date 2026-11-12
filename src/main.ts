@@ -366,7 +366,7 @@ class Game {
       <div>FL: ${suspFL}% | FR: ${suspFR}% || RL: ${suspRL}% | RR: ${suspRR}%</div>
       <div style="margin-top:4px;font-weight:bold;color:#bbb;">Wheel Slip Ratios (Combined Friction Ellipse):</div>
       <div>FL: ${slipFL} | FR: ${slipFR} || RL: ${slipRL} | RR: ${slipRR}</div>
-      <div style="margin-top:6px;color:#aaa;font-size:11px;">[W/S/LT/RT] Throttle/Brake | [Space/A] Handbrake | [L/LB] 4H/4L | [R/Back] Reset</div>
+      <div style="margin-top:6px;color:#aaa;font-size:11px;">[W/S | RT/LT] Throttle/Reverse | [Space/RB] Handbrake | [L/LB] 4H/4L | [Left Stick] Steer | [R/Back] Reset</div>
     `;
   }
 }
