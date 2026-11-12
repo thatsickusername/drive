@@ -2,16 +2,22 @@ import * as THREE from 'three';
 import { Renderer } from './renderer';
 import { PhysicsEngine } from './physics';
 import { GameMap } from './map';
-import { Car, VehicleInputs } from './car';
+import { Car } from './car';
 import { NetworkManager } from './network/network-manager';
 import { RemoteCar } from './remote-car';
 import { PlayerSlotInfo } from './network/protocol';
+import { DynamicCameraDirector } from './camera';
+import { UnifiedInputController } from './input';
 
 class Game {
   private renderer!: Renderer;
   private physics!: PhysicsEngine;
   public map!: GameMap;
   public car!: Car;
+
+  // Camera & Input Systems
+  private cameraDirector!: DynamicCameraDirector;
+  private inputController!: UnifiedInputController;
 
   // Multiplayer Subsystems
   private network!: NetworkManager;
@@ -24,18 +30,10 @@ class Game {
   private lastNetworkSendTime: number = 0;
   private networkHudElement!: HTMLElement;
 
-  private inputs: VehicleInputs = {
-    forward: false,
-    backward: false,
-    left: false,
-    right: false,
-    brake: false,
-    lowRange: false
-  };
-
   private lastTime: number = 0;
-  private cameraPos = new THREE.Vector3();
+  private lastHudUpdateTime: number = 0;
   private hudElement!: HTMLElement;
+  private carLinvel = new THREE.Vector3();
 
   public async start(): Promise<void> {
     const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -43,10 +41,10 @@ class Game {
       throw new Error('Canvas element #game-canvas not found');
     }
 
-    // 1. Initialize Renderer
+    // 1. Initialize Renderer (with PBR ACES Tone Mapping)
     this.renderer = new Renderer(canvas);
 
-    // 2. Initialize Rapier Physics
+    // 2. Initialize Rapier Physics Engine
     this.physics = new PhysicsEngine();
     await this.physics.init();
 
@@ -56,18 +54,35 @@ class Game {
     // 4. Initialize Car
     this.car = new Car(this.renderer.scene, this.physics.rapier, this.physics.world);
 
-    // 5. Setup Telemetry UI, Multiplayer & Input Handlers
+    // 5. Initialize Camera Director
+    this.cameraDirector = new DynamicCameraDirector(this.renderer.camera);
+    this.cameraDirector.initPosition(this.car.mesh.position, this.car.mesh.quaternion);
+
+    // 6. Initialize Controller & Telemetry UI
+    this.inputController = new UnifiedInputController();
+    this.inputController.onResetRequested = () => this.resetVehicle();
+
     this.setupHUD();
     this.setupMultiplayer();
-    this.setupInputs();
 
-    // 6. Start Loop
+    // 7. Start Engine Loop
     this.lastTime = performance.now();
     requestAnimationFrame(this.loop.bind(this));
   }
 
+  private resetVehicle(): void {
+    const sx = this.selfSlot ? this.selfSlot.spawnPos[0] : 0;
+    const sy = this.selfSlot ? this.selfSlot.spawnPos[1] : 1.02;
+    const sz = this.selfSlot ? this.selfSlot.spawnPos[2] : 0;
+    const syaw = this.selfSlot ? this.selfSlot.spawnYaw : 0;
+    this.car.reset(sx, sy, sz, syaw);
+    this.cameraDirector.initPosition(this.car.mesh.position, this.car.mesh.quaternion);
+    if (this.network) {
+      this.network.sendRespawn([sx, sy, sz], syaw);
+    }
+  }
+
   private setupMultiplayer(): void {
-    // Read room code from URL: ?room=XYZ or #XYZ
     const urlParams = new URLSearchParams(window.location.search);
     const roomParam = urlParams.get('room') || window.location.hash.replace('#', '').trim();
     if (roomParam) {
@@ -84,8 +99,8 @@ class Game {
         this.roomCode = room;
         this.car.setLiveryColor(self.colorHex);
         this.car.reset(self.spawnPos[0], self.spawnPos[1], self.spawnPos[2], self.spawnYaw);
+        this.cameraDirector.initPosition(this.car.mesh.position, this.car.mesh.quaternion);
 
-        // Spawn any existing peers
         for (const peer of peers) {
           if (!this.remoteCars.has(peer.id)) {
             const remote = new RemoteCar(this.renderer.scene, this.physics.rapier, this.physics.world, peer);
@@ -157,7 +172,6 @@ class Game {
     this.hudElement.style.pointerEvents = 'none';
     document.body.appendChild(this.hudElement);
 
-    // Multiplayer Room Header (Top-Right)
     this.networkHudElement = document.createElement('div');
     this.networkHudElement.style.position = 'fixed';
     this.networkHudElement.style.top = '16px';
@@ -219,96 +233,39 @@ class Game {
     }
   }
 
-  private setupInputs(): void {
-    window.addEventListener('keydown', (e: KeyboardEvent) => {
-      switch (e.code) {
-        case 'KeyW':
-        case 'ArrowUp':
-          this.inputs.forward = true;
-          break;
-        case 'KeyS':
-        case 'ArrowDown':
-          this.inputs.backward = true;
-          break;
-        case 'KeyA':
-        case 'ArrowLeft':
-          this.inputs.left = true;
-          break;
-        case 'KeyD':
-        case 'ArrowRight':
-          this.inputs.right = true;
-          break;
-        case 'Space':
-          this.inputs.brake = true;
-          break;
-        case 'KeyL': // Toggle 4WD Low / High range
-          this.inputs.lowRange = !this.inputs.lowRange;
-          break;
-        case 'KeyR':
-          this.inputs.brake = false;
-          const sx = this.selfSlot ? this.selfSlot.spawnPos[0] : 0;
-          const sy = this.selfSlot ? this.selfSlot.spawnPos[1] : 1.02;
-          const sz = this.selfSlot ? this.selfSlot.spawnPos[2] : 0;
-          const syaw = this.selfSlot ? this.selfSlot.spawnYaw : 0;
-          this.car.reset(sx, sy, sz, syaw);
-          if (this.network) {
-            this.network.sendRespawn([sx, sy, sz], syaw);
-          }
-          break;
-      }
-    });
-
-    window.addEventListener('keyup', (e: KeyboardEvent) => {
-      switch (e.code) {
-        case 'KeyW':
-        case 'ArrowUp':
-          this.inputs.forward = false;
-          break;
-        case 'KeyS':
-        case 'ArrowDown':
-          this.inputs.backward = false;
-          break;
-        case 'KeyA':
-        case 'ArrowLeft':
-          this.inputs.left = false;
-          break;
-        case 'KeyD':
-        case 'ArrowRight':
-          this.inputs.right = false;
-          break;
-        case 'Space':
-          this.inputs.brake = false;
-          break;
-      }
-    });
-  }
-
   private loop(currentTime: number): void {
-    const delta = (currentTime - this.lastTime) / 1000;
+    const delta = Math.min((currentTime - this.lastTime) / 1000, 0.1);
     this.lastTime = currentTime;
 
-    // Fixed-step physics updates
+    // 1. Poll Unified Input (Keyboard + Gamepad analog)
+    const inputs = this.inputController.update();
+
+    // 2. Fixed-step physics updates (60Hz)
     this.physics.step(delta, (dt: number) => {
-      this.car.updateFixed(this.inputs, dt);
+      this.car.updateFixed(inputs, dt);
     });
 
-    // Sync visuals with physics
-    this.car.syncRender();
+    // 3. Sub-tick render state interpolation (stutter-free on 120Hz/144Hz/240Hz monitors)
+    const alpha = this.physics.getInterpolationAlpha();
+    this.car.syncRender(alpha);
 
-    // Sync and interpolate remote player vehicles (Kinematic Rapier step + visual sync)
+    // 4. Remote car kinematic step & interpolation
     for (const remoteCar of this.remoteCars.values()) {
       remoteCar.update(currentTime);
     }
 
-    // High-Frequency Binary Transform Broadcast (60Hz active / 16ms, 12Hz idle / 80ms)
+    // 5. Cache rigid body velocity for camera tracking
+    const lv = this.car.body.linvel();
+    this.carLinvel.set(lv.x, lv.y, lv.z);
+
+    // 6. High-Frequency Binary Transform Broadcast (60Hz active / 16ms, 12Hz idle / 80ms)
     if (this.network && this.selfSlot) {
-      const linvel = this.car.body.linvel();
       const isMoving =
-        this.inputs.forward ||
-        this.inputs.backward ||
-        this.inputs.left ||
-        this.inputs.right ||
-        Math.hypot(linvel.x, linvel.z) > 0.04;
+        inputs.forward ||
+        inputs.backward ||
+        inputs.left ||
+        inputs.right ||
+        Math.hypot(lv.x, lv.z) > 0.04;
       const targetInterval = isMoving ? 16 : 80;
 
       if (currentTime - this.lastNetworkSendTime >= targetInterval) {
@@ -317,19 +274,23 @@ class Game {
       }
     }
 
-    // Camera follow update
-    this.updateCamera(delta);
+    // 8. Close Off-Road Follow Camera Director (Tight tracking with gentle speed-lag)
+    this.cameraDirector.update(delta, this.car.mesh.position, this.car.mesh.quaternion, this.carLinvel);
 
-    // Update Inclinometer & Off-road Telemetry
-    this.updateHUD();
+    // 9. Throttled Telemetry HUD Update (15Hz: eliminates DOM layout thrashing in 120Hz render loop)
+    if (currentTime - this.lastHudUpdateTime >= 66) {
+      this.lastHudUpdateTime = currentTime;
+      const tele = this.car.getDrivetrainTelemetry();
+      this.updateHUD(tele);
+    }
 
-    // Render Three.js scene
+    // 10. Render Three.js scene (PBR + Tone Mapping)
     this.renderer.render();
 
     requestAnimationFrame(this.loop.bind(this));
   }
 
-  private updateHUD(): void {
+  private updateHUD(tele: ReturnType<Car['getDrivetrainTelemetry']>): void {
     if (!this.hudElement || !this.car) return;
 
     const rot = this.car.body.rotation();
@@ -340,8 +301,6 @@ class Game {
 
     const pitchDeg = THREE.MathUtils.radToDeg(euler.x).toFixed(1);
     const rollDeg = THREE.MathUtils.radToDeg(euler.z).toFixed(1);
-
-    const tele = this.car.getDrivetrainTelemetry();
 
     const w = this.car.wheels;
     const suspFL = (w[0]?.compression * 100).toFixed(0);
@@ -358,7 +317,6 @@ class Game {
       ? '<span style="color:#f39c12;font-weight:bold;">4L (DEFENDER/J70 CRAWL 45.8:1)</span>'
       : '<span style="color:#2ecc71;font-weight:bold;">4H (HIGH RANGE 14.8:1)</span>';
 
-    // Status badges
     let brakeBadge = '';
     if (tele.isHandbrake) {
       brakeBadge += ' <span style="background:#e74c3c;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;font-size:11px;">[P] PARK</span>';
@@ -376,14 +334,12 @@ class Game {
       surfaceBadge = '<span style="color:#3498db;font-weight:bold;">ARTICULATION COURSE</span>';
     }
 
-    // Visual RPM meter
     const rpmFraction = Math.min(1.0, Math.max(0, (tele.rpm - 850) / (5400 - 850)));
     const barSegments = 16;
     const filledSegments = Math.round(rpmFraction * barSegments);
     const rpmBar = '█'.repeat(filledSegments) + '░'.repeat(barSegments - filledSegments);
     const rpmColor = tele.rpm > 4800 ? '#e74c3c' : (tele.rpm > 3500 ? '#f1c40f' : '#2ecc71');
 
-    // Handling status badge
     let handlingBadge = '<span style="color:#2ecc71;">NEUTRAL</span>';
     if (tele.handlingState === 'OVERSTEER') {
       handlingBadge = '<span style="background:#e74c3c;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;">OVERSTEER // DRIFT</span>';
@@ -410,25 +366,8 @@ class Game {
       <div>FL: ${suspFL}% | FR: ${suspFR}% || RL: ${suspRL}% | RR: ${suspRR}%</div>
       <div style="margin-top:4px;font-weight:bold;color:#bbb;">Wheel Slip Ratios (Combined Friction Ellipse):</div>
       <div>FL: ${slipFL} | FR: ${slipFR} || RL: ${slipRL} | RR: ${slipRR}</div>
-      <div style="margin-top:6px;color:#888;font-size:11px;">[W/S] Throttle/Brake | [Space] Handbrake / Drift (Hold) | [L] 4H/4L | [R] Reset</div>
+      <div style="margin-top:6px;color:#aaa;font-size:11px;">[W/S/LT/RT] Throttle/Brake | [Space/A] Handbrake | [L/LB] 4H/4L | [R/Back] Reset</div>
     `;
-  }
-
-  private updateCamera(delta: number): void {
-    const carPos = this.car.mesh.position;
-    const carRot = this.car.mesh.quaternion;
-
-    // Follow camera positioned behind and elevated for trail clearance
-    const offset = new THREE.Vector3(0, 3.8, -8.0).applyQuaternion(carRot);
-    const desiredPos = carPos.clone().add(offset);
-
-    const lerpFactor = Math.min(1.0, delta * 5.5);
-    this.cameraPos.lerp(desiredPos, lerpFactor);
-    this.renderer.camera.position.copy(this.cameraPos);
-
-    // Look at chassis front hood / horizon
-    const lookAhead = new THREE.Vector3(0, 0.6, 2.5).applyQuaternion(carRot);
-    this.renderer.camera.lookAt(carPos.clone().add(lookAhead));
   }
 }
 

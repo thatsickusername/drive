@@ -169,49 +169,53 @@ export class RemoteCar {
     this.mesh.add(this.nameSprite);
   }
 
+  private static scratchUp = new THREE.Vector3();
+  private static scratchMount = new THREE.Vector3();
+  private static scratchWheelPos = new THREE.Vector3();
+  private static scratchSteerQuat = new THREE.Quaternion();
+  private static scratchAxisY = new THREE.Vector3(0, 1, 0);
+  private static scratchRapierPos = new RAPIER.Vector3(0, 0, 0);
+  private static scratchRapierQuat = new RAPIER.Quaternion(0, 0, 0, 1);
+
   public update(renderTime: number): void {
     const state = this.interpolator.interpolate(renderTime, this.targetPos, this.targetQuat);
     if (!state) return;
 
     // 1. Advance Kinematic body in Rapier physics world for obstacle/player collision
-    this.body.setNextKinematicTranslation(
-      new this.rapier.Vector3(this.targetPos.x, this.targetPos.y, this.targetPos.z)
-    );
-    this.body.setNextKinematicRotation(
-      new this.rapier.Quaternion(
-        this.targetQuat.x,
-        this.targetQuat.y,
-        this.targetQuat.z,
-        this.targetQuat.w
-      )
-    );
+    RemoteCar.scratchRapierPos.x = this.targetPos.x;
+    RemoteCar.scratchRapierPos.y = this.targetPos.y;
+    RemoteCar.scratchRapierPos.z = this.targetPos.z;
+    this.body.setNextKinematicTranslation(RemoteCar.scratchRapierPos);
+
+    RemoteCar.scratchRapierQuat.x = this.targetQuat.x;
+    RemoteCar.scratchRapierQuat.y = this.targetQuat.y;
+    RemoteCar.scratchRapierQuat.z = this.targetQuat.z;
+    RemoteCar.scratchRapierQuat.w = this.targetQuat.w;
+    this.body.setNextKinematicRotation(RemoteCar.scratchRapierQuat);
 
     // 2. Sync visual chassis
     this.mesh.position.copy(this.targetPos);
     this.mesh.quaternion.copy(this.targetQuat);
 
-    // 3. Sync visual wheels
-    const upDir = new THREE.Vector3(0, 1, 0).applyQuaternion(this.targetQuat);
+    // 3. Sync visual wheels (zero-allocation)
+    RemoteCar.scratchUp.set(0, 1, 0).applyQuaternion(this.targetQuat);
     for (let i = 0; i < 4; i++) {
-      const mountWorld = this.wheelMounts[i]
-        .clone()
+      RemoteCar.scratchMount.copy(this.wheelMounts[i])
         .applyQuaternion(this.targetQuat)
         .add(this.mesh.position);
 
       const suspCompression = state.susp[i] ?? 0;
       const suspLength = 0.55 - suspCompression * 0.4;
-      const wheelPos = mountWorld.sub(upDir.clone().multiplyScalar(suspLength));
+      RemoteCar.scratchWheelPos.copy(RemoteCar.scratchMount)
+        .addScaledVector(RemoteCar.scratchUp, -suspLength);
 
       const grp = this.wheelGroups[i];
-      grp.position.copy(wheelPos);
+      grp.position.copy(RemoteCar.scratchWheelPos);
 
       // Apply steering on front wheels (0 and 1)
       if (i < 2) {
-        const steerQuat = new THREE.Quaternion().setFromAxisAngle(
-          new THREE.Vector3(0, 1, 0),
-          state.steer
-        );
-        grp.quaternion.copy(this.targetQuat.clone().multiply(steerQuat));
+        RemoteCar.scratchSteerQuat.setFromAxisAngle(RemoteCar.scratchAxisY, state.steer);
+        grp.quaternion.copy(this.targetQuat).multiply(RemoteCar.scratchSteerQuat);
       } else {
         grp.quaternion.copy(this.targetQuat);
       }

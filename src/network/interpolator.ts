@@ -3,16 +3,31 @@ import { VehicleTransformState } from './protocol';
 
 export class SnapshotInterpolator {
   private buffer: VehicleTransformState[] = [];
-  // 25ms interpolation delay: tightly tuned for ~1.5 frame buffer at 60Hz
-  private readonly interpDelayMs = 25;
+  // 40ms adaptive interpolation delay: robust against packet jitter while preserving tight responsiveness
+  private interpDelayMs = 40;
+
+  // Static scratch objects to completely eliminate GC garbage generation in hot loop
+  private static scratchQ0 = new THREE.Quaternion();
+  private static scratchQ1 = new THREE.Quaternion();
+  private static scratchDeltaRot = new THREE.Quaternion();
+  private static scratchAxis = new THREE.Vector3();
+  private static scratchReturn = {
+    steer: 0,
+    susp: [0, 0, 0, 0] as [number, number, number, number],
+    spin: [0, 0, 0, 0] as [number, number, number, number]
+  };
 
   public push(snapshot: VehicleTransformState): void {
     this.buffer.push(snapshot);
 
-    // Keep buffer strictly trimmed to last 16 frames (~260ms of history)
-    while (this.buffer.length > 16) {
+    // Keep buffer strictly trimmed to last 20 frames (~330ms of history)
+    while (this.buffer.length > 20) {
       this.buffer.shift();
     }
+  }
+
+  public setInterpDelay(delayMs: number): void {
+    this.interpDelayMs = Math.max(25, Math.min(120, delayMs));
   }
 
   public clear(): void {
@@ -37,43 +52,44 @@ export class SnapshotInterpolator {
       const s = this.buffer[0];
       outPos.set(s.pos[0], s.pos[1], s.pos[2]);
       outQuat.set(s.rot[0], s.rot[1], s.rot[2], s.rot[3]);
-      return { steer: s.steer, susp: s.susp, spin: s.spin };
+      const ret = SnapshotInterpolator.scratchReturn;
+      ret.steer = s.steer;
+      ret.susp[0] = s.susp[0]; ret.susp[1] = s.susp[1]; ret.susp[2] = s.susp[2]; ret.susp[3] = s.susp[3];
+      ret.spin[0] = s.spin[0]; ret.spin[1] = s.spin[1]; ret.spin[2] = s.spin[2]; ret.spin[3] = s.spin[3];
+      return ret;
     }
 
     const latest = this.buffer[this.buffer.length - 1];
 
     // If render target is ahead of latest snapshot (temporary packet delay) -> Hermite Dead Reckoning
     if (targetTime >= latest.t) {
-      const dt = Math.min((targetTime - latest.t) / 1000, 0.12); // Max 120ms dead reckoning
+      const dt = Math.min((targetTime - latest.t) / 1000, 0.15); // Max 150ms dead reckoning
       outPos.set(
         latest.pos[0] + latest.linvel[0] * dt,
         latest.pos[1] + latest.linvel[1] * dt,
         latest.pos[2] + latest.linvel[2] * dt
       );
 
-      // Rotate quaternion by angular velocity
-      const q = new THREE.Quaternion(latest.rot[0], latest.rot[1], latest.rot[2], latest.rot[3]);
+      // Rotate quaternion by angular velocity (zero-allocation)
+      const q = SnapshotInterpolator.scratchQ0.set(latest.rot[0], latest.rot[1], latest.rot[2], latest.rot[3]);
       const wx = latest.angvel[0], wy = latest.angvel[1], wz = latest.angvel[2];
       const omegaMag = Math.hypot(wx, wy, wz);
       if (omegaMag > 0.001) {
-        const deltaRot = new THREE.Quaternion().setFromAxisAngle(
-          new THREE.Vector3(wx / omegaMag, wy / omegaMag, wz / omegaMag),
-          omegaMag * dt
-        );
-        q.multiply(deltaRot);
+        SnapshotInterpolator.scratchAxis.set(wx / omegaMag, wy / omegaMag, wz / omegaMag);
+        SnapshotInterpolator.scratchDeltaRot.setFromAxisAngle(SnapshotInterpolator.scratchAxis, omegaMag * dt);
+        q.multiply(SnapshotInterpolator.scratchDeltaRot);
       }
       outQuat.copy(q);
 
-      return {
-        steer: latest.steer,
-        susp: latest.susp,
-        spin: [
-          latest.spin[0] + (latest.linvel[2] / 0.48) * dt,
-          latest.spin[1] + (latest.linvel[2] / 0.48) * dt,
-          latest.spin[2] + (latest.linvel[2] / 0.48) * dt,
-          latest.spin[3] + (latest.linvel[2] / 0.48) * dt
-        ]
-      };
+      const ret = SnapshotInterpolator.scratchReturn;
+      ret.steer = latest.steer;
+      ret.susp[0] = latest.susp[0]; ret.susp[1] = latest.susp[1]; ret.susp[2] = latest.susp[2]; ret.susp[3] = latest.susp[3];
+      const spinDelta = (latest.linvel[2] / 0.48) * dt;
+      ret.spin[0] = latest.spin[0] + spinDelta;
+      ret.spin[1] = latest.spin[1] + spinDelta;
+      ret.spin[2] = latest.spin[2] + spinDelta;
+      ret.spin[3] = latest.spin[3] + spinDelta;
+      return ret;
     }
 
     // If targetTime is behind the oldest snapshot -> clamp
@@ -81,7 +97,11 @@ export class SnapshotInterpolator {
       const s0 = this.buffer[0];
       outPos.set(s0.pos[0], s0.pos[1], s0.pos[2]);
       outQuat.set(s0.rot[0], s0.rot[1], s0.rot[2], s0.rot[3]);
-      return { steer: s0.steer, susp: s0.susp, spin: s0.spin };
+      const ret = SnapshotInterpolator.scratchReturn;
+      ret.steer = s0.steer;
+      ret.susp[0] = s0.susp[0]; ret.susp[1] = s0.susp[1]; ret.susp[2] = s0.susp[2]; ret.susp[3] = s0.susp[3];
+      ret.spin[0] = s0.spin[0]; ret.spin[1] = s0.spin[1]; ret.spin[2] = s0.spin[2]; ret.spin[3] = s0.spin[3];
+      return ret;
     }
 
     // Find the two surrounding snapshots [s0, s1]
@@ -99,20 +119,28 @@ export class SnapshotInterpolator {
     if (timeSpanMs <= 0.001) {
       outPos.set(s1.pos[0], s1.pos[1], s1.pos[2]);
       outQuat.set(s1.rot[0], s1.rot[1], s1.rot[2], s1.rot[3]);
-      return { steer: s1.steer, susp: s1.susp, spin: s1.spin };
+      const ret = SnapshotInterpolator.scratchReturn;
+      ret.steer = s1.steer;
+      ret.susp[0] = s1.susp[0]; ret.susp[1] = s1.susp[1]; ret.susp[2] = s1.susp[2]; ret.susp[3] = s1.susp[3];
+      ret.spin[0] = s1.spin[0]; ret.spin[1] = s1.spin[1]; ret.spin[2] = s1.spin[2]; ret.spin[3] = s1.spin[3];
+      return ret;
     }
 
-    const h = timeSpanMs / 1000; // time interval in seconds
+    const h = timeSpanMs / 1000;
     const alpha = Math.max(0, Math.min(1, (targetTime - s0.t) / timeSpanMs));
 
-    // Teleport / Respawn detection: if position delta > 5m, snap without interpolating
+    // Teleport / Respawn detection: snap without interpolating
     const dx = s1.pos[0] - s0.pos[0];
     const dy = s1.pos[1] - s0.pos[1];
     const dz = s1.pos[2] - s0.pos[2];
     if (dx * dx + dy * dy + dz * dz > 25.0) {
       outPos.set(s1.pos[0], s1.pos[1], s1.pos[2]);
       outQuat.set(s1.rot[0], s1.rot[1], s1.rot[2], s1.rot[3]);
-      return { steer: s1.steer, susp: s1.susp, spin: s1.spin };
+      const ret = SnapshotInterpolator.scratchReturn;
+      ret.steer = s1.steer;
+      ret.susp[0] = s1.susp[0]; ret.susp[1] = s1.susp[1]; ret.susp[2] = s1.susp[2]; ret.susp[3] = s1.susp[3];
+      ret.spin[0] = s1.spin[0]; ret.spin[1] = s1.spin[1]; ret.spin[2] = s1.spin[2]; ret.spin[3] = s1.spin[3];
+      return ret;
     }
 
     // Hermite Cubic Spline Basis Functions (Position + Velocity Continuity)
@@ -129,25 +157,22 @@ export class SnapshotInterpolator {
       h00 * s0.pos[2] + h10 * (s0.linvel[2] * h) + h01 * s1.pos[2] + h11 * (s1.linvel[2] * h)
     );
 
-    // Orientation Slerp
-    const q0 = new THREE.Quaternion(s0.rot[0], s0.rot[1], s0.rot[2], s0.rot[3]);
-    const q1 = new THREE.Quaternion(s1.rot[0], s1.rot[1], s1.rot[2], s1.rot[3]);
-    outQuat.slerpQuaternions(q0, q1, alpha);
+    // Orientation Slerp (zero-allocation)
+    SnapshotInterpolator.scratchQ0.set(s0.rot[0], s0.rot[1], s0.rot[2], s0.rot[3]);
+    SnapshotInterpolator.scratchQ1.set(s1.rot[0], s1.rot[1], s1.rot[2], s1.rot[3]);
+    outQuat.slerpQuaternions(SnapshotInterpolator.scratchQ0, SnapshotInterpolator.scratchQ1, alpha);
 
-    return {
-      steer: s0.steer + (s1.steer - s0.steer) * alpha,
-      susp: [
-        s0.susp[0] + (s1.susp[0] - s0.susp[0]) * alpha,
-        s0.susp[1] + (s1.susp[1] - s0.susp[1]) * alpha,
-        s0.susp[2] + (s1.susp[2] - s0.susp[2]) * alpha,
-        s0.susp[3] + (s1.susp[3] - s0.susp[3]) * alpha
-      ],
-      spin: [
-        s0.spin[0] + (s1.spin[0] - s0.spin[0]) * alpha,
-        s0.spin[1] + (s1.spin[1] - s0.spin[1]) * alpha,
-        s0.spin[2] + (s1.spin[2] - s0.spin[2]) * alpha,
-        s0.spin[3] + (s1.spin[3] - s0.spin[3]) * alpha
-      ]
-    };
+    const ret = SnapshotInterpolator.scratchReturn;
+    ret.steer = s0.steer + (s1.steer - s0.steer) * alpha;
+    ret.susp[0] = s0.susp[0] + (s1.susp[0] - s0.susp[0]) * alpha;
+    ret.susp[1] = s0.susp[1] + (s1.susp[1] - s0.susp[1]) * alpha;
+    ret.susp[2] = s0.susp[2] + (s1.susp[2] - s0.susp[2]) * alpha;
+    ret.susp[3] = s0.susp[3] + (s1.susp[3] - s0.susp[3]) * alpha;
+    ret.spin[0] = s0.spin[0] + (s1.spin[0] - s0.spin[0]) * alpha;
+    ret.spin[1] = s0.spin[1] + (s1.spin[1] - s0.spin[1]) * alpha;
+    ret.spin[2] = s0.spin[2] + (s1.spin[2] - s0.spin[2]) * alpha;
+    ret.spin[3] = s0.spin[3] + (s1.spin[3] - s0.spin[3]) * alpha;
+
+    return ret;
   }
 }

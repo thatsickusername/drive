@@ -3,7 +3,7 @@ import { VehicleTransformState } from './protocol';
 export const BINARY_FLOAT_COUNT = 24;
 
 export class BinaryVehicleSync {
-  // Pre-allocated array buffer to avoid garbage collection pressure at 60Hz
+  // Reusable Float32Array working view
   private static sendBuffer = new Float32Array(BINARY_FLOAT_COUNT);
 
   public static encode(slotIndex: number, seq: number, state: VehicleTransformState): ArrayBuffer {
@@ -32,7 +32,9 @@ export class BinaryVehicleSync {
     b[21] = state.spin[1];
     b[22] = state.spin[2];
     b[23] = state.spin[3];
-    return b.buffer;
+
+    // Safe isolated copy so concurrent socket transfers never alias memory
+    return b.buffer.slice(0);
   }
 
   public static decode(buffer: ArrayBuffer): { slotIndex: number; seq: number; state: VehicleTransformState } | null {
@@ -42,7 +44,7 @@ export class BinaryVehicleSync {
       slotIndex: Math.round(b[0]),
       seq: b[1],
       state: {
-        t: performance.now(), // Synchronized to receiver's local clock epoch!
+        t: performance.now(),
         pos: [b[2], b[3], b[4]],
         rot: [b[5], b[6], b[7], b[8]],
         linvel: [b[9], b[10], b[11]],

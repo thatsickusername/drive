@@ -10,6 +10,9 @@ export interface VehicleInputs {
   brake: boolean;
   handbrake?: boolean;
   lowRange?: boolean;
+  steerAnalog?: number;
+  throttleAnalog?: number;
+  brakeAnalog?: number;
 }
 
 export interface WheelConfig {
@@ -168,6 +171,23 @@ export class Car {
   public lastSurfaceType: string = 'ASPHALT';
   private bodyMat!: THREE.MeshStandardMaterial;
 
+  // Render Sub-step Interpolation States (120Hz/144Hz/240Hz stutter-free blending)
+  public prevPos = new THREE.Vector3();
+  public prevQuat = new THREE.Quaternion(0, 0, 0, 1);
+  public currPos = new THREE.Vector3();
+  public currQuat = new THREE.Quaternion(0, 0, 0, 1);
+
+  // Scratch objects to completely eliminate GC garbage in syncRender
+  private static syncForward = new THREE.Vector3();
+  private static syncRight = new THREE.Vector3();
+  private static syncUp = new THREE.Vector3();
+  private static syncMount = new THREE.Vector3();
+  private static syncWheelPos = new THREE.Vector3();
+  private static syncSteerQuat = new THREE.Quaternion();
+  private static syncAxisY = new THREE.Vector3(0, 1, 0);
+  private static syncCurrVel = new THREE.Vector3();
+  private static syncAccelVec = new THREE.Vector3();
+
   public getSurfaceAtPoint(x: number, z: number): SurfaceProperties {
     // Mud Bog zone: X between -65 and -35, Z between -52 and 12
     if (x >= -65 && x <= -35 && z >= -52 && z <= 12) {
@@ -232,6 +252,10 @@ export class Car {
 
     // 3. Setup Wheels & Suspension geometry
     this.setupWheels(scene);
+
+    this.prevPos.set(sx, sy, sz);
+    this.currPos.set(sx, sy, sz);
+    this.mesh.position.set(sx, sy, sz);
 
     scene.add(this.mesh);
   }
@@ -428,6 +452,10 @@ export class Car {
   public updateFixed(inputs: VehicleInputs, dt: number): void {
     if (inputs.lowRange !== undefined) this.lowRange = inputs.lowRange;
 
+    // Cache previous physics step for sub-tick render interpolation
+    this.prevPos.copy(this.currPos);
+    this.prevQuat.copy(this.currQuat);
+
     const rot = this.body.rotation();
     const chassisQuat = new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
     const chassisPosRapier = this.body.translation();
@@ -449,8 +477,12 @@ export class Car {
     const dynamicSteerSpeed = THREE.MathUtils.lerp(7.8, 5.2, steerSpeedRatio);
 
     let targetSteer = 0;
-    if (inputs.left) targetSteer += dynamicMaxSteer;
-    if (inputs.right) targetSteer -= dynamicMaxSteer;
+    if (typeof inputs.steerAnalog === 'number' && Math.abs(inputs.steerAnalog) > 0.05) {
+      targetSteer = -inputs.steerAnalog * dynamicMaxSteer;
+    } else {
+      if (inputs.left) targetSteer += dynamicMaxSteer;
+      if (inputs.right) targetSteer -= dynamicMaxSteer;
+    }
 
     // Pneumatic caster trail return: wheels naturally snap back straight when steering is released
     const casterReturnBoost = (!inputs.left && !inputs.right)
@@ -987,6 +1019,12 @@ export class Car {
         );
       }
     }
+
+    // Cache current physics step for sub-tick render interpolation
+    const tEnd = this.body.translation();
+    const rEnd = this.body.rotation();
+    this.currPos.set(tEnd.x, tEnd.y, tEnd.z);
+    this.currQuat.set(rEnd.x, rEnd.y, rEnd.z, rEnd.w);
   }
 
   private computeAckermannAngles(steerInput: number): { leftAngle: number; rightAngle: number } {
@@ -1117,9 +1155,18 @@ export class Car {
   public reset(x = 0, y = 1.02, z = 0, yaw = 0): void {
     this.body.setTranslation(new RAPIER.Vector3(x, y, z), true);
     const halfYaw = yaw * 0.5;
-    this.body.setRotation(new RAPIER.Quaternion(0, Math.sin(halfYaw), 0, Math.cos(halfYaw)), true);
+    const sinY = Math.sin(halfYaw);
+    const cosY = Math.cos(halfYaw);
+    this.body.setRotation(new RAPIER.Quaternion(0, sinY, 0, cosY), true);
     this.body.setLinvel(new RAPIER.Vector3(0, 0, 0), true);
     this.body.setAngvel(new RAPIER.Vector3(0, 0, 0), true);
+
+    this.prevPos.set(x, y, z);
+    this.currPos.set(x, y, z);
+    this.prevQuat.set(0, sinY, 0, cosY);
+    this.currQuat.set(0, sinY, 0, cosY);
+    this.mesh.position.set(x, y, z);
+    this.mesh.quaternion.set(0, sinY, 0, cosY);
     this.currentSteer = 0;
     this.engine.rpm = this.engine.idleRpm;
     this.transmission.currentGear = 1;
@@ -1203,31 +1250,30 @@ export class Car {
     };
   }
 
-  public syncRender(): void {
-    // 1. Sync Chassis body
-    const t = this.body.translation();
-    const r = this.body.rotation();
-    this.mesh.position.set(t.x, t.y, t.z);
-    this.mesh.quaternion.set(r.x, r.y, r.z, r.w);
+  public syncRender(alpha: number = 1.0): void {
+    // 1. Sync Chassis body with sub-step interpolation (120Hz/240Hz zero-judder)
+    const clampedAlpha = Math.max(0, Math.min(1, alpha));
+    this.mesh.position.lerpVectors(this.prevPos, this.currPos, clampedAlpha);
+    this.mesh.quaternion.slerpQuaternions(this.prevQuat, this.currQuat, clampedAlpha);
 
     const chassisQuat = this.mesh.quaternion;
-    const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(chassisQuat);
-    const rightDir = new THREE.Vector3(1, 0, 0).applyQuaternion(chassisQuat);
-    const upDir = new THREE.Vector3(0, 1, 0).applyQuaternion(chassisQuat);
+    Car.syncForward.set(0, 0, 1).applyQuaternion(chassisQuat);
+    Car.syncRight.set(1, 0, 0).applyQuaternion(chassisQuat);
+    Car.syncUp.set(0, 1, 0).applyQuaternion(chassisQuat);
 
-    // 2. Dynamic Sprung Cabin Mount Pitch & Roll Compliance
+    // 2. Dynamic Sprung Cabin Mount Pitch & Roll Compliance (zero-allocation)
     const linvel = this.body.linvel();
-    const currVel = new THREE.Vector3(linvel.x, linvel.y, linvel.z);
-    const accelVec = currVel.clone().sub(this.lastLinvel).divideScalar(1 / 60);
-    this.lastLinvel.copy(currVel);
+    Car.syncCurrVel.set(linvel.x, linvel.y, linvel.z);
+    Car.syncAccelVec.copy(Car.syncCurrVel).sub(this.lastLinvel).divideScalar(1 / 60);
+    this.lastLinvel.copy(Car.syncCurrVel);
 
-    const targetPitch = Math.max(-0.055, Math.min(0.055, -accelVec.dot(forwardDir) * 0.0035));
-    const targetRoll = Math.max(-0.065, Math.min(0.065, accelVec.dot(rightDir) * 0.0045));
+    const targetPitch = Math.max(-0.055, Math.min(0.055, -Car.syncAccelVec.dot(Car.syncForward) * 0.0035));
+    const targetRoll = Math.max(-0.065, Math.min(0.065, Car.syncAccelVec.dot(Car.syncRight) * 0.0045));
     this.cabinPitch += (targetPitch - this.cabinPitch) * 0.22;
     this.cabinRoll += (targetRoll - this.cabinRoll) * 0.22;
     this.cabinMesh.rotation.set(this.cabinPitch, 0, this.cabinRoll);
 
-    // 3. Sync Wheels independent position, orientation, and dynamic tire deformation squish
+    // 3. Sync Wheels independent position, orientation, and spin (zero-allocation)
     for (let i = 0; i < this.wheels.length; i++) {
       const w = this.wheels[i];
       const conf = w.config;
@@ -1236,20 +1282,15 @@ export class Car {
       const smoothFactor = 0.35;
       w.renderSuspensionLength += (w.suspensionLength - w.renderSuspensionLength) * smoothFactor;
 
-      const mountWorld = conf.mountPoint.clone().applyQuaternion(chassisQuat).add(this.mesh.position);
-      const wheelWorldPos = mountWorld.clone().sub(upDir.clone().multiplyScalar(w.renderSuspensionLength));
+      Car.syncMount.copy(conf.mountPoint).applyQuaternion(chassisQuat).add(this.mesh.position);
+      Car.syncWheelPos.copy(Car.syncMount).addScaledVector(Car.syncUp, -w.renderSuspensionLength);
 
-      w.meshGroup.position.copy(wheelWorldPos);
+      w.meshGroup.position.copy(Car.syncWheelPos);
 
-      const steerQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), w.steerAngle);
-      const combinedQuat = chassisQuat.clone().multiply(steerQuat);
-      w.meshGroup.quaternion.copy(combinedQuat);
+      Car.syncSteerQuat.setFromAxisAngle(Car.syncAxisY, w.steerAngle);
+      w.meshGroup.quaternion.copy(chassisQuat).multiply(Car.syncSteerQuat);
 
       w.wheelMesh.rotation.x = w.spinAngle;
-
-      // Dynamic visual tire squish against rocks/ground based on suspension compression load (temporarily commented out)
-      // const squish = Math.min(0.22, w.normalForce / 12000);
-      // w.wheelMesh.scale.set(1.0 + squish * 0.35, 1.0 - squish * 0.42, 1.0 + squish * 0.35);
       w.wheelMesh.scale.set(1, 1, 1);
     }
   }
