@@ -177,10 +177,10 @@ export class Car {
       this.lastSurfaceType = 'ROCK';
       return { type: 'ROCK', friction: 1.25, depthDrag: 60 };
     }
-    // Obstacle Lane / Articulation mounds: X between -8 and 8, Z between 10 and 130
-    if (Math.abs(x) <= 8.0 && z >= 10 && z <= 130) {
+    // Incline Proving Ground & Articulation Obstacles: X between -28 and 28, Z between 10 and 130
+    if (Math.abs(x) <= 28.0 && z >= 10 && z <= 130) {
       this.lastSurfaceType = 'OBSTACLE';
-      return { type: 'OBSTACLE', friction: 1.15, depthDrag: 80 };
+      return { type: 'OBSTACLE', friction: 1.18, depthDrag: 40 };
     }
     this.lastSurfaceType = 'ASPHALT';
     return { type: 'ASPHALT', friction: 1.05, depthDrag: 25 };

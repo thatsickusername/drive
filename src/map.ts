@@ -94,32 +94,128 @@ export class GameMap {
   }
 
   private createTestRamps(rapier: typeof RAPIER, world: RAPIER.World): void {
-    const rampMat = new THREE.MeshStandardMaterial({
-      color: 0xe67e22,
-      roughness: 0.4,
-      metalness: 0.3
-    });
+    // 4-Lane Incline Proving Ground with distinct angles (10°, 18°, 28°, 38°)
+    // Each lane has ascent ramp, top crest plateau (with safety barriers), and descent ramp
+    const laneConfigs = [
+      {
+        name: 'Lane 1 (10° Mild)',
+        angleDeg: 10,
+        x: -22,
+        width: 5.2,
+        ascentLen: 17.0,
+        plateauLen: 6.0,
+        descentLen: 17.0,
+        height: 17.0 * Math.tan((10 * Math.PI) / 180), // ~3.00m
+        color: 0x2ecc71 // Green
+      },
+      {
+        name: 'Lane 2 (18° Defender Trial)',
+        angleDeg: 18,
+        x: -10,
+        width: 5.2,
+        ascentLen: 15.0,
+        plateauLen: 6.0,
+        descentLen: 15.0,
+        height: 15.0 * Math.tan((18 * Math.PI) / 180), // ~4.87m
+        color: 0xf1c40f // Amber / Yellow
+      },
+      {
+        name: 'Lane 3 (28° J70 Steep Trial)',
+        angleDeg: 28,
+        x: 10,
+        width: 5.2,
+        ascentLen: 13.0,
+        plateauLen: 6.0,
+        descentLen: 13.0,
+        height: 13.0 * Math.tan((28 * Math.PI) / 180), // ~6.91m
+        color: 0xe67e22 // Orange
+      },
+      {
+        name: 'Lane 4 (38° Extreme Wall)',
+        angleDeg: 38,
+        x: 22,
+        width: 5.2,
+        ascentLen: 11.0,
+        plateauLen: 6.0,
+        descentLen: 11.0,
+        height: 11.0 * Math.tan((38 * Math.PI) / 180), // ~8.59m
+        color: 0xe74c3c // Crimson Red
+      }
+    ];
 
-    // 1. Moderate Jump Ramp (Straight ahead at z = 140)
-    const jumpRamp = this.createWedgeMesh(10, 2.4, 14, rampMat);
-    jumpRamp.position.set(0, 0, 140);
-    this.group.add(jumpRamp);
-    this.createStaticTrimesh(jumpRamp, rapier, world);
+    const rampCenterZ = 35.0;
 
-    // 2. High-speed Smooth Launch Ramp (West lane)
-    const launchRamp = this.createWedgeMesh(12, 3.8, 18, rampMat);
-    launchRamp.position.set(-35, 0, 40);
-    launchRamp.rotation.y = Math.PI;
-    this.group.add(launchRamp);
-    this.createStaticTrimesh(launchRamp, rapier, world);
+    for (const lane of laneConfigs) {
+      const rampMat = new THREE.MeshStandardMaterial({
+        color: 0x34495e,
+        roughness: 0.65,
+        metalness: 0.2
+      });
 
-    // 3. Side Bank Wedge (East lane)
-    const sideBank = this.createWedgeMesh(10, 1.8, 25, rampMat);
-    sideBank.position.set(35, 0, -30);
-    this.group.add(sideBank);
-    this.createStaticTrimesh(sideBank, rapier, world);
+      const rampMesh = this.createDriveOverRamp(
+        lane.width,
+        lane.ascentLen,
+        lane.plateauLen,
+        lane.descentLen,
+        lane.height,
+        rampMat
+      );
+      rampMesh.position.set(lane.x, 0, rampCenterZ);
+      this.group.add(rampMesh);
+      this.createStaticTrimesh(rampMesh, rapier, world);
 
-    // 4. Stepped curb obstacles (South area)
+      // Plateau safety side barriers (left & right)
+      const barrierMat = new THREE.MeshStandardMaterial({
+        color: lane.color,
+        roughness: 0.5,
+        metalness: 0.5
+      });
+      const halfW = lane.width * 0.5;
+
+      const leftBarrier = new THREE.Mesh(
+        new THREE.BoxGeometry(0.35, 0.5, lane.plateauLen),
+        barrierMat
+      );
+      leftBarrier.position.set(lane.x - halfW + 0.18, lane.height + 0.25, rampCenterZ);
+      this.group.add(leftBarrier);
+      this.createStaticTrimesh(leftBarrier, rapier, world);
+
+      const rightBarrier = new THREE.Mesh(
+        new THREE.BoxGeometry(0.35, 0.5, lane.plateauLen),
+        barrierMat
+      );
+      rightBarrier.position.set(lane.x + halfW - 0.18, lane.height + 0.25, rampCenterZ);
+      this.group.add(rightBarrier);
+      this.createStaticTrimesh(rightBarrier, rapier, world);
+
+      // Visual Entry Gate / Arch posts in front of the ramp
+      const totalRampLen = lane.ascentLen + lane.plateauLen + lane.descentLen;
+      const entryZ = rampCenterZ - totalRampLen * 0.5 - 2.0;
+
+      const postMat = new THREE.MeshStandardMaterial({ color: lane.color, roughness: 0.4 });
+      const postGeo = new THREE.CylinderGeometry(0.18, 0.18, 3.2, 12);
+
+      const leftPost = new THREE.Mesh(postGeo, postMat);
+      leftPost.position.set(lane.x - halfW - 0.4, 1.6, entryZ);
+      this.group.add(leftPost);
+      this.createStaticTrimesh(leftPost, rapier, world);
+
+      const rightPost = new THREE.Mesh(postGeo, postMat);
+      rightPost.position.set(lane.x + halfW + 0.4, 1.6, entryZ);
+      this.group.add(rightPost);
+      this.createStaticTrimesh(rightPost, rapier, world);
+
+      // Top sign crossbeam indicating lane angle
+      const crossbeam = new THREE.Mesh(
+        new THREE.BoxGeometry(lane.width + 1.2, 0.45, 0.35),
+        postMat
+      );
+      crossbeam.position.set(lane.x, 3.2, entryZ);
+      this.group.add(crossbeam);
+      this.createStaticTrimesh(crossbeam, rapier, world);
+    }
+
+    // Retain stepped curbs on the south area for independent wheel articulation verification
     const curbMat = new THREE.MeshStandardMaterial({
       color: 0x95a5a6,
       roughness: 0.7,
@@ -136,6 +232,63 @@ export class GameMap {
       this.group.add(step);
       this.createStaticTrimesh(step, rapier, world);
     }
+  }
+
+  private createDriveOverRamp(
+    width: number,
+    ascentLen: number,
+    plateauLen: number,
+    descentLen: number,
+    height: number,
+    mat: THREE.Material
+  ): THREE.Mesh {
+    const halfW = width * 0.5;
+    const totalLen = ascentLen + plateauLen + descentLen;
+    const z0 = -totalLen * 0.5;
+    const z1 = z0 + ascentLen;
+    const z2 = z1 + plateauLen;
+    const z3 = totalLen * 0.5;
+
+    // 8 distinct vertices defining the 3D drive-over prism
+    const vertices = new Float32Array([
+      // Left side vertices (0 to 3)
+      -halfW, 0,      z0, // 0: Left ground start
+      -halfW, height, z1, // 1: Left crest start
+      -halfW, height, z2, // 2: Left crest end
+      -halfW, 0,      z3, // 3: Left ground end
+
+      // Right side vertices (4 to 7)
+       halfW, 0,      z0, // 4: Right ground start
+       halfW, height, z1, // 5: Right crest start
+       halfW, height, z2, // 6: Right crest end
+       halfW, 0,      z3  // 7: Right ground end
+    ]);
+
+    const indices = [
+      // Top driving surfaces (upward facing normals)
+      0, 5, 4,   0, 1, 5, // Ascent slope
+      1, 6, 5,   1, 2, 6, // Plateau
+      2, 7, 6,   2, 3, 7, // Descent slope
+
+      // Bottom face (downward facing normals)
+      0, 4, 7,   0, 7, 3,
+
+      // Left side wall (-X facing)
+      0, 2, 1,   0, 3, 2,
+
+      // Right side wall (+X facing)
+      4, 5, 6,   4, 6, 7
+    ];
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return mesh;
   }
 
   private createPerimeterBarriers(rapier: typeof RAPIER, world: RAPIER.World): void {
