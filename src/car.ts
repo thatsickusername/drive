@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d';
+import { VehicleTransformState } from './network/protocol';
 
 export interface VehicleInputs {
   forward: boolean;
@@ -165,6 +166,7 @@ export class Car {
   public isHandbrakeActive: boolean = false;
   public isFootBrakingActive: boolean = false;
   public lastSurfaceType: string = 'ASPHALT';
+  private bodyMat!: THREE.MeshStandardMaterial;
 
   public getSurfaceAtPoint(x: number, z: number): SurfaceProperties {
     // Mud Bog zone: X between -65 and -35, Z between -52 and 12
@@ -186,17 +188,24 @@ export class Car {
     return { type: 'ASPHALT', friction: 1.05, depthDrag: 25 };
   }
 
-  constructor(scene: THREE.Scene, rapier: typeof RAPIER, world: RAPIER.World) {
+  constructor(
+    scene: THREE.Scene,
+    rapier: typeof RAPIER,
+    world: RAPIER.World,
+    initialSpawn: [number, number, number] = [-3, 1.02, 0],
+    initialColor: number = 0x1b4332
+  ) {
     this.rapier = rapier;
     this.world = world;
     this.mesh = new THREE.Group();
 
     // 1. Build Visual Chassis with rubber-bushing mounted cabin
-    this.buildChassisMesh();
+    this.buildChassisMesh(initialColor);
 
     // 2. Setup Rapier Chassis Body (calibrated spawn height resting smoothly on ground)
+    const [sx, sy, sz] = initialSpawn;
     const bodyDesc = rapier.RigidBodyDesc.dynamic()
-      .setTranslation(0, 1.02, 0)
+      .setTranslation(sx, sy, sz)
       .setCanSleep(false)
       .setLinearDamping(0.04)
       .setAngularDamping(0.35);
@@ -227,11 +236,44 @@ export class Car {
     scene.add(this.mesh);
   }
 
-  private buildChassisMesh(): void {
+  public setLiveryColor(colorHex: number): void {
+    if (this.bodyMat) {
+      this.bodyMat.color.setHex(colorHex);
+    }
+  }
+
+  public getTransformState(t: number): VehicleTransformState {
+    const pos = this.body.translation();
+    const rot = this.body.rotation();
+    const linvel = this.body.linvel();
+    const angvel = this.body.angvel();
+    return {
+      t,
+      pos: [pos.x, pos.y, pos.z],
+      rot: [rot.x, rot.y, rot.z, rot.w],
+      linvel: [linvel.x, linvel.y, linvel.z],
+      angvel: [angvel.x, angvel.y, angvel.z],
+      steer: this.currentSteer,
+      susp: [
+        this.wheels[0]?.compression ?? 0,
+        this.wheels[1]?.compression ?? 0,
+        this.wheels[2]?.compression ?? 0,
+        this.wheels[3]?.compression ?? 0
+      ],
+      spin: [
+        this.wheels[0]?.spinAngle ?? 0,
+        this.wheels[1]?.spinAngle ?? 0,
+        this.wheels[2]?.spinAngle ?? 0,
+        this.wheels[3]?.spinAngle ?? 0
+      ]
+    };
+  }
+
+  private buildChassisMesh(colorHex: number = 0x1b4332): void {
     this.mesh.add(this.cabinMesh);
 
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color: 0x1b4332,
+    this.bodyMat = new THREE.MeshStandardMaterial({
+      color: colorHex,
       roughness: 0.5,
       metalness: 0.3
     });
@@ -242,13 +284,13 @@ export class Car {
       metalness: 0.1
     });
 
-    const mainBody = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.55, 3.9), bodyMat);
+    const mainBody = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.55, 3.9), this.bodyMat);
     mainBody.position.y = 0.35;
     mainBody.castShadow = true;
     mainBody.receiveShadow = true;
     this.cabinMesh.add(mainBody);
 
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 2.1), bodyMat);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 2.1), this.bodyMat);
     cabin.position.set(0, 0.88, -0.2);
     cabin.castShadow = true;
     this.cabinMesh.add(cabin);
@@ -1072,9 +1114,10 @@ export class Car {
     }
   }
 
-  public reset(x = 0, y = 1.02, z = 0): void {
+  public reset(x = 0, y = 1.02, z = 0, yaw = 0): void {
     this.body.setTranslation(new RAPIER.Vector3(x, y, z), true);
-    this.body.setRotation(new RAPIER.Quaternion(0, 0, 0, 1), true);
+    const halfYaw = yaw * 0.5;
+    this.body.setRotation(new RAPIER.Quaternion(0, Math.sin(halfYaw), 0, Math.cos(halfYaw)), true);
     this.body.setLinvel(new RAPIER.Vector3(0, 0, 0), true);
     this.body.setAngvel(new RAPIER.Vector3(0, 0, 0), true);
     this.currentSteer = 0;

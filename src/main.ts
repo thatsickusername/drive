@@ -3,12 +3,25 @@ import { Renderer } from './renderer';
 import { PhysicsEngine } from './physics';
 import { GameMap } from './map';
 import { Car, VehicleInputs } from './car';
+import { NetworkManager } from './network/network-manager';
+import { RemoteCar } from './remote-car';
+import { PlayerSlotInfo } from './network/protocol';
 
 class Game {
   private renderer!: Renderer;
   private physics!: PhysicsEngine;
   public map!: GameMap;
   public car!: Car;
+
+  // Multiplayer Subsystems
+  private network!: NetworkManager;
+  private remoteCars = new Map<string, RemoteCar>();
+  private selfSlot: PlayerSlotInfo | null = null;
+  private roomCode: string = 'TRAIL-1';
+  private netStatus: string = 'Connecting...';
+  private pingMs: number = 0;
+  private lastNetworkSendTime: number = 0;
+  private networkHudElement!: HTMLElement;
 
   private inputs: VehicleInputs = {
     forward: false,
@@ -42,13 +55,79 @@ class Game {
     // 4. Initialize Car
     this.car = new Car(this.renderer.scene, this.physics.rapier, this.physics.world);
 
-    // 5. Setup Telemetry UI & Input Handlers
+    // 5. Setup Telemetry UI, Multiplayer & Input Handlers
     this.setupHUD();
+    this.setupMultiplayer();
     this.setupInputs();
 
     // 6. Start Loop
     this.lastTime = performance.now();
     requestAnimationFrame(this.loop.bind(this));
+  }
+
+  private setupMultiplayer(): void {
+    // Read room code from URL: ?room=XYZ or #XYZ
+    const urlParams = new URLSearchParams(window.location.search);
+    const roomParam = urlParams.get('room') || window.location.hash.replace('#', '').trim();
+    if (roomParam) {
+      this.roomCode = roomParam.toUpperCase().slice(0, 16);
+    } else {
+      this.roomCode = 'TRAIL-1';
+      const newUrl = `${window.location.pathname}?room=${this.roomCode}`;
+      window.history.replaceState(null, '', newUrl);
+    }
+
+    this.network = new NetworkManager(this.roomCode, {
+      onInit: (self, peers, room) => {
+        this.selfSlot = self;
+        this.roomCode = room;
+        this.car.setLiveryColor(self.colorHex);
+        this.car.reset(self.spawnPos[0], self.spawnPos[1], self.spawnPos[2], self.spawnYaw);
+
+        // Spawn any existing peers
+        for (const peer of peers) {
+          if (!this.remoteCars.has(peer.id)) {
+            const remote = new RemoteCar(this.renderer.scene, this.physics.rapier, this.physics.world, peer);
+            this.remoteCars.set(peer.id, remote);
+          }
+        }
+        this.updateNetworkHUD();
+      },
+      onPeerJoined: (peer) => {
+        if (!this.remoteCars.has(peer.id)) {
+          const remote = new RemoteCar(this.renderer.scene, this.physics.rapier, this.physics.world, peer);
+          this.remoteCars.set(peer.id, remote);
+        }
+        this.updateNetworkHUD();
+      },
+      onPeerState: (peerId, state) => {
+        const remote = this.remoteCars.get(peerId);
+        if (remote) {
+          remote.interpolator.push(state);
+        }
+      },
+      onPeerRespawn: (peerId, pos, yaw) => {
+        const remote = this.remoteCars.get(peerId);
+        if (remote) {
+          remote.onRespawn(pos, yaw);
+        }
+      },
+      onPeerLeft: (peerId) => {
+        const remote = this.remoteCars.get(peerId);
+        if (remote) {
+          remote.destroy();
+          this.remoteCars.delete(peerId);
+        }
+        this.updateNetworkHUD();
+      },
+      onStatusChange: (status, pingMs) => {
+        this.netStatus = status;
+        this.pingMs = pingMs;
+        this.updateNetworkHUD();
+      }
+    });
+
+    this.network.connect();
   }
 
   private setupHUD(): void {
@@ -67,6 +146,67 @@ class Game {
     this.hudElement.style.userSelect = 'none';
     this.hudElement.style.pointerEvents = 'none';
     document.body.appendChild(this.hudElement);
+
+    // Multiplayer Room Header (Top-Right)
+    this.networkHudElement = document.createElement('div');
+    this.networkHudElement.style.position = 'fixed';
+    this.networkHudElement.style.top = '16px';
+    this.networkHudElement.style.right = '16px';
+    this.networkHudElement.style.color = '#e0e0e0';
+    this.networkHudElement.style.fontFamily = 'monospace';
+    this.networkHudElement.style.fontSize = '13px';
+    this.networkHudElement.style.backgroundColor = 'rgba(16, 20, 24, 0.85)';
+    this.networkHudElement.style.padding = '12px 16px';
+    this.networkHudElement.style.borderRadius = '6px';
+    this.networkHudElement.style.border = '1px solid rgba(255,255,255,0.2)';
+    this.networkHudElement.style.userSelect = 'none';
+    this.networkHudElement.style.zIndex = '999';
+    document.body.appendChild(this.networkHudElement);
+    this.updateNetworkHUD();
+  }
+
+  private updateNetworkHUD(): void {
+    if (!this.networkHudElement) return;
+
+    const isConnected = this.netStatus === 'connected';
+    const statusDot = isConnected ? '🟢' : this.netStatus === 'connecting' ? '🟡' : '🔴';
+    const selfLabel = this.selfSlot
+      ? `<span style="color:#${this.selfSlot.colorHex.toString(16).padStart(6, '0')};font-weight:bold;">Driver ${this.selfSlot.slotIndex + 1} (${this.selfSlot.colorName})</span>`
+      : 'Assigning Slot...';
+
+    const peerCount = this.remoteCars.size;
+    const peerList = [...this.remoteCars.values()]
+      .map(
+        (rc) =>
+          `<div style="color:#${rc.slotInfo.colorHex.toString(16).padStart(6, '0')};">● Driver ${rc.slotInfo.slotIndex + 1} (${rc.slotInfo.colorName})</div>`
+      )
+      .join('');
+
+    this.networkHudElement.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <span style="font-weight:bold;color:#4ade80;">ROOM: ${this.roomCode}</span>
+        <button id="copy-room-btn" style="background:#2563eb;color:#fff;border:none;border-radius:4px;padding:3px 8px;font-family:monospace;font-size:11px;cursor:pointer;">Copy Invite Link</button>
+      </div>
+      <div>Status: ${statusDot} ${this.netStatus.toUpperCase()} ${isConnected ? `(${this.pingMs}ms)` : ''}</div>
+      <div>You: ${selfLabel}</div>
+      <div style="margin-top:6px;border-top:1px solid rgba(255,255,255,0.1);padding-top:4px;">
+        <div style="font-size:11px;color:#aaa;">CO-OP TEAMMATES (${peerCount}):</div>
+        ${peerCount > 0 ? peerList : '<div style="color:#666;font-size:11px;">Waiting for teammate to join...</div>'}
+      </div>
+    `;
+
+    const copyBtn = document.getElementById('copy-room-btn');
+    if (copyBtn) {
+      copyBtn.onclick = () => {
+        const fullUrl = `${window.location.origin}${window.location.pathname}?room=${this.roomCode}`;
+        navigator.clipboard.writeText(fullUrl).then(() => {
+          copyBtn.innerText = 'Copied!';
+          setTimeout(() => {
+            copyBtn.innerText = 'Copy Invite Link';
+          }, 2000);
+        });
+      };
+    }
   }
 
   private setupInputs(): void {
@@ -96,7 +236,14 @@ class Game {
           break;
         case 'KeyR':
           this.inputs.brake = false;
-          this.car.reset(0, 1.02, 0);
+          const sx = this.selfSlot ? this.selfSlot.spawnPos[0] : 0;
+          const sy = this.selfSlot ? this.selfSlot.spawnPos[1] : 1.02;
+          const sz = this.selfSlot ? this.selfSlot.spawnPos[2] : 0;
+          const syaw = this.selfSlot ? this.selfSlot.spawnYaw : 0;
+          this.car.reset(sx, sy, sz, syaw);
+          if (this.network) {
+            this.network.sendRespawn([sx, sy, sz], syaw);
+          }
           break;
       }
     });
@@ -137,6 +284,17 @@ class Game {
 
     // Sync visuals with physics
     this.car.syncRender();
+
+    // Sync and interpolate remote player vehicles (Kinematic Rapier step + visual sync)
+    for (const remoteCar of this.remoteCars.values()) {
+      remoteCar.update(currentTime);
+    }
+
+    // Stream local car transform over network at 25Hz (~40ms interval)
+    if (this.network && currentTime - this.lastNetworkSendTime >= 40) {
+      this.lastNetworkSendTime = currentTime;
+      this.network.sendState(this.car.getTransformState(currentTime));
+    }
 
     // Camera follow update
     this.updateCamera(delta);
