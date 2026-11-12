@@ -538,15 +538,14 @@ export class Car {
     const effectiveThrottle = this.lowRange ? Math.pow(driverThrottle, 1.35) : driverThrottle;
 
     if (driverThrottle > 0) {
-      // 4H Steep Incline Bogging: in 4H on steep ramps (>13° / slopePitch > 0.22),
-      // starting at low throttle struggles against high gearing (14.8:1), requiring stall RPM build-up
-      let inclineBogFactor = 1.0;
-      if (!this.lowRange && slopePitch > 0.22 && forwardSpeed < 3.0) {
-        if (driverThrottle < 0.35) {
-          inclineBogFactor = Math.max(0.20, driverThrottle * 1.4);
-        }
+      // 4H Steep Incline Load Drag: in 4H (tall 14.8:1 gearing), climbing steep gradients (>14° / slopePitch > 0.24)
+      // induces severe torque converter fluid shear and mechanical strain against gravity, making Lane 2 (18°) heavy and strained
+      let inclineLoadFactor = 1.0;
+      if (!this.lowRange && slopePitch > 0.20) {
+        const gradientPenalty = (slopePitch - 0.20) * 1.6;
+        inclineLoadFactor = Math.max(0.35, 1.0 - gradientPenalty);
       }
-      const engTorque = this.engine.getTorque(effectiveThrottle) * torqueMultiplier * inclineBogFactor;
+      const engTorque = this.engine.getTorque(effectiveThrottle) * torqueMultiplier * inclineLoadFactor;
       drivelineTorque = engTorque * Math.abs(totalRatio) * 0.92 * gearSign;
     } else if (serviceBrakeIntensity === 0 && !isHandbrake) {
       // Fluid torque converter idle creep torque (48 Nm at 850 RPM)
@@ -772,12 +771,18 @@ export class Car {
           );
         }
 
-        // Drive torque distribution: 40% front / 60% rear in 4H (dynamic power oversteer), 50/50 locked in 4L crawl
+        // Drive torque distribution: 40% front / 60% rear in 4H, 50/50 locked in 4L (dynamically biased to loaded rear on steep inclines)
         let wheelDriveTorque = 0;
         if (isHandbrake) {
           wheelDriveTorque = conf.isFront ? (drivelineTorque * 0.5) : 0;
         } else if (this.lowRange) {
-          wheelDriveTorque = drivelineTorque / 4;
+          // On steep inclines in 4L, weight transfers rearward (~35/65 normal load).
+          // Shift torque bias to loaded rear tires to prevent front spin and conquer steep walls (Lane 3 & 4)
+          if (slopePitch > 0.22) {
+            wheelDriveTorque = conf.isFront ? (drivelineTorque * 0.175) : (drivelineTorque * 0.325);
+          } else {
+            wheelDriveTorque = drivelineTorque / 4;
+          }
         } else {
           wheelDriveTorque = conf.isFront ? (drivelineTorque * 0.20) : (drivelineTorque * 0.30);
         }
