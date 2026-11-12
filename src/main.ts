@@ -176,8 +176,8 @@ class Game {
     const slipRR = (w[3]?.slipRatio ?? 0).toFixed(2);
 
     const tcaseLabel = tele.transferCaseMode === '4L'
-      ? '<span style="color:#f39c12;font-weight:bold;">4L (LOW CRAWL 2.72:1)</span>'
-      : '<span style="color:#2ecc71;font-weight:bold;">4H (HIGH RANGE 1.0:1)</span>';
+      ? '<span style="color:#f39c12;font-weight:bold;">4L (DEFENDER/J70 CRAWL 45.8:1)</span>'
+      : '<span style="color:#2ecc71;font-weight:bold;">4H (HIGH RANGE 14.8:1)</span>';
 
     // Status badges
     let brakeBadge = '';
@@ -212,6 +212,8 @@ class Game {
       handlingBadge = '<span style="background:#f39c12;color:#fff;padding:1px 6px;border-radius:3px;font-weight:bold;">UNDERSTEER // PUSH</span>';
     }
 
+    const gradePercent = Math.round(Math.tan((tele.inclineDeg * Math.PI) / 180) * 100);
+
     this.hudElement.innerHTML = `
       <div style="font-weight:bold;margin-bottom:6px;color:#fff;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:3px;">
         OVER THE HILL // OFF-ROAD TRIAL DYNAMICS
@@ -222,6 +224,7 @@ class Game {
         <span style="font-size:10px;color:${rpmColor};font-family:monospace;letter-spacing:1px;margin-left:6px;">[${rpmBar}]</span>
       </div>
       <div style="margin-top:2px;">Terrain: ${surfaceBadge} | Speed: <strong>${tele.speedKmh} km/h</strong></div>
+      <div style="margin-top:2px;">Incline: <strong>${tele.inclineDeg > 0 ? '+' : ''}${tele.inclineDeg}&deg;</strong> (${gradePercent}% Grade) | State: <span style="color:#f39c12;font-weight:bold;">${tele.crawlState}</span></div>
       <div style="margin-top:2px;">Dynamics: ${handlingBadge} | Steer: <strong>${tele.steerAngleDeg}&deg;</strong> (F: ${tele.frontSlipAngleDeg}&deg; | R: ${tele.rearSlipAngleDeg}&deg;)</div>
       <div>Pitch: ${pitchDeg}&deg; | Roll: ${rollDeg}&deg;</div>
       <div style="margin-top:6px;font-weight:bold;color:#bbb;">Suspension Articulation:</div>

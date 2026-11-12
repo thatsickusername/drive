@@ -65,6 +65,8 @@ export interface DrivetrainTelemetry {
   frontSlipAngleDeg: number;
   rearSlipAngleDeg: number;
   steerAngleDeg: number;
+  inclineDeg: number;
+  crawlState: string;
 }
 
 export class Engine {
@@ -96,7 +98,7 @@ export class AutomaticTransmission {
   public reverseRatio: number = -3.40;
   public finalDriveRatio: number = 4.10;
   public highTransferRatio: number = 1.0;
-  public lowTransferRatio: number = 2.72; // Crawler reduction
+  public lowTransferRatio: number = 3.10; // Land Rover Defender / Land Cruiser J70 crawler reduction (total 45.8:1 crawl ratio)
 
   public currentGear: number = 1; // 1..4, or -1 for reverse
   private shiftCooldown: number = 0;
@@ -526,14 +528,32 @@ export class Car {
     const speedRatio = transInputRpm / Math.max(100, this.engine.rpm);
     const torqueMultiplier = Math.max(1.0, 2.1 - 1.1 * Math.min(1.0, speedRatio / 0.85));
 
-    // Driveline shaft torque calculation
+    // Driveline shaft torque calculation (Land Rover Defender / Land Cruiser J70 transfer case dynamics)
     let drivelineTorque = 0;
     const engineBrakeTorque = this.engine.getEngineBrakeTorque();
+    const gearSign = this.transmission.currentGear === -1 ? -1 : 1;
+    const slopePitch = forwardDir.y;
+
+    // Granular rock-crawling pedal mapping in 4L vs direct trail response in 4H
+    const effectiveThrottle = this.lowRange ? Math.pow(driverThrottle, 1.35) : driverThrottle;
 
     if (driverThrottle > 0) {
-      const engTorque = this.engine.getTorque(driverThrottle) * torqueMultiplier;
-      const gearSign = this.transmission.currentGear === -1 ? -1 : 1;
+      // 4H Steep Incline Bogging: in 4H on steep ramps (>13° / slopePitch > 0.22),
+      // starting at low throttle struggles against high gearing (14.8:1), requiring stall RPM build-up
+      let inclineBogFactor = 1.0;
+      if (!this.lowRange && slopePitch > 0.22 && forwardSpeed < 3.0) {
+        if (driverThrottle < 0.35) {
+          inclineBogFactor = Math.max(0.20, driverThrottle * 1.4);
+        }
+      }
+      const engTorque = this.engine.getTorque(effectiveThrottle) * torqueMultiplier * inclineBogFactor;
       drivelineTorque = engTorque * Math.abs(totalRatio) * 0.92 * gearSign;
+    } else if (serviceBrakeIntensity === 0 && !isHandbrake) {
+      // Fluid torque converter idle creep torque (48 Nm at 850 RPM)
+      // In 4L (45.8:1 crawl ratio), 48 Nm produces >4,200 N forward thrust, effortlessly crawling ramps at idle
+      // In 4H (14.8:1 ratio), forward thrust is ~1,350 N, unable to overcome steep gravity without throttle
+      const idleCreepTorque = 48;
+      drivelineTorque = idleCreepTorque * Math.abs(totalRatio) * 0.92 * gearSign;
     }
 
     // Aerodynamic quadratic drag opposing motion (0.5 * rho * Cd * A * v^2)
@@ -541,6 +561,20 @@ export class Car {
       const aeroDragForce = 1.20 * forwardSpeed * Math.abs(forwardSpeed);
       const aeroImpulse = forwardDir.clone().multiplyScalar(-aeroDragForce * dt);
       this.body.applyImpulse(new this.rapier.Vector3(aeroImpulse.x, aeroImpulse.y, aeroImpulse.z), true);
+    }
+
+    // 4L Hill Start Sprag Clutch & Anti-Rollback (Prevents backward freewheel on steep inclines in forward gears)
+    if (this.lowRange && this.transmission.currentGear >= 1 && slopePitch > 0.08 && forwardSpeed < 0 && serviceBrakeIntensity === 0 && !isHandbrake) {
+      const antiRollbackForce = Math.min(8500, Math.abs(forwardSpeed) * 45000 + 1550 * 9.81 * slopePitch);
+      const holdImpulse = forwardDir.clone().multiplyScalar(antiRollbackForce * dt);
+      this.body.applyImpulse(new this.rapier.Vector3(holdImpulse.x, holdImpulse.y, holdImpulse.z), true);
+    }
+
+    // 4L Hill Descent Control (Automatic engine compression braking on steep downhill descents)
+    if (this.lowRange && this.transmission.currentGear >= 1 && slopePitch < -0.08 && driverThrottle === 0 && forwardSpeed > 0.6) {
+      const descentBrakeForce = Math.min(7500, (forwardSpeed - 0.6) * 4200 - 1550 * 9.81 * slopePitch);
+      const descentImpulse = forwardDir.clone().multiplyScalar(-descentBrakeForce * dt);
+      this.body.applyImpulse(new this.rapier.Vector3(descentImpulse.x, descentImpulse.y, descentImpulse.z), true);
     }
 
     // Standstill damping to prevent rolling creep or micro-jitter when stopping or stopped
@@ -552,7 +586,7 @@ export class Car {
         const av = this.body.angvel();
         this.body.setAngvel(new this.rapier.Vector3(av.x * damp, av.y * damp, av.z * damp), true);
       }
-    } else if (driverThrottle === 0 && linearSpeed < 0.16) {
+    } else if (driverThrottle === 0 && linearSpeed < 0.16 && (!this.lowRange || Math.abs(slopePitch) < 0.03)) {
       const lv = this.body.linvel();
       const damp = linearSpeed < 0.04 ? 0.0 : 0.5;
       this.body.setLinvel(new this.rapier.Vector3(lv.x * damp, lv.y, lv.z * damp), true);
@@ -676,8 +710,9 @@ export class Car {
 
         // Edge climbing impulse: if the surface has an incline against forward motion, assist tire rolling over ledge
         const slopeDot = w.contactNormal.dot(wheelForward);
-        if (slopeDot < -0.1 && inputs.forward) {
-          const ledgeClimbAssist = upDir.clone().multiplyScalar(-slopeDot * totalSuspensionForce * 0.35 * dt);
+        if (slopeDot < -0.1 && (inputs.forward || (this.lowRange && serviceBrakeIntensity === 0 && !isHandbrake))) {
+          const assistScale = this.lowRange ? 0.65 : 0.35;
+          const ledgeClimbAssist = upDir.clone().multiplyScalar(-slopeDot * totalSuspensionForce * assistScale * dt);
           this.body.applyImpulseAtPoint(
             new this.rapier.Vector3(ledgeClimbAssist.x, ledgeClimbAssist.y, ledgeClimbAssist.z),
             new this.rapier.Vector3(mountWorld.x, mountWorld.y, mountWorld.z),
@@ -1081,6 +1116,24 @@ export class Car {
       }
     }
 
+    const rot = this.body.rotation();
+    const chassisQuat = new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w);
+    const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(chassisQuat);
+    const inclineDeg = Number((Math.asin(Math.max(-1, Math.min(1, forwardDir.y))) * (180 / Math.PI)).toFixed(1));
+
+    let crawlState = '4H TRAIL (14.8:1)';
+    if (this.lowRange) {
+      if (Math.abs(speedKmh) < 6.0 && inclineDeg > 3.0 && !this.isFootBrakingActive && !this.isHandbrakeActive) {
+        crawlState = '4L IDLE CREEP ASCENT';
+      } else if (inclineDeg < -3.5 && speedKmh < 12.0 && !this.isFootBrakingActive) {
+        crawlState = '4L HILL DESCENT AUTO-BRAKE';
+      } else {
+        crawlState = '4L ROCK CRAWLER (45.8:1 LOCKED)';
+      }
+    } else if (inclineDeg > 12.0 && speedKmh < 6.0) {
+      crawlState = '4H INCLINE BOG HAZARD';
+    }
+
     return {
       rpm: Math.round(this.engine.rpm),
       gearName: this.transmission.getGearName(),
@@ -1096,7 +1149,9 @@ export class Car {
       handlingState,
       frontSlipAngleDeg: Number(frontSlipDeg.toFixed(1)),
       rearSlipAngleDeg: Number(rearSlipDeg.toFixed(1)),
-      steerAngleDeg: steerDeg
+      steerAngleDeg: steerDeg,
+      inclineDeg,
+      crawlState
     };
   }
 
