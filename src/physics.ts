@@ -1,4 +1,4 @@
-import RAPIER from '@dimforge/rapier3d';
+import RAPIER from '@dimforge/rapier3d-compat';
 
 export class PhysicsEngine {
   public rapier: typeof RAPIER = RAPIER;
@@ -7,6 +7,7 @@ export class PhysicsEngine {
   private accumulator: number = 0;
 
   public async init(): Promise<void> {
+    await RAPIER.init();
     const gravity = new RAPIER.Vector3(0.0, -15.81, 0.0);
     this.world = new RAPIER.World(gravity);
   }
