@@ -8,7 +8,7 @@ export class PhysicsEngine {
 
   public async init(): Promise<void> {
     await RAPIER.init();
-    const gravity = new RAPIER.Vector3(0.0, -15.81, 0.0);
+    const gravity = new RAPIER.Vector3(0.0, -9.81, 0.0);
     this.world = new RAPIER.World(gravity);
   }
 

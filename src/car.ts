@@ -102,26 +102,53 @@ export class AutomaticTransmission {
   public reverseRatio: number = -3.40;
   public finalDriveRatio: number = 4.10;
   public highTransferRatio: number = 1.0;
-  public lowTransferRatio: number = 3.10; // Land Rover Defender / Land Cruiser J70 crawler reduction (total 45.8:1 crawl ratio)
+  public lowTransferRatio: number = 3.35; // Land Rover Defender / Land Cruiser J70 crawler reduction (total 49.5:1 crawl ratio)
 
   public currentGear: number = 1; // 1..4, or -1 for reverse
   private shiftCooldown: number = 0;
 
-  public update(rpm: number, throttle: number, lowRange: boolean, dt: number, isBraking = false): void {
+  public update(rpm: number, throttle: number, lowRange: boolean, slopePitch: number, dt: number, isBraking = false): void {
     this.shiftCooldown = Math.max(0, this.shiftCooldown - dt);
 
     if (this.currentGear === -1 || this.shiftCooldown > 0) return;
 
-    // Shift points tuned for off-road: low range holds gear longer for crawl stability
-    const upshiftRpm = lowRange ? 4800 : (3200 + throttle * 1500);
-    const downshiftRpm = isBraking ? 2500 : (lowRange ? 1900 : 1700);
+    // In 4L on inclines (>3° / slopePitch > 0.05), lock to 1st gear to guarantee 100% crawl torque delivery
+    if (lowRange && slopePitch > 0.05) {
+      if (this.currentGear > 1) {
+        this.currentGear = 1;
+        this.shiftCooldown = 1.0;
+      }
+      return;
+    }
 
-    if (rpm > upshiftRpm && this.currentGear < this.gearRatios.length) {
+    // Maximum gear in 4L is restricted to 3rd (prevent transfer case high-speed overspin)
+    const maxGear = lowRange ? 3 : this.gearRatios.length;
+
+    // Realistic shift progression: vehicles spend meaningful time in 1st gear (2.5 - 4.5s)
+    let upshiftRpm: number;
+    if (lowRange) {
+      upshiftRpm = 4400;
+    } else {
+      if (this.currentGear === 1) {
+        // 1st -> 2nd shift between 2200 RPM (gentle throttle) and 3800 RPM (full throttle)
+        upshiftRpm = 2200 + throttle * 1600;
+      } else if (this.currentGear === 2) {
+        // 2nd -> 3rd shift between 2400 RPM and 3900 RPM
+        upshiftRpm = 2400 + throttle * 1500;
+      } else {
+        // 3rd -> 4th shift between 2600 RPM and 4000 RPM
+        upshiftRpm = 2600 + throttle * 1400;
+      }
+    }
+
+    const downshiftRpm = isBraking ? 2500 : (lowRange ? 2000 : 1800);
+
+    if (rpm > upshiftRpm && this.currentGear < maxGear) {
       this.currentGear++;
-      this.shiftCooldown = 0.50;
+      this.shiftCooldown = 1.40; // Authentic shift duration prevents gear hunting
     } else if (rpm < downshiftRpm && this.currentGear > 1) {
       this.currentGear--;
-      this.shiftCooldown = isBraking ? 0.20 : 0.40;
+      this.shiftCooldown = isBraking ? 0.30 : 0.80;
     }
   }
 
@@ -163,7 +190,7 @@ export class Car {
   // Drivetrain & Engine Subsystems
   public engine: Engine = new Engine();
   public transmission: AutomaticTransmission = new AutomaticTransmission();
-  public wheelInertia: number = 1.8; // kg*m^2
+  public wheelInertia: number = 3.4; // kg*m^2 (heavy 33" mud tire + rotor + axle half-shaft rotational mass)
   public brakeTorque: number = 3800; // Nm per wheel
   public peakFriction: number = 1.05; // Base dry dirt/rock friction coefficient
   public isHandbrakeActive: boolean = false;
@@ -197,15 +224,16 @@ export class Car {
     // Rock Crawl zone: X between 36 and 62, Z between 18 and 72
     if (x >= 36 && x <= 62 && z >= 18 && z <= 72) {
       this.lastSurfaceType = 'ROCK';
-      return { type: 'ROCK', friction: 1.25, depthDrag: 60 };
+      return { type: 'ROCK', friction: 0.92, depthDrag: 40 };
     }
     // Incline Proving Ground & Articulation Obstacles: X between -28 and 28, Z between 10 and 130
+    // Calibrated friction: 0.86 allows Lane 3 (28°) crawl in 4L, requires throttle precision on Lane 4 (38°)
     if (Math.abs(x) <= 28.0 && z >= 10 && z <= 130) {
       this.lastSurfaceType = 'OBSTACLE';
-      return { type: 'OBSTACLE', friction: 1.18, depthDrag: 40 };
+      return { type: 'OBSTACLE', friction: 0.86, depthDrag: 20 };
     }
     this.lastSurfaceType = 'ASPHALT';
-    return { type: 'ASPHALT', friction: 1.05, depthDrag: 25 };
+    return { type: 'ASPHALT', friction: 0.95, depthDrag: 15 };
   }
 
   constructor(
@@ -557,11 +585,14 @@ export class Car {
     this.isHandbrakeActive = isHandbrake;
     this.isFootBrakingActive = serviceBrakeIntensity > 0;
 
-    // Automatic transmission shift logic update (upshifting/downshifting within 1..4)
+    const slopePitch = forwardDir.y;
+
+    // Automatic transmission shift logic update (upshifting/downshifting with slope lock in 4L)
     this.transmission.update(
       this.engine.rpm,
       driverThrottle,
       this.lowRange,
+      slopePitch,
       dt,
       this.isFootBrakingActive
     );
@@ -601,7 +632,8 @@ export class Car {
       targetRpm = Math.max(this.engine.idleRpm, transInputRpm * 0.92);
     }
 
-    const revSpeed = driverThrottle > 0 ? 16.0 : (isStationary ? 14.0 : 10.0);
+    // Heavy flywheel inertia & fluid torque converter pickup rate (authentic gradual speed pickup)
+    const revSpeed = driverThrottle > 0 ? 4.8 : (isStationary ? 10.0 : 7.0);
     this.engine.rpm += (targetRpm - this.engine.rpm) * Math.min(1.0, dt * revSpeed);
     this.engine.rpm = Math.max(this.engine.idleRpm, Math.min(this.engine.rpm, this.engine.maxRpm));
 
@@ -613,34 +645,49 @@ export class Car {
     let drivelineTorque = 0;
     const engineBrakeTorque = this.engine.getEngineBrakeTorque();
     const gearSign = this.transmission.currentGear === -1 ? -1 : 1;
-    const slopePitch = forwardDir.y;
 
     // Granular rock-crawling pedal mapping in 4L vs direct trail response in 4H
     const effectiveThrottle = this.lowRange ? Math.pow(driverThrottle, 1.35) : driverThrottle;
 
     if (driverThrottle > 0) {
-      // 4H Steep Incline Load Drag: in 4H (tall 14.8:1 gearing), climbing steep gradients (>14° / slopePitch > 0.24)
-      // induces severe torque converter fluid shear and mechanical strain against gravity, making Lane 2 (18°) heavy and strained
+      // 4H Steep Incline Load Drag & Mechanical Bogging:
+      // In 4H (tall 14.8:1 gearing), attempting to climb steep gradients without low range induces
+      // severe torque converter fluid shear and mechanical stall against gravity.
+      // - Lane 1 (10° / pitch 0.17): Clean ascent in 4H.
+      // - Lane 2 (18° / pitch 0.31): Heavy strain, requires committed throttle.
+      // - Lane 3 (28° / pitch 0.47): Severe stall/bogging (<6.5 kN thrust vs 8.7 kN gravity); CANNOT climb from stop in 4H.
+      // - Lane 4 (38° / pitch 0.62): Total drivetrain overload (<4.0 kN thrust vs 11.4 kN gravity); IMPOSSIBLE in 4H.
       let inclineLoadFactor = 1.0;
-      if (!this.lowRange && slopePitch > 0.20) {
-        const gradientPenalty = (slopePitch - 0.20) * 1.6;
-        inclineLoadFactor = Math.max(0.35, 1.0 - gradientPenalty);
+      if (!this.lowRange && slopePitch > 0.18) {
+        const normalizedPitch = Math.min(1.0, (slopePitch - 0.18) / 0.30);
+        // Exponential stall curve dropping output sharply above 20°
+        inclineLoadFactor = Math.max(0.16, 1.0 - Math.pow(normalizedPitch, 1.6) * 0.84);
       }
       const engTorque = this.engine.getTorque(effectiveThrottle) * torqueMultiplier * inclineLoadFactor;
       drivelineTorque = engTorque * Math.abs(totalRatio) * 0.92 * gearSign;
     } else if (serviceBrakeIntensity === 0 && !isHandbrake) {
       // Fluid torque converter idle creep torque (48 Nm at 850 RPM)
-      // In 4L (45.8:1 crawl ratio), 48 Nm produces >4,200 N forward thrust, effortlessly crawling ramps at idle
+      // In 4L (49.5:1 crawl ratio), 48 Nm produces >4,500 N forward thrust, effortlessly crawling ramps at idle
       // In 4H (14.8:1 ratio), forward thrust is ~1,350 N, unable to overcome steep gravity without throttle
       const idleCreepTorque = 48;
       drivelineTorque = idleCreepTorque * Math.abs(totalRatio) * 0.92 * gearSign;
     }
 
-    // Aerodynamic quadratic drag opposing motion (0.5 * rho * Cd * A * v^2)
-    if (Math.abs(forwardSpeed) > 0.4) {
-      const aeroDragForce = 1.20 * forwardSpeed * Math.abs(forwardSpeed);
-      const aeroImpulse = forwardDir.clone().multiplyScalar(-aeroDragForce * dt);
-      this.body.applyImpulse(new this.rapier.Vector3(aeroImpulse.x, aeroImpulse.y, aeroImpulse.z), true);
+    // Steep ramp entry kinetic compression: hitting steep ramps (>20°) at high speeds absorbs forward momentum
+    if (slopePitch > 0.22 && forwardSpeed > 1.5) {
+      const impactResistance = Math.min(11000, forwardSpeed * forwardSpeed * 75 * slopePitch);
+      const impactImpulse = forwardDir.clone().multiplyScalar(-impactResistance * dt);
+      this.body.applyImpulse(new this.rapier.Vector3(impactImpulse.x, impactImpulse.y, impactImpulse.z), true);
+    }
+
+    // Authentic resistive forces: 33" tire mechanical rolling drag + aerodynamic resistance
+    // Calibrated to cap top speeds naturally: 4H to ~98-105 km/h, 4L to ~24-28 km/h
+    if (Math.abs(forwardSpeed) > 0.15) {
+      const rollingDrag = Math.sign(forwardSpeed) * 380; // Constant tire knobby rolling resistance
+      const aeroDrag = 2.30 * forwardSpeed * Math.abs(forwardSpeed); // Brick-profile off-roader aerodynamics
+      const totalDragForce = rollingDrag + aeroDrag;
+      const totalDragImpulse = forwardDir.clone().multiplyScalar(-totalDragForce * dt);
+      this.body.applyImpulse(new this.rapier.Vector3(totalDragImpulse.x, totalDragImpulse.y, totalDragImpulse.z), true);
     }
 
     // 4L Hill Start Sprag Clutch & Anti-Rollback (Prevents backward freewheel on steep inclines in forward gears)
@@ -788,18 +835,6 @@ export class Car {
           true
         );
 
-        // Edge climbing impulse: if the surface has an incline against forward motion, assist tire rolling over ledge
-        const slopeDot = w.contactNormal.dot(wheelForward);
-        if (slopeDot < -0.1 && (inputs.forward || (this.lowRange && serviceBrakeIntensity === 0 && !isHandbrake))) {
-          const assistScale = this.lowRange ? 0.65 : 0.35;
-          const ledgeClimbAssist = upDir.clone().multiplyScalar(-slopeDot * totalSuspensionForce * assistScale * dt);
-          this.body.applyImpulseAtPoint(
-            new this.rapier.Vector3(ledgeClimbAssist.x, ledgeClimbAssist.y, ledgeClimbAssist.z),
-            new this.rapier.Vector3(mountWorld.x, mountWorld.y, mountWorld.z),
-            true
-          );
-        }
-
         // 2. Wheel Contact Patch Drivetrain & Combined Friction Ellipse
         const forwardVelocity = pointVel.dot(wheelForward);
         const lateralVelocity = pointVel.dot(wheelRight);
@@ -931,8 +966,8 @@ export class Car {
           w.angularVelocity += angAccel * dt;
         }
 
-        // Clamp runaway wheelspin in high-reduction crawl
-        const maxWheelOmega = this.lowRange ? 42.0 : 110.0;
+        // Clamp runaway wheelspin (4L capped to ~31 km/h wheel speed, 4H capped to ~112 km/h trail speed)
+        const maxWheelOmega = this.lowRange ? 18.0 : 65.0;
         w.angularVelocity = Math.max(-maxWheelOmega, Math.min(maxWheelOmega, w.angularVelocity));
 
         // Advance wheel visual spin angle
@@ -989,7 +1024,7 @@ export class Car {
           w.angularVelocity += angAccel * dt;
         }
 
-        const maxAirOmega = this.lowRange ? 45.0 : 120.0;
+        const maxAirOmega = this.lowRange ? 20.0 : 70.0;
         w.angularVelocity = Math.max(-maxAirOmega, Math.min(maxAirOmega, w.angularVelocity));
 
         w.spinAngle += w.angularVelocity * dt;
@@ -1230,10 +1265,10 @@ export class Car {
       } else if (inclineDeg < -3.5 && speedKmh < 12.0 && !this.isFootBrakingActive) {
         crawlState = '4L HILL DESCENT AUTO-BRAKE';
       } else {
-        crawlState = '4L ROCK CRAWLER (45.8:1 LOCKED)';
+        crawlState = '4L ROCK CRAWLER (49.5:1 LOCKED)';
       }
-    } else if (inclineDeg > 12.0 && speedKmh < 6.0) {
-      crawlState = '4H INCLINE BOG HAZARD';
+    } else if (inclineDeg > 16.0 && speedKmh < 10.0) {
+      crawlState = '4H STALL / INCLINE BOG HAZARD';
     }
 
     return {

@@ -314,7 +314,7 @@ class Game {
     const slipRR = (w[3]?.slipRatio ?? 0).toFixed(2);
 
     const tcaseLabel = tele.transferCaseMode === '4L'
-      ? '<span style="color:#f39c12;font-weight:bold;">4L (DEFENDER/J70 CRAWL 45.8:1)</span>'
+      ? '<span style="color:#f39c12;font-weight:bold;">4L (DEFENDER/J70 CRAWL 49.5:1)</span>'
       : '<span style="color:#2ecc71;font-weight:bold;">4H (HIGH RANGE 14.8:1)</span>';
 
     let brakeBadge = '';
