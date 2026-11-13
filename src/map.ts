@@ -452,4 +452,24 @@ export class GameMap {
     world.createCollider(groundColliderDesc, groundBody);
     this.rigidBodies.push(groundBody);
   }
+
+  public dispose(scene: THREE.Scene, world: RAPIER.World): void {
+    this.group.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (Array.isArray(mesh.material)) {
+          mesh.material.forEach((m) => m.dispose());
+        } else if (mesh.material) {
+          mesh.material.dispose();
+        }
+      }
+    });
+    scene.remove(this.group);
+
+    for (const body of this.rigidBodies) {
+      world.removeRigidBody(body);
+    }
+    this.rigidBodies.length = 0;
+  }
 }

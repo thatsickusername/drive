@@ -8,11 +8,19 @@ import { RemoteCar } from './remote-car';
 import { PlayerSlotInfo } from './network/protocol';
 import { DynamicCameraDirector } from './camera';
 import { UnifiedInputController } from './input';
+import { TerrainManager } from './world/managers/TerrainManager';
+import { DEFAULT_TERRAIN_CONFIG } from './world/config/terrainConfig';
+import { createSeededNoise2D } from './world/math/prng';
+import { getMainTrailCenterZ } from './world/math/splineCarver';
 
 class Game {
   private renderer!: Renderer;
   private physics!: PhysicsEngine;
-  public map!: GameMap;
+  public map: GameMap | null = null;
+  public terrainManager: TerrainManager | null = null;
+  public currentMapType: 'TRAINING' | 'PROCEDURAL' = 'TRAINING';
+  public currentSeed: string = DEFAULT_TERRAIN_CONFIG.seed;
+  public isLoadingMap: boolean = false;
   public car!: Car;
 
   // Camera & Input Systems
@@ -33,6 +41,7 @@ class Game {
   private lastTime: number = 0;
   private lastHudUpdateTime: number = 0;
   private hudElement!: HTMLElement;
+  private mapPickerElement!: HTMLElement;
   private carLinvel = new THREE.Vector3();
 
   public async start(): Promise<void> {
@@ -48,22 +57,33 @@ class Game {
     this.physics = new PhysicsEngine();
     await this.physics.init();
 
-    // 3. Initialize Map & Trimesh colliders
-    this.map = new GameMap(this.renderer.scene, this.physics.rapier, this.physics.world);
-
-    // 4. Initialize Car
+    // 3. Initialize Car first (before map so it is available for map placement)
     this.car = new Car(this.renderer.scene, this.physics.rapier, this.physics.world);
 
-    // 5. Initialize Camera Director
+    // 4. Initialize Camera Director
     this.cameraDirector = new DynamicCameraDirector(this.renderer.camera);
     this.cameraDirector.initPosition(this.car.mesh.position, this.car.mesh.quaternion);
 
-    // 6. Initialize Controller & Telemetry UI
+    // 5. Initialize Controller & Telemetry UI
     this.inputController = new UnifiedInputController();
     this.inputController.onResetRequested = () => this.resetVehicle();
 
     this.setupHUD();
+    this.setupMapPickerUI();
     this.setupMultiplayer();
+
+    // 6. Check URL query params for initial map & seed
+    const urlParams = new URLSearchParams(window.location.search);
+    const initialMap = urlParams.get('map')?.toUpperCase() === 'PROCEDURAL' ? 'PROCEDURAL' : 'TRAINING';
+    const initialSeed = urlParams.get('seed') || DEFAULT_TERRAIN_CONFIG.seed;
+    this.currentSeed = initialSeed;
+
+    if (initialMap === 'PROCEDURAL') {
+      await this.switchMap('PROCEDURAL', initialSeed);
+    } else {
+      this.map = new GameMap(this.renderer.scene, this.physics.rapier, this.physics.world);
+      this.renderMapPickerUI();
+    }
 
     // 7. Start Engine Loop
     this.lastTime = performance.now();
@@ -71,6 +91,21 @@ class Game {
   }
 
   private resetVehicle(): void {
+    if (this.currentMapType === 'PROCEDURAL' && this.terrainManager) {
+      const noise = createSeededNoise2D(this.currentSeed);
+      const trailZ = getMainTrailCenterZ(0, noise);
+      const groundY = this.terrainManager.getTerrainHeightAt(0, trailZ);
+      this.car.reset(0, groundY + 0.85, trailZ, 0);
+      this.car.body.setLinvel(new this.physics.rapier.Vector3(0, 0, 0), true);
+      this.car.body.setAngvel(new this.physics.rapier.Vector3(0, 0, 0), true);
+      this.car.body.wakeUp();
+      this.cameraDirector.initPosition(this.car.mesh.position, this.car.mesh.quaternion);
+      if (this.network) {
+        this.network.sendRespawn([0, groundY + 0.85, trailZ], 0);
+      }
+      return;
+    }
+
     const sx = this.selfSlot ? this.selfSlot.spawnPos[0] : 0;
     const sy = this.selfSlot ? this.selfSlot.spawnPos[1] : 1.02;
     const sz = this.selfSlot ? this.selfSlot.spawnPos[2] : 0;
@@ -80,6 +115,172 @@ class Game {
     if (this.network) {
       this.network.sendRespawn([sx, sy, sz], syaw);
     }
+  }
+
+  private setupMapPickerUI(): void {
+    this.mapPickerElement = document.createElement('div');
+    this.mapPickerElement.style.position = 'fixed';
+    this.mapPickerElement.style.bottom = '16px';
+    this.mapPickerElement.style.left = '16px';
+    this.mapPickerElement.style.backgroundColor = 'rgba(16, 20, 24, 0.88)';
+    this.mapPickerElement.style.border = '1px solid rgba(255, 255, 255, 0.2)';
+    this.mapPickerElement.style.borderRadius = '6px';
+    this.mapPickerElement.style.padding = '10px 14px';
+    this.mapPickerElement.style.fontFamily = 'monospace';
+    this.mapPickerElement.style.fontSize = '12px';
+    this.mapPickerElement.style.color = '#e0e0e0';
+    this.mapPickerElement.style.zIndex = '999';
+    this.mapPickerElement.style.display = 'flex';
+    this.mapPickerElement.style.flexDirection = 'column';
+    this.mapPickerElement.style.gap = '8px';
+    this.mapPickerElement.style.maxWidth = '380px';
+    document.body.appendChild(this.mapPickerElement);
+
+    this.renderMapPickerUI();
+  }
+
+  private renderMapPickerUI(): void {
+    if (!this.mapPickerElement) return;
+
+    const isProcedural = this.currentMapType === 'PROCEDURAL';
+
+    this.mapPickerElement.innerHTML = `
+      <div style="font-weight:bold;color:#4ade80;display:flex;justify-content:space-between;align-items:center;">
+        <span>🗺️ WORLD MAP & SEED PICKER</span>
+        <span style="font-size:10px;color:${this.isLoadingMap ? '#f59e0b' : '#10b981'};">${this.isLoadingMap ? 'GENERATING CHUNKS...' : 'ACTIVE'}</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <label style="font-size:11px;color:#aaa;">Map:</label>
+        <select id="map-select" style="background:#222a35;color:#fff;border:1px solid #444;border-radius:4px;padding:3px 6px;font-family:monospace;font-size:11px;flex:1;">
+          <option value="TRAINING" ${!isProcedural ? 'selected' : ''}>Proving Ground (Physics Test Map)</option>
+          <option value="PROCEDURAL" ${isProcedural ? 'selected' : ''}>Procedural Wasteland (Rapier Heightfield)</option>
+        </select>
+      </div>
+      <div id="seed-row" style="display:${isProcedural ? 'flex' : 'none'};gap:6px;align-items:center;">
+        <label style="font-size:11px;color:#aaa;">Seed:</label>
+        <input id="seed-input" type="text" value="${this.currentSeed}" style="background:#222a35;color:#4ade80;border:1px solid #444;border-radius:4px;padding:3px 6px;font-family:monospace;font-size:11px;flex:1;" />
+        <button id="rand-seed-btn" title="Randomize Seed" style="background:#374151;color:#fff;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-family:monospace;font-size:11px;">🎲</button>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button id="apply-map-btn" style="background:#2563eb;color:#fff;border:none;border-radius:4px;padding:4px 10px;cursor:pointer;font-weight:bold;font-family:monospace;font-size:11px;flex:1;" ${this.isLoadingMap ? 'disabled' : ''}>
+          ${this.isLoadingMap ? 'Loading...' : 'Apply / Switch Map'}
+        </button>
+      </div>
+    `;
+
+    const mapSelect = document.getElementById('map-select') as HTMLSelectElement;
+    const seedRow = document.getElementById('seed-row');
+    const seedInput = document.getElementById('seed-input') as HTMLInputElement;
+    const randBtn = document.getElementById('rand-seed-btn');
+    const applyBtn = document.getElementById('apply-map-btn');
+
+    if (mapSelect && seedRow) {
+      mapSelect.onchange = () => {
+        seedRow.style.display = mapSelect.value === 'PROCEDURAL' ? 'flex' : 'none';
+      };
+    }
+
+    if (randBtn && seedInput) {
+      randBtn.onclick = () => {
+        const words = ['OVER_THE_HILL', 'WASTELAND', 'CRAWL_CANYON', 'MUD_RUN', 'RIDGE_PASS', 'BOULDER_VALLEY', 'OUTPOST_42'];
+        const randomSeed = `${words[Math.floor(Math.random() * words.length)]}_${Math.floor(Math.random() * 900 + 100)}`;
+        seedInput.value = randomSeed;
+      };
+    }
+
+    if (applyBtn && mapSelect) {
+      applyBtn.onclick = () => {
+        const targetMap = mapSelect.value as 'TRAINING' | 'PROCEDURAL';
+        const targetSeed = seedInput ? seedInput.value.trim() : this.currentSeed;
+        this.switchMap(targetMap, targetSeed);
+      };
+    }
+  }
+
+  public async switchMap(mapType: 'TRAINING' | 'PROCEDURAL', seed?: string): Promise<void> {
+    if (this.isLoadingMap) return;
+    this.isLoadingMap = true;
+    this.currentMapType = mapType;
+    if (seed) this.currentSeed = seed;
+    this.renderMapPickerUI();
+
+    // Spawn Safety Lock: Freeze vehicle RigidBody during chunk generation
+    this.car.body.setBodyType(this.physics.rapier.RigidBodyType.KinematicPositionBased, true);
+    this.car.body.setLinvel(new this.physics.rapier.Vector3(0, 0, 0), true);
+    this.car.body.setAngvel(new this.physics.rapier.Vector3(0, 0, 0), true);
+
+    if (mapType === 'TRAINING') {
+      if (this.terrainManager) {
+        this.terrainManager.dispose();
+        this.terrainManager = null;
+      }
+      if (!this.map) {
+        this.map = new GameMap(this.renderer.scene, this.physics.rapier, this.physics.world);
+      }
+      this.car.body.setBodyType(this.physics.rapier.RigidBodyType.Dynamic, true);
+      this.car.reset(0, 1.02, 0, 0);
+      this.cameraDirector.initPosition(this.car.mesh.position, this.car.mesh.quaternion);
+    } else {
+      if (this.map) {
+        this.map.dispose(this.renderer.scene, this.physics.world);
+        this.map = null;
+      }
+      if (this.terrainManager) {
+        this.terrainManager.dispose();
+        this.terrainManager = null;
+      }
+
+      this.terrainManager = new TerrainManager(
+        this.renderer.scene,
+        this.physics.rapier,
+        this.physics.world,
+        { seed: this.currentSeed }
+      );
+
+      const noise = createSeededNoise2D(this.currentSeed);
+      const trailZ = getMainTrailCenterZ(0, noise);
+      const spawnX = 0;
+      const spawnZ = trailZ;
+
+      const chunkSize = this.terrainManager.config.chunkSize;
+      const spawnCx = Math.floor((spawnX + chunkSize * 0.5) / chunkSize);
+      const spawnCz = Math.floor((spawnZ + chunkSize * 0.5) / chunkSize);
+
+      // Queue initial chunks centered on player spawn position
+      this.terrainManager.update(spawnX, spawnZ);
+
+      // Await the exact chunk containing the vehicle spawn point
+      await this.terrainManager.waitForChunk(spawnCx, spawnCz);
+
+      // Also ensure chunk (0, 0) is ready
+      if (spawnCx !== 0 || spawnCz !== 0) {
+        await this.terrainManager.waitForChunk(0, 0);
+      }
+
+      // Step physics once to rebuild Rapier broadphase BVH acceleration structure
+      this.physics.world.step();
+
+      const groundY = this.terrainManager.getTerrainHeightAt(spawnX, spawnZ);
+      this.car.reset(spawnX, groundY + 0.85, spawnZ, 0);
+      this.car.body.setBodyType(this.physics.rapier.RigidBodyType.Dynamic, true);
+      this.car.body.setLinvel(new this.physics.rapier.Vector3(0, 0, 0), true);
+      this.car.body.setAngvel(new this.physics.rapier.Vector3(0, 0, 0), true);
+      this.car.body.wakeUp();
+      this.cameraDirector.initPosition(this.car.mesh.position, this.car.mesh.quaternion);
+    }
+
+    this.isLoadingMap = false;
+    this.renderMapPickerUI();
+
+    // Update URL query params without reloading
+    const url = new URL(window.location.href);
+    url.searchParams.set('map', mapType.toLowerCase());
+    if (mapType === 'PROCEDURAL') {
+      url.searchParams.set('seed', this.currentSeed);
+    } else {
+      url.searchParams.delete('seed');
+    }
+    window.history.replaceState(null, '', url.toString());
   }
 
   private setupMultiplayer(): void {
@@ -240,14 +441,21 @@ class Game {
     // 1. Poll Unified Input (Keyboard + Gamepad analog)
     const inputs = this.inputController.update();
 
-    // 2. Fixed-step physics updates (60Hz)
-    this.physics.step(delta, (dt: number) => {
-      this.car.updateFixed(inputs, dt);
-    });
+    if (!this.isLoadingMap) {
+      // 2. Fixed-step physics updates (60Hz)
+      this.physics.step(delta, (dt: number) => {
+        this.car.updateFixed(inputs, dt);
+      });
 
-    // 3. Sub-tick render state interpolation (stutter-free on 120Hz/144Hz/240Hz monitors)
-    const alpha = this.physics.getInterpolationAlpha();
-    this.car.syncRender(alpha);
+      // 3. Sub-tick render state interpolation (stutter-free on 120Hz/144Hz/240Hz monitors)
+      const alpha = this.physics.getInterpolationAlpha();
+      this.car.syncRender(alpha);
+
+      // Stream procedural chunks around vehicle position
+      if (this.terrainManager) {
+        this.terrainManager.update(this.car.mesh.position.x, this.car.mesh.position.z);
+      }
+    }
 
     // 4. Remote car kinematic step & interpolation
     for (const remoteCar of this.remoteCars.values()) {
@@ -349,9 +557,14 @@ class Game {
 
     const gradePercent = Math.round(Math.tan((tele.inclineDeg * Math.PI) / 180) * 100);
 
+    const mapBadge = this.currentMapType === 'PROCEDURAL'
+      ? `<span style="color:#4ade80;font-weight:bold;">PROCEDURAL [${this.currentSeed}]</span>`
+      : `<span style="color:#60a5fa;font-weight:bold;">PROVING GROUND (TESTING MAP)</span>`;
+
     this.hudElement.innerHTML = `
-      <div style="font-weight:bold;margin-bottom:6px;color:#fff;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:3px;">
-        OVER THE HILL // OFF-ROAD TRIAL DYNAMICS
+      <div style="font-weight:bold;margin-bottom:6px;color:#fff;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:3px;display:flex;justify-content:space-between;">
+        <span>OVER THE HILL // OFF-ROAD DYNAMICS</span>
+        <span>${mapBadge}</span>
       </div>
       <div>Gear: <strong style="color:#3498db;font-size:14px;">[${tele.gearName}]</strong> | Transfer Case: ${tcaseLabel} [L] ${brakeBadge}</div>
       <div style="margin-top:2px;">
