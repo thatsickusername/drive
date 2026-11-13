@@ -107,7 +107,7 @@ export class AutomaticTransmission {
   public currentGear: number = 1; // 1..4, or -1 for reverse
   private shiftCooldown: number = 0;
 
-  public update(rpm: number, throttle: number, lowRange: boolean, slopePitch: number, dt: number, isBraking = false): void {
+  public update(rpm: number, throttle: number, lowRange: boolean, slopePitch: number, linearSpeed: number, dt: number, isBraking = false): void {
     this.shiftCooldown = Math.max(0, this.shiftCooldown - dt);
 
     if (this.currentGear === -1 || this.shiftCooldown > 0) return;
@@ -121,31 +121,45 @@ export class AutomaticTransmission {
       return;
     }
 
-    // Maximum gear in 4L is restricted to 3rd (prevent transfer case high-speed overspin)
-    const maxGear = lowRange ? 3 : this.gearRatios.length;
+    // Maximum gear in 4L is strictly capped to 2 (D1 and D2 only; top speed <= 30 km/h)
+    const maxGear = lowRange ? 2 : this.gearRatios.length;
 
-    // Realistic shift progression: vehicles spend meaningful time in 1st gear (2.5 - 4.5s)
     let upshiftRpm: number;
     if (lowRange) {
-      upshiftRpm = 4400;
+      // In 4L, hold 1st gear (D1) until vehicle builds crawl momentum (~14 km/h / 3.9 m/s) and engine revs high
+      upshiftRpm = linearSpeed > 3.9 ? 4200 : 5600;
     } else {
       if (this.currentGear === 1) {
-        // 1st -> 2nd shift between 2200 RPM (gentle throttle) and 3800 RPM (full throttle)
+        // 1st -> 2nd shift (preserved as approved): shifts at ~22-26 km/h
         upshiftRpm = 2200 + throttle * 1600;
       } else if (this.currentGear === 2) {
-        // 2nd -> 3rd shift between 2400 RPM and 3900 RPM
-        upshiftRpm = 2400 + throttle * 1500;
+        // 2nd -> 3rd shift: shifts progressively at ~38-42 km/h
+        upshiftRpm = 1950 + throttle * 300;
       } else {
-        // 3rd -> 4th shift between 2600 RPM and 4000 RPM
-        upshiftRpm = 2600 + throttle * 1400;
+        // 3rd -> 4th shift: shifts progressively at ~48-52 km/h, cruising in 4th up to 60 km/h
+        upshiftRpm = 1750 + throttle * 250;
       }
     }
 
-    const downshiftRpm = isBraking ? 2500 : (lowRange ? 2000 : 1800);
+    // Downshift points
+    let downshiftRpm: number;
+    if (isBraking) {
+      downshiftRpm = 2500;
+    } else if (lowRange) {
+      downshiftRpm = 2200;
+    } else {
+      if (this.currentGear === 4) {
+        downshiftRpm = 1450; // drops to 3rd below ~44 km/h
+      } else if (this.currentGear === 3) {
+        downshiftRpm = 1600; // drops to 2nd below ~34 km/h
+      } else {
+        downshiftRpm = 1750; // drops to 1st below ~20 km/h
+      }
+    }
 
     if (rpm > upshiftRpm && this.currentGear < maxGear) {
       this.currentGear++;
-      this.shiftCooldown = 1.40; // Authentic shift duration prevents gear hunting
+      this.shiftCooldown = lowRange ? 1.50 : 1.20;
     } else if (rpm < downshiftRpm && this.currentGear > 1) {
       this.currentGear--;
       this.shiftCooldown = isBraking ? 0.30 : 0.80;
@@ -593,6 +607,7 @@ export class Car {
       driverThrottle,
       this.lowRange,
       slopePitch,
+      linearSpeed,
       dt,
       this.isFootBrakingActive
     );
@@ -681,10 +696,17 @@ export class Car {
     }
 
     // Authentic resistive forces: 33" tire mechanical rolling drag + aerodynamic resistance
-    // Calibrated to cap top speeds naturally: 4H to ~98-105 km/h, 4L to ~24-28 km/h
+    // Calibrated to cap top speeds smoothly: 4H to 60 km/h (16.67 m/s), 4L to 30 km/h (8.33 m/s)
     if (Math.abs(forwardSpeed) > 0.15) {
-      const rollingDrag = Math.sign(forwardSpeed) * 380; // Constant tire knobby rolling resistance
-      const aeroDrag = 2.30 * forwardSpeed * Math.abs(forwardSpeed); // Brick-profile off-roader aerodynamics
+      const rollingDrag = Math.sign(forwardSpeed) * 420; // Constant tire knobby rolling resistance
+      // Target max speed governor drag scaling as vehicle approaches speed cap
+      const targetMaxSpeed = this.lowRange ? (30 / 3.6) : (60 / 3.6); // 8.33 m/s in 4L, 16.67 m/s in 4H
+      let governorFactor = 1.0;
+      if (Math.abs(forwardSpeed) > targetMaxSpeed * 0.85) {
+        const overSpeed = (Math.abs(forwardSpeed) - targetMaxSpeed * 0.85) / (targetMaxSpeed * 0.15);
+        governorFactor = 1.0 + Math.max(0, overSpeed) * 4.5;
+      }
+      const aeroDrag = 3.60 * forwardSpeed * Math.abs(forwardSpeed) * governorFactor;
       const totalDragForce = rollingDrag + aeroDrag;
       const totalDragImpulse = forwardDir.clone().multiplyScalar(-totalDragForce * dt);
       this.body.applyImpulse(new this.rapier.Vector3(totalDragImpulse.x, totalDragImpulse.y, totalDragImpulse.z), true);
@@ -966,8 +988,10 @@ export class Car {
           w.angularVelocity += angAccel * dt;
         }
 
-        // Clamp runaway wheelspin (4L capped to ~31 km/h wheel speed, 4H capped to ~112 km/h trail speed)
-        const maxWheelOmega = this.lowRange ? 18.0 : 65.0;
+        // Clamp runaway wheelspin & enforce strict top speed caps:
+        // 4L: max 30 km/h (linearSpeed ~8.33 m/s / radius 0.48m = 17.36 rad/s)
+        // 4H: max 60 km/h (linearSpeed ~16.67 m/s / radius 0.48m = 34.72 rad/s)
+        const maxWheelOmega = this.lowRange ? 17.4 : 34.8;
         w.angularVelocity = Math.max(-maxWheelOmega, Math.min(maxWheelOmega, w.angularVelocity));
 
         // Advance wheel visual spin angle
@@ -1024,7 +1048,7 @@ export class Car {
           w.angularVelocity += angAccel * dt;
         }
 
-        const maxAirOmega = this.lowRange ? 20.0 : 70.0;
+        const maxAirOmega = this.lowRange ? 18.5 : 36.0;
         w.angularVelocity = Math.max(-maxAirOmega, Math.min(maxAirOmega, w.angularVelocity));
 
         w.spinAngle += w.angularVelocity * dt;
