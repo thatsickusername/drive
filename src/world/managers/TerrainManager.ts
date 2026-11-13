@@ -4,9 +4,7 @@ import { TerrainConfig, DEFAULT_TERRAIN_CONFIG } from '../config/terrainConfig';
 import { TerrainChunk } from './TerrainChunk';
 import { ChunkWorkerInput, ChunkWorkerOutput, generateChunkData } from '../generators/terrainWorker';
 import { createSeededNoise2D } from '../math/prng';
-import { getBaseElevation, getTerracedRock, getRidgedNoise, lerp } from '../math/noiseLayers';
-import { evaluateTrails, getMainTrailCenterZ } from '../math/splineCarver';
-import { getRiverCarveOffset } from '../biomes/biomeEvaluator';
+import { computeRawTerrainHeight } from '../math/splineCarver';
 import { evaluateStructureForChunk, applyPadFlattening } from '../generators/structurePlacer';
 
 export class TerrainManager {
@@ -247,27 +245,7 @@ export class TerrainManager {
   public getTerrainHeightAt(worldX: number, worldZ: number): number {
     const noise2D = createSeededNoise2D(this.config.seed);
     const computeRaw = (wx: number, wz: number): number => {
-      let base = getBaseElevation(wx, wz, noise2D, this.config.maxHeight);
-
-      if (base > 12.0) {
-        const ridged = getRidgedNoise(wx, wz, noise2D, 0.005);
-        base += ridged * Math.min(22.0, (base - 12.0) * 0.55);
-      }
-
-      const terraced = getTerracedRock(base, 4.0, 3.0);
-      let h = lerp(base, terraced, 0.4);
-
-      const river = getRiverCarveOffset(wx, wz, noise2D, this.config.riverLevel);
-      h += river.offset;
-
-      const trail = evaluateTrails(wx, wz, noise2D, this.config);
-      if (trail.trailMask < 0.99) {
-        const centerZ = getMainTrailCenterZ(wx, noise2D);
-        const trailGradedHeight = getBaseElevation(wx, centerZ, noise2D, this.config.maxHeight) + trail.heightOffset;
-        h = lerp(trailGradedHeight - 0.25, h, trail.trailMask);
-      }
-
-      return h;
+      return computeRawTerrainHeight(wx, wz, noise2D, this.config);
     };
 
     let y = computeRaw(worldX, worldZ);

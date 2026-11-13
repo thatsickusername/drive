@@ -55,15 +55,16 @@ export function evaluateVertexSurface(
   challengeNoise: number,
   isMudPit: boolean,
   noise2D: NoiseFunction2D,
-  config: TerrainConfig
+  config: TerrainConfig,
+  curvature = 0.0 // Laplacian curvature: positive = concave dip/valley, negative = convex ridge
 ): VertexSurfaceInfo {
   // Moisture: low-frequency noise
   const rawMoisture = noise2D(worldX * 0.001, worldZ * 0.001) * 0.5 + 0.5;
   const isNearRiver = worldY < config.riverLevel + 3.0;
   const moisture = clamp(rawMoisture + (isNearRiver ? 0.4 : 0.0), 0, 1);
 
-  // 1. Deep Mud / Washout
-  if (worldY < config.riverLevel + 2.5 || (isMudPit && trailMask < 0.5)) {
+  // 1. Deep Mud / Washout (Valleys & designated mud pits)
+  if (worldY < config.riverLevel + 2.5 || (isMudPit && trailMask < 0.55)) {
     return {
       r: COLOR_WET_MUD[0],
       g: COLOR_WET_MUD[1],
@@ -73,27 +74,124 @@ export function evaluateVertexSurface(
     };
   }
 
-  // 2. Compacted Dirt Trail (non-challenge or technical rock-crawl)
+  // 2. Compacted Dirt / Crushed Rock Trail
   if (trailMask < 0.35 && challengeNoise <= 0.55) {
     const dirtNoise = (noise2D(worldX * 0.05, worldZ * 0.05) + 1) * 0.5;
-    const r = lerp(COLOR_DRY_EARTH[0], COLOR_DARK_BASALT[0], dirtNoise * 0.3);
-    const g = lerp(COLOR_DRY_EARTH[1], COLOR_DARK_BASALT[1], dirtNoise * 0.3);
-    const b = lerp(COLOR_DRY_EARTH[2], COLOR_DARK_BASALT[2], dirtNoise * 0.3);
+    const isAlpineTrail = worldY > 110.0;
+    const baseColor = isAlpineTrail ? COLOR_DARK_BASALT : COLOR_DRY_EARTH;
+    const r = lerp(baseColor[0], COLOR_DARK_BASALT[0], dirtNoise * 0.3);
+    const g = lerp(baseColor[1], COLOR_DARK_BASALT[1], dirtNoise * 0.3);
+    const b = lerp(baseColor[2], COLOR_DARK_BASALT[2], dirtNoise * 0.3);
     return {
       r,
       g,
       b,
-      friction: 0.80,
+      friction: isAlpineTrail ? 0.85 : 0.82,
       surfaceType: 'TRAIL',
     };
   }
 
-  // 3. Exposed Cliff / Rock Crawl
-  if (slope > 0.52 || (trailMask < 0.5 && challengeNoise > 0.55)) {
-    const basaltBlend = smoothstep(0.52, 0.9, slope);
-    const r = lerp(COLOR_SLATE_GREY[0], COLOR_DARK_BASALT[0], basaltBlend);
-    const g = lerp(COLOR_SLATE_GREY[1], COLOR_DARK_BASALT[1], basaltBlend);
-    const b = lerp(COLOR_SLATE_GREY[2], COLOR_DARK_BASALT[2], basaltBlend);
+  // Horizontal strata banding function for steep rock faces
+  const getStrataMod = (y: number) => Math.sin(y * 1.8) * 0.06;
+
+  // 3. High Alpine Peaks & Snow Slopes (145m+)
+  if (worldY >= 135.0) {
+    const snowAltitudeBlend = smoothstep(135.0, 155.0, worldY);
+
+    // Steep rock cliff faces that shed snow (slope > 0.65, ~38 deg)
+    if (slope > 0.65) {
+      const basaltBlend = smoothstep(0.65, 0.95, slope);
+      let r = lerp(COLOR_SLATE_GREY[0], COLOR_DARK_BASALT[0], basaltBlend);
+      let g = lerp(COLOR_SLATE_GREY[1], COLOR_DARK_BASALT[1], basaltBlend);
+      let b = lerp(COLOR_SLATE_GREY[2], COLOR_DARK_BASALT[2], basaltBlend);
+
+      const strata = getStrataMod(worldY);
+      r = clamp(r + strata, 0, 1);
+      g = clamp(g + strata, 0, 1);
+      b = clamp(b + strata, 0, 1);
+
+      return {
+        r,
+        g,
+        b,
+        friction: 0.95,
+        surfaceType: 'ROCK',
+      };
+    }
+
+    // High alpine snow cover on drivable slopes (slope <= 0.65)
+    const snowSlopeDamp = 1.0 - smoothstep(0.45, 0.65, slope);
+    const snowFactor = snowAltitudeBlend * snowSlopeDamp;
+
+    let r = lerp(COLOR_SLATE_GREY[0], COLOR_ASH_FROST[0], snowFactor);
+    let g = lerp(COLOR_SLATE_GREY[1], COLOR_ASH_FROST[1], snowFactor);
+    let b = lerp(COLOR_SLATE_GREY[2], COLOR_ASH_FROST[2], snowFactor);
+
+    return {
+      r,
+      g,
+      b,
+      friction: lerp(0.85, 0.42, snowFactor),
+      surfaceType: 'FROST',
+    };
+  }
+
+  // 4. Sub-Alpine Timberline & Scree (65m - 145m)
+  if (worldY >= 65.0) {
+    // Exposed cliff or technical rock climb
+    if (slope > 0.48 || (trailMask < 0.5 && challengeNoise > 0.55)) {
+      const basaltBlend = smoothstep(0.48, 0.85, slope);
+      let r = lerp(COLOR_SLATE_GREY[0], COLOR_DARK_BASALT[0], basaltBlend);
+      let g = lerp(COLOR_SLATE_GREY[1], COLOR_DARK_BASALT[1], basaltBlend);
+      let b = lerp(COLOR_SLATE_GREY[2], COLOR_DARK_BASALT[2], basaltBlend);
+
+      const strata = getStrataMod(worldY);
+      r = clamp(r + strata, 0, 1);
+      g = clamp(g + strata, 0, 1);
+      b = clamp(b + strata, 0, 1);
+
+      return {
+        r,
+        g,
+        b,
+        friction: 0.95,
+        surfaceType: 'ROCK',
+      };
+    }
+
+    // Golden-brown alpine tundra grass & scree
+    const altitudeProgression = smoothstep(65.0, 135.0, worldY);
+    let r = lerp(COLOR_OLIVE_MOSS[0], COLOR_DEAD_GRASS[0], altitudeProgression);
+    let g = lerp(COLOR_OLIVE_MOSS[1], COLOR_DEAD_GRASS[1], altitudeProgression);
+    let b = lerp(COLOR_OLIVE_MOSS[2], COLOR_DEAD_GRASS[2], altitudeProgression);
+
+    // Convex scree modulation
+    if (curvature < -0.1) {
+      const screeBlend = clamp(-curvature * 0.3, 0, 0.4);
+      r = lerp(r, COLOR_SLATE_GREY[0], screeBlend);
+      g = lerp(g, COLOR_SLATE_GREY[1], screeBlend);
+      b = lerp(b, COLOR_SLATE_GREY[2], screeBlend);
+    }
+
+    return {
+      r,
+      g,
+      b,
+      friction: 0.85,
+      surfaceType: 'TUNDRA',
+    };
+  }
+
+  // 5. Valley Floor & Boreal Forest (0m - 65m)
+  if (slope > 0.52) {
+    const basaltBlend = smoothstep(0.52, 0.85, slope);
+    let r = lerp(COLOR_SLATE_GREY[0], COLOR_DARK_BASALT[0], basaltBlend);
+    let g = lerp(COLOR_SLATE_GREY[1], COLOR_DARK_BASALT[1], basaltBlend);
+    let b = lerp(COLOR_SLATE_GREY[2], COLOR_DARK_BASALT[2], basaltBlend);
+    const strata = getStrataMod(worldY);
+    r = clamp(r + strata, 0, 1);
+    g = clamp(g + strata, 0, 1);
+    b = clamp(b + strata, 0, 1);
     return {
       r,
       g,
@@ -103,31 +201,19 @@ export function evaluateVertexSurface(
     };
   }
 
-  // 4. Highland Frost / Ash Peak
-  if (worldY >= 42.0 && slope <= 0.52) {
-    const frostBlend = smoothstep(42.0, 60.0, worldY);
-    const r = lerp(COLOR_DEAD_GRASS[0], COLOR_ASH_FROST[0], frostBlend);
-    const g = lerp(COLOR_DEAD_GRASS[1], COLOR_ASH_FROST[1], frostBlend);
-    const b = lerp(COLOR_DEAD_GRASS[2], COLOR_ASH_FROST[2], frostBlend);
-    return {
-      r,
-      g,
-      b,
-      friction: 0.45,
-      surfaceType: 'FROST',
-    };
-  }
+  // Forest floor with Laplacian curvature lushness
+  const curvatureBias = clamp(curvature * 0.5, -0.35, 0.35);
+  const meadowLushness = clamp(moisture + curvatureBias, 0, 1);
 
-  // 5. Wasteland Pine / Tundra
-  const mossGrassBlend = moisture;
-  const r = lerp(COLOR_DEAD_GRASS[0], COLOR_OLIVE_MOSS[0], mossGrassBlend);
-  const g = lerp(COLOR_DEAD_GRASS[1], COLOR_OLIVE_MOSS[1], mossGrassBlend);
-  const b = lerp(COLOR_DEAD_GRASS[2], COLOR_OLIVE_MOSS[2], mossGrassBlend);
+  let r = lerp(COLOR_DRY_EARTH[0], COLOR_OLIVE_MOSS[0], meadowLushness);
+  let g = lerp(COLOR_DRY_EARTH[1], COLOR_OLIVE_MOSS[1], meadowLushness);
+  let b = lerp(COLOR_DRY_EARTH[2], COLOR_OLIVE_MOSS[2], meadowLushness);
+
   return {
     r,
     g,
     b,
-    friction: 0.70,
+    friction: 0.78,
     surfaceType: 'TUNDRA',
   };
 }

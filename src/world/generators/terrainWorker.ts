@@ -1,8 +1,7 @@
 import { TerrainConfig } from '../config/terrainConfig';
 import { createSeededNoise2D } from '../math/prng';
-import { getBaseElevation, getTerracedRock, getRidgedNoise, lerp } from '../math/noiseLayers';
-import { evaluateTrails, getMainTrailCenterZ } from '../math/splineCarver';
-import { getRiverCarveOffset, evaluateVertexSurface } from '../biomes/biomeEvaluator';
+import { evaluateTrails, computeRawTerrainHeight } from '../math/splineCarver';
+import { evaluateVertexSurface } from '../biomes/biomeEvaluator';
 import { evaluateStructureForChunk, applyPadFlattening, StructurePOI } from './structurePlacer';
 import { spawnFoliageAndBoulders, TreeColliderData, BoulderColliderData } from './foliageSpawner';
 
@@ -56,36 +55,16 @@ export function generateChunkData(cx: number, cz: number, config: TerrainConfig)
   const worldChunkCenterZ = cz * chunkSize;
 
   // Raw terrain height function without structure flattening
-  function computeRawTerrainHeight(wx: number, wz: number): number {
-    let base = getBaseElevation(wx, wz, noise2D, config.maxHeight);
-
-    if (base > 12.0) {
-      const ridged = getRidgedNoise(wx, wz, noise2D, 0.005);
-      base += ridged * Math.min(22.0, (base - 12.0) * 0.55);
-    }
-
-    const terraced = getTerracedRock(base, 4.0, 3.0);
-    let h = lerp(base, terraced, 0.4);
-
-    const river = getRiverCarveOffset(wx, wz, noise2D, config.riverLevel);
-    h += river.offset;
-
-    const trail = evaluateTrails(wx, wz, noise2D, config);
-    if (trail.trailMask < 0.99) {
-      const centerZ = getMainTrailCenterZ(wx, noise2D);
-      const trailGradedHeight = getBaseElevation(wx, centerZ, noise2D, config.maxHeight) + trail.heightOffset;
-      h = lerp(trailGradedHeight - 0.25, h, trail.trailMask);
-    }
-
-    return h;
+  function computeRaw(wx: number, wz: number): number {
+    return computeRawTerrainHeight(wx, wz, noise2D, config);
   }
 
   // Pre-evaluate structure POI if applicable for this chunk
-  const poi = evaluateStructureForChunk(cx, cz, config, computeRawTerrainHeight);
+  const poi = evaluateStructureForChunk(cx, cz, config, computeRaw);
 
   // Final height function with structure pad flattening
   function computeFinalHeight(wx: number, wz: number): number {
-    let y = computeRawTerrainHeight(wx, wz);
+    let y = computeRaw(wx, wz);
     if (poi) {
       y = applyPadFlattening(wx, wz, y, poi);
     }
@@ -135,6 +114,8 @@ export function generateChunkData(cx: number, cz: number, config: TerrainConfig)
       const dx = (hE - hW) / (2 * eps);
       const dz = (hN - hS) / (2 * eps);
       const slope = Math.hypot(dx, dz);
+      // Laplacian curvature: positive = concave dip/valley, negative = convex ridge
+      const curvature = (hE + hW + hN + hS) * 0.25 - wy;
 
       // Normal = normalize(-dx, 1, -dz)
       const len = Math.hypot(-dx, 1.0, -dz);
@@ -153,7 +134,8 @@ export function generateChunkData(cx: number, cz: number, config: TerrainConfig)
         trail.challengeNoise,
         trail.isMudPit,
         noise2D,
-        config
+        config,
+        curvature
       );
 
       colors[pIdx + 0] = surface.r;

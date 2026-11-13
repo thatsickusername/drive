@@ -106,13 +106,16 @@ export function spawnFoliageAndBoulders(
         distToPad = Math.hypot(wx - poi.x, wz - poi.z);
       }
 
-      // 1. Boulder check (Challenge zones, cliff transitions)
+      // 1. Boulder check (Challenge zones, cliff transitions, alpine scree)
+      const isHighAlpine = wy > 110.0;
       const canSpawnBoulder =
         distToPad > (poi ? poi.radius + 2 : 0) &&
         wy > config.riverLevel + 1.0 &&
-        ((props.challengeNoise > 0.55 && props.trailMask < 0.6) || (props.slope > 0.38 && props.slope < 0.58 && rand() < 0.12));
+        ((props.challengeNoise > 0.55 && props.trailMask < 0.7) ||
+          (props.slope > 0.35 && props.slope < 0.65 && rand() < (isHighAlpine ? 0.22 : 0.12)) ||
+          (isHighAlpine && props.slope > 0.25 && rand() < 0.18));
 
-      if (canSpawnBoulder && boulderList.length < 32) {
+      if (canSpawnBoulder && boulderList.length < 48) {
         const bScale = 0.6 + rand() * 0.9;
         const bSx = bScale * (0.8 + rand() * 0.4);
         const bSy = bScale * (0.5 + rand() * 0.4);
@@ -135,21 +138,24 @@ export function spawnFoliageAndBoulders(
         continue;
       }
 
-      // 2. Tree spawn check
+      // 2. Tree spawn check (Boreal Forest 0m-65m, Timberline 65m-135m, Alpine 135m+)
       const canSpawnTree =
         props.trailMask > 0.85 &&
         distToPad > (poi ? poi.radius + 4 : 0) &&
         props.slope < 0.48 &&
         wy > config.riverLevel + 1.5 &&
-        wy < 46.0;
+        wy < 135.0;
 
       if (canSpawnTree) {
-        // Density modulation using noise
+        const isTimberline = wy >= 65.0;
+        // Timberline thins out trees by 70%
+        const treeChance = isTimberline ? 0.12 : 0.42;
         const densityNoise = noise2D(wx * 0.02, wz * 0.02);
-        if (densityNoise > -0.1 && rand() < 0.42 && treeList.length < 48) {
-          const tScale = 0.75 + rand() * 0.5;
+        if (densityNoise > -0.1 && rand() < treeChance && treeList.length < 52) {
+          const tScale = (isTimberline ? 0.6 : 0.8) + rand() * 0.5;
           const yaw = rand() * Math.PI * 2;
-          const isWinch = props.trailMask < 0.95; // Close to trail edge
+          // Winch anchors placed beside trail edges or on steep hillslopes
+          const isWinch = props.trailMask < 0.95 || (props.slope > 0.32 && rand() < 0.45);
           treeList.push({
             x: wx,
             y: wy,

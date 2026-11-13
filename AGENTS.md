@@ -1,7 +1,7 @@
 # Agent Operating Rules & Context Guardrails
 
 ## 1. Context Boundaries & Lazy Spec Loading
-- **No Eager Spec Reads:** Do NOT read the entire TDS/architecture file. When mapping dependencies, query specific sections using targeted offsets or section headers.
+- **Eager Spec Reads:** First read the entire Project.md file. When mapping dependencies, query specific sections using targeted offsets or section headers.
 - **AST & Symbol Navigation First:** Prefer language server symbols, definitions, or targeted search tools over file dumping. Never read a file greater than 100 lines in full; fetch only the relevant line range.
 - **Never Inspect Excluded Paths:** Strict zero-read policy on `node_modules/`, `dist/`, `build/`, `.git/`, `.cache/`, logs, and binary asset folders.
 
