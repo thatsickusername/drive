@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { VehicleTransformState } from './network/protocol';
+import { VehicleDefinition } from './types/vehicle';
+import { getVehicleConfig } from './data/vehicle-registry';
 
 export interface VehicleInputs {
   forward: boolean;
@@ -78,15 +80,29 @@ export class Engine {
   public idleRpm: number = 850;
   public redlineRpm: number = 5400;
   public maxRpm: number = 5800;
-  public peakTorque: number = 420; // Nm @ 2800 RPM
+  public peakTorque: number = 420; // Nm
   public peakTorqueRpm: number = 2800;
+  public revSpeed: number = 4.8;
+
+  constructor(config?: VehicleDefinition['engine']) {
+    if (config) {
+      this.idleRpm = config.idleRpm;
+      this.rpm = config.idleRpm;
+      this.redlineRpm = config.redlineRpm;
+      this.maxRpm = config.maxRpm;
+      this.peakTorque = config.peakTorque;
+      this.peakTorqueRpm = config.peakTorqueRpm;
+      this.revSpeed = config.revSpeed;
+    }
+  }
 
   public getTorque(throttle: number): number {
     if (this.rpm >= this.maxRpm) return 0;
     const clampedRpm = Math.max(this.idleRpm, Math.min(this.rpm, this.redlineRpm));
     const normRpm = (clampedRpm - this.idleRpm) / (this.redlineRpm - this.idleRpm);
-    // Smooth torque curve peaking around 2800 RPM (norm ~ 0.43)
-    const curve = Math.max(0.35, 1.0 - 1.8 * Math.pow(normRpm - 0.43, 2));
+    const peakNorm = (this.peakTorqueRpm - this.idleRpm) / (this.redlineRpm - this.idleRpm);
+    // Smooth torque curve peaking around configured peakTorqueRpm
+    const curve = Math.max(0.35, 1.0 - 1.8 * Math.pow(normRpm - peakNorm, 2));
     return this.peakTorque * curve * throttle;
   }
 
@@ -97,15 +113,39 @@ export class Engine {
 }
 
 export class AutomaticTransmission {
-  // 4 Forward ratios + Reverse
   public gearRatios: number[] = [3.60, 2.10, 1.35, 1.00];
   public reverseRatio: number = -3.40;
   public finalDriveRatio: number = 4.10;
   public highTransferRatio: number = 1.0;
-  public lowTransferRatio: number = 3.35; // Land Rover Defender / Land Cruiser J70 crawler reduction (total 49.5:1 crawl ratio)
+  public lowTransferRatio: number = 3.35;
+  public maxGears4L: number = 2;
+  public shiftCooldownDuration: number = 1.20;
+  public shiftPoints: VehicleDefinition['transmission']['shiftPoints'] = {
+    gear1UpshiftRpmBase: 2200,
+    gear1UpshiftRpmThrottle: 1600,
+    gear2UpshiftRpmBase: 1950,
+    gear2UpshiftRpmThrottle: 300,
+    gear3UpshiftRpmBase: 1750,
+    gear3UpshiftRpmThrottle: 250,
+    lowRangeUpshiftSpeed: 3.9,
+    lowRangeUpshiftRpm: 4200
+  };
 
   public currentGear: number = 1; // 1..4, or -1 for reverse
   private shiftCooldown: number = 0;
+
+  constructor(config?: VehicleDefinition['transmission']) {
+    if (config) {
+      this.gearRatios = [...config.gearRatios];
+      this.reverseRatio = config.reverseRatio;
+      this.finalDriveRatio = config.finalDriveRatio;
+      this.highTransferRatio = config.highTransferRatio;
+      this.lowTransferRatio = config.lowTransferRatio;
+      this.maxGears4L = config.maxGears4L;
+      this.shiftCooldownDuration = config.shiftCooldown;
+      this.shiftPoints = { ...config.shiftPoints };
+    }
+  }
 
   public update(rpm: number, throttle: number, lowRange: boolean, slopePitch: number, linearSpeed: number, dt: number, isBraking = false): void {
     this.shiftCooldown = Math.max(0, this.shiftCooldown - dt);
@@ -121,23 +161,23 @@ export class AutomaticTransmission {
       return;
     }
 
-    // Maximum gear in 4L is strictly capped to 2 (D1 and D2 only; top speed <= 30 km/h)
-    const maxGear = lowRange ? 2 : this.gearRatios.length;
+    // Maximum gear in 4L is strictly capped to configured maxGears4L (D1 and D2 only)
+    const maxGear = lowRange ? this.maxGears4L : this.gearRatios.length;
 
     let upshiftRpm: number;
     if (lowRange) {
-      // In 4L, hold 1st gear (D1) until vehicle builds crawl momentum (~14 km/h / 3.9 m/s) and engine revs high
-      upshiftRpm = linearSpeed > 3.9 ? 4200 : 5600;
+      // In 4L, hold 1st gear (D1) until vehicle builds crawl momentum and engine revs high
+      upshiftRpm = linearSpeed > this.shiftPoints.lowRangeUpshiftSpeed ? this.shiftPoints.lowRangeUpshiftRpm : 5600;
     } else {
       if (this.currentGear === 1) {
         // 1st -> 2nd shift (preserved as approved): shifts at ~22-26 km/h
-        upshiftRpm = 2200 + throttle * 1600;
+        upshiftRpm = this.shiftPoints.gear1UpshiftRpmBase + throttle * this.shiftPoints.gear1UpshiftRpmThrottle;
       } else if (this.currentGear === 2) {
         // 2nd -> 3rd shift: shifts progressively at ~38-42 km/h
-        upshiftRpm = 1950 + throttle * 300;
+        upshiftRpm = this.shiftPoints.gear2UpshiftRpmBase + throttle * this.shiftPoints.gear2UpshiftRpmThrottle;
       } else {
         // 3rd -> 4th shift: shifts progressively at ~48-52 km/h, cruising in 4th up to 60 km/h
-        upshiftRpm = 1750 + throttle * 250;
+        upshiftRpm = this.shiftPoints.gear3UpshiftRpmBase + throttle * this.shiftPoints.gear3UpshiftRpmThrottle;
       }
     }
 
@@ -159,7 +199,7 @@ export class AutomaticTransmission {
 
     if (rpm > upshiftRpm && this.currentGear < maxGear) {
       this.currentGear++;
-      this.shiftCooldown = lowRange ? 1.50 : 1.20;
+      this.shiftCooldown = lowRange ? 1.50 : this.shiftCooldownDuration;
     } else if (rpm < downshiftRpm && this.currentGear > 1) {
       this.currentGear--;
       this.shiftCooldown = isBraking ? 0.30 : 0.80;
@@ -182,6 +222,7 @@ export class AutomaticTransmission {
 }
 
 export class Car {
+  public config: VehicleDefinition;
   public mesh: THREE.Group;
   public body: RAPIER.RigidBody;
   public collider: RAPIER.Collider;
@@ -202,10 +243,10 @@ export class Car {
   private lastLinvel = new THREE.Vector3();
 
   // Drivetrain & Engine Subsystems
-  public engine: Engine = new Engine();
-  public transmission: AutomaticTransmission = new AutomaticTransmission();
-  public wheelInertia: number = 3.4; // kg*m^2 (heavy 33" mud tire + rotor + axle half-shaft rotational mass)
-  public brakeTorque: number = 3800; // Nm per wheel
+  public engine: Engine;
+  public transmission: AutomaticTransmission;
+  public wheelInertia: number;
+  public brakeTorque: number;
   public peakFriction: number = 1.05; // Base dry dirt/rock friction coefficient
   public isHandbrakeActive: boolean = false;
   public isFootBrakingActive: boolean = false;
@@ -255,39 +296,53 @@ export class Car {
     rapier: typeof RAPIER,
     world: RAPIER.World,
     initialSpawn: [number, number, number] = [-3, 1.02, 0],
-    initialColor: number = 0x1b4332
+    initialColor?: number,
+    vehicleConfig?: VehicleDefinition
   ) {
     this.rapier = rapier;
     this.world = world;
     this.mesh = new THREE.Group();
 
-    // 1. Build Visual Chassis with rubber-bushing mounted cabin
-    this.buildChassisMesh(initialColor);
+    this.config = vehicleConfig ?? getVehicleConfig();
+    this.engine = new Engine(this.config.engine);
+    this.transmission = new AutomaticTransmission(this.config.transmission);
+    this.wheelInertia = this.config.drivetrain.wheelInertia;
+    this.brakeTorque = this.config.drivetrain.brakeTorque;
 
-    // 2. Setup Rapier Chassis Body (calibrated spawn height resting smoothly on ground)
+    const chosenColor = initialColor !== undefined ? initialColor : this.config.defaultColorHex;
+
+    // 1. Build Visual Chassis dynamically from vehicle visual configuration
+    this.buildChassisMesh(chosenColor);
+
+    // 2. Setup Rapier Chassis Body
     const [sx, sy, sz] = initialSpawn;
+    const ch = this.config.chassis;
     const bodyDesc = rapier.RigidBodyDesc.dynamic()
       .setTranslation(sx, sy, sz)
       .setCanSleep(false)
-      .setLinearDamping(0.04)
-      .setAngularDamping(0.35);
+      .setLinearDamping(ch.linearDamping)
+      .setAngularDamping(ch.angularDamping);
 
     this.body = world.createRigidBody(bodyDesc);
 
     // Chassis collider centered low with wider base for stability
-    const colliderDesc = rapier.ColliderDesc.cuboid(0.88, 0.35, 1.95)
-      .setTranslation(0, 0.32, 0)
-      .setDensity(320.0)
-      .setFriction(0.2)
-      .setRestitution(0.01);
+    const colliderDesc = rapier.ColliderDesc.cuboid(
+      ch.colliderHalfExtents[0],
+      ch.colliderHalfExtents[1],
+      ch.colliderHalfExtents[2]
+    )
+      .setTranslation(ch.colliderOffset[0], ch.colliderOffset[1], ch.colliderOffset[2])
+      .setDensity(ch.density)
+      .setFriction(ch.friction)
+      .setRestitution(ch.restitution);
 
     this.collider = world.createCollider(colliderDesc, this.body);
 
     // Center of Mass lowered significantly to prevent rolls on hard turns
     this.body.setAdditionalMassProperties(
-      350,
-      new rapier.Vector3(0, -0.35, 0),
-      new rapier.Vector3(1200, 1600, 700),
+      ch.additionalMass,
+      new rapier.Vector3(ch.comOffset[0], ch.comOffset[1], ch.comOffset[2]),
+      new rapier.Vector3(ch.inertia[0], ch.inertia[1], ch.inertia[2]),
       new rapier.Quaternion(0, 0, 0, 1),
       true
     );
@@ -335,7 +390,7 @@ export class Car {
     };
   }
 
-  private buildChassisMesh(colorHex: number = 0x1b4332): void {
+  private buildChassisMesh(colorHex: number): void {
     this.mesh.add(this.cabinMesh);
 
     this.bodyMat = new THREE.MeshStandardMaterial({
@@ -350,38 +405,43 @@ export class Car {
       metalness: 0.1
     });
 
-    const mainBody = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.55, 3.9), this.bodyMat);
-    mainBody.position.y = 0.35;
-    mainBody.castShadow = true;
-    mainBody.receiveShadow = true;
-    this.cabinMesh.add(mainBody);
-
-    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 2.1), this.bodyMat);
-    cabin.position.set(0, 0.88, -0.2);
-    cabin.castShadow = true;
-    this.cabinMesh.add(cabin);
-
-    const bumper = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.3, 0.35), trimMat);
-    bumper.position.set(0, 0.3, 2.05);
-    bumper.castShadow = true;
-    this.cabinMesh.add(bumper);
-
     const hlMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const hlLeft = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.1, 16), hlMat);
-    hlLeft.rotation.x = Math.PI / 2;
-    hlLeft.position.set(-0.65, 0.4, 2.0);
-    const hlRight = hlLeft.clone();
-    hlRight.position.x = 0.65;
-    this.cabinMesh.add(hlLeft);
-    this.cabinMesh.add(hlRight);
-
     const tlMat = new THREE.MeshBasicMaterial({ color: 0xdd1111 });
-    const tlLeft = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.15, 0.05), tlMat);
-    tlLeft.position.set(-0.65, 0.45, -1.98);
-    const tlRight = tlLeft.clone();
-    tlRight.position.x = 0.65;
-    this.cabinMesh.add(tlLeft);
-    this.cabinMesh.add(tlRight);
+
+    const matMap: Record<string, THREE.Material> = {
+      body: this.bodyMat,
+      trim: trimMat,
+      headlight: hlMat,
+      taillight: tlMat
+    };
+
+    if (this.config.visual.type === 'procedural' && this.config.visual.components) {
+      for (const comp of this.config.visual.components) {
+        let geo: THREE.BufferGeometry;
+        if (comp.type === 'box') {
+          geo = new THREE.BoxGeometry(comp.dimensions[0], comp.dimensions[1], comp.dimensions[2]);
+        } else if (comp.type === 'cylinder') {
+          geo = new THREE.CylinderGeometry(
+            comp.dimensions[0],
+            comp.dimensions[1],
+            comp.dimensions[2],
+            comp.dimensions[3] ?? 16
+          );
+        } else {
+          continue;
+        }
+
+        const mat = matMap[comp.material] ?? this.bodyMat;
+        const compMesh = new THREE.Mesh(geo, mat);
+        compMesh.position.set(comp.position[0], comp.position[1], comp.position[2]);
+        if (comp.rotation) {
+          compMesh.rotation.set(comp.rotation[0], comp.rotation[1], comp.rotation[2]);
+        }
+        compMesh.castShadow = true;
+        compMesh.receiveShadow = true;
+        this.cabinMesh.add(compMesh);
+      }
+    }
   }
 
   private setupWheels(scene: THREE.Scene): void {
@@ -397,55 +457,17 @@ export class Car {
       metalness: 0.7
     });
 
-    const wheelRadius = 0.48;
-    const wheelWidth = 0.36;
-
-    const wheelConfigs: WheelConfig[] = [
-      {
-        mountPoint: new THREE.Vector3(-1.05, 0.28, 1.35),
-        radius: wheelRadius,
-        width: wheelWidth,
-        suspensionRestLength: 0.55,
-        suspensionMaxTravel: 0.4,
-        springStiffness: 30000,
-        dampingRate: 3500,
-        isFront: true,
-        isLeft: true
-      },
-      {
-        mountPoint: new THREE.Vector3(1.05, 0.28, 1.35),
-        radius: wheelRadius,
-        width: wheelWidth,
-        suspensionRestLength: 0.55,
-        suspensionMaxTravel: 0.4,
-        springStiffness: 30000,
-        dampingRate: 3500,
-        isFront: true,
-        isLeft: false
-      },
-      {
-        mountPoint: new THREE.Vector3(-1.05, 0.28, -1.35),
-        radius: wheelRadius,
-        width: wheelWidth,
-        suspensionRestLength: 0.55,
-        suspensionMaxTravel: 0.4,
-        springStiffness: 29000,
-        dampingRate: 3300,
-        isFront: false,
-        isLeft: true
-      },
-      {
-        mountPoint: new THREE.Vector3(1.05, 0.28, -1.35),
-        radius: wheelRadius,
-        width: wheelWidth,
-        suspensionRestLength: 0.55,
-        suspensionMaxTravel: 0.4,
-        springStiffness: 29000,
-        dampingRate: 3300,
-        isFront: false,
-        isLeft: false
-      }
-    ];
+    const wheelConfigs: WheelConfig[] = this.config.wheels.map((w) => ({
+      mountPoint: new THREE.Vector3(w.mountPoint[0], w.mountPoint[1], w.mountPoint[2]),
+      radius: w.radius,
+      width: w.width,
+      suspensionRestLength: w.suspensionRestLength,
+      suspensionMaxTravel: w.suspensionMaxTravel,
+      springStiffness: w.springStiffness,
+      dampingRate: w.dampingRate,
+      isFront: w.isFront,
+      isLeft: w.isLeft
+    }));
 
     for (const conf of wheelConfigs) {
       const meshGroup = new THREE.Group();
@@ -648,7 +670,7 @@ export class Car {
     }
 
     // Heavy flywheel inertia & fluid torque converter pickup rate (authentic gradual speed pickup)
-    const revSpeed = driverThrottle > 0 ? 4.8 : (isStationary ? 10.0 : 7.0);
+    const revSpeed = driverThrottle > 0 ? this.config.engine.revSpeed : (isStationary ? 10.0 : 7.0);
     this.engine.rpm += (targetRpm - this.engine.rpm) * Math.min(1.0, dt * revSpeed);
     this.engine.rpm = Math.max(this.engine.idleRpm, Math.min(this.engine.rpm, this.engine.maxRpm));
 
@@ -696,17 +718,18 @@ export class Car {
     }
 
     // Authentic resistive forces: 33" tire mechanical rolling drag + aerodynamic resistance
-    // Calibrated to cap top speeds smoothly: 4H to 60 km/h (16.67 m/s), 4L to 30 km/h (8.33 m/s)
+    // Calibrated to cap top speeds smoothly based on config: 4H to maxSpeed4H, 4L to maxSpeed4L
     if (Math.abs(forwardSpeed) > 0.15) {
-      const rollingDrag = Math.sign(forwardSpeed) * 420; // Constant tire knobby rolling resistance
-      // Target max speed governor drag scaling as vehicle approaches speed cap
-      const targetMaxSpeed = this.lowRange ? (30 / 3.6) : (60 / 3.6); // 8.33 m/s in 4L, 16.67 m/s in 4H
+      const rollingDrag = Math.sign(forwardSpeed) * this.config.drivetrain.rollingDrag;
+      const targetMaxSpeed = this.lowRange
+        ? (this.config.drivetrain.maxSpeed4L / 3.6)
+        : (this.config.drivetrain.maxSpeed4H / 3.6);
       let governorFactor = 1.0;
       if (Math.abs(forwardSpeed) > targetMaxSpeed * 0.85) {
         const overSpeed = (Math.abs(forwardSpeed) - targetMaxSpeed * 0.85) / (targetMaxSpeed * 0.15);
         governorFactor = 1.0 + Math.max(0, overSpeed) * 4.5;
       }
-      const aeroDrag = 3.60 * forwardSpeed * Math.abs(forwardSpeed) * governorFactor;
+      const aeroDrag = this.config.drivetrain.aeroDragCoeff * forwardSpeed * Math.abs(forwardSpeed) * governorFactor;
       const totalDragForce = rollingDrag + aeroDrag;
       const totalDragImpulse = forwardDir.clone().multiplyScalar(-totalDragForce * dt);
       this.body.applyImpulse(new this.rapier.Vector3(totalDragImpulse.x, totalDragImpulse.y, totalDragImpulse.z), true);
@@ -988,10 +1011,10 @@ export class Car {
           w.angularVelocity += angAccel * dt;
         }
 
-        // Clamp runaway wheelspin & enforce strict top speed caps:
-        // 4L: max 30 km/h (linearSpeed ~8.33 m/s / radius 0.48m = 17.36 rad/s)
-        // 4H: max 60 km/h (linearSpeed ~16.67 m/s / radius 0.48m = 34.72 rad/s)
-        const maxWheelOmega = this.lowRange ? 17.4 : 34.8;
+        // Clamp runaway wheelspin & enforce strict top speed caps from config:
+        const maxWheelOmega = this.lowRange
+          ? this.config.drivetrain.maxWheelOmega4L
+          : this.config.drivetrain.maxWheelOmega4H;
         w.angularVelocity = Math.max(-maxWheelOmega, Math.min(maxWheelOmega, w.angularVelocity));
 
         // Advance wheel visual spin angle
@@ -1027,7 +1050,7 @@ export class Car {
         // Airborne wheel dynamics: spins with driveline torque or slows down via air/bearing resistance
         let wheelDriveTorque = isHandbrake ? (conf.isFront ? drivelineTorque / 2 : 0) : drivelineTorque / 4;
         const serviceBrakePerWheel = serviceBrakeIntensity * (conf.isFront ? 3400 : 2200);
-        const handbrakePerWheel = (isHandbrake && !conf.isFront) ? 8500 : 0;
+        const handbrakePerWheel = (isHandbrake && !conf.isFront) ? this.config.drivetrain.handbrakeTorque : 0;
         const totalMechanicalBrake = serviceBrakePerWheel + handbrakePerWheel;
 
         let airBearingDrag = 3.5 * w.angularVelocity;
@@ -1048,7 +1071,9 @@ export class Car {
           w.angularVelocity += angAccel * dt;
         }
 
-        const maxAirOmega = this.lowRange ? 18.5 : 36.0;
+        const maxAirOmega = this.lowRange
+          ? (this.config.drivetrain.maxWheelOmega4L + 1.1)
+          : (this.config.drivetrain.maxWheelOmega4H + 1.2);
         w.angularVelocity = Math.max(-maxAirOmega, Math.min(maxAirOmega, w.angularVelocity));
 
         w.spinAngle += w.angularVelocity * dt;

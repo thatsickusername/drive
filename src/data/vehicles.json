@@ -1,0 +1,160 @@
+{
+  "trial_crawler_4x4": {
+    "id": "trial_crawler_4x4",
+    "name": "Defender 90 Trial Crawler",
+    "description": "Heavy solid-axle off-road rig with 49.5:1 crawl ratio and all-terrain suspension",
+    "defaultColorHex": 1786674,
+    "chassis": {
+      "colliderHalfExtents": [0.88, 0.35, 1.95],
+      "colliderOffset": [0.0, 0.32, 0.0],
+      "density": 320.0,
+      "friction": 0.2,
+      "restitution": 0.01,
+      "additionalMass": 350.0,
+      "comOffset": [0.0, -0.35, 0.0],
+      "inertia": [1200.0, 1600.0, 700.0],
+      "linearDamping": 0.04,
+      "angularDamping": 0.35
+    },
+    "engine": {
+      "idleRpm": 850,
+      "redlineRpm": 5400,
+      "maxRpm": 5800,
+      "peakTorque": 420,
+      "peakTorqueRpm": 2800,
+      "revSpeed": 4.8
+    },
+    "transmission": {
+      "gearRatios": [3.6, 2.1, 1.35, 1.0],
+      "reverseRatio": -3.4,
+      "finalDriveRatio": 4.1,
+      "highTransferRatio": 1.0,
+      "lowTransferRatio": 3.35,
+      "maxGears4L": 2,
+      "shiftCooldown": 1.2,
+      "shiftPoints": {
+        "gear1UpshiftRpmBase": 2200,
+        "gear1UpshiftRpmThrottle": 1600,
+        "gear2UpshiftRpmBase": 1950,
+        "gear2UpshiftRpmThrottle": 300,
+        "gear3UpshiftRpmBase": 1750,
+        "gear3UpshiftRpmThrottle": 250,
+        "lowRangeUpshiftSpeed": 3.9,
+        "lowRangeUpshiftRpm": 4200
+      }
+    },
+    "drivetrain": {
+      "wheelInertia": 3.4,
+      "brakeTorque": 3800,
+      "handbrakeTorque": 8500,
+      "rollingDrag": 420,
+      "aeroDragCoeff": 3.6,
+      "maxSpeed4H": 60.0,
+      "maxSpeed4L": 30.0,
+      "maxWheelOmega4H": 34.8,
+      "maxWheelOmega4L": 17.4
+    },
+    "wheels": [
+      {
+        "mountPoint": [-1.05, 0.28, 1.35],
+        "radius": 0.48,
+        "width": 0.36,
+        "suspensionRestLength": 0.55,
+        "suspensionMaxTravel": 0.4,
+        "springStiffness": 30000,
+        "dampingRate": 3500,
+        "isFront": true,
+        "isLeft": true
+      },
+      {
+        "mountPoint": [1.05, 0.28, 1.35],
+        "radius": 0.48,
+        "width": 0.36,
+        "suspensionRestLength": 0.55,
+        "suspensionMaxTravel": 0.4,
+        "springStiffness": 30000,
+        "dampingRate": 3500,
+        "isFront": true,
+        "isLeft": false
+      },
+      {
+        "mountPoint": [-1.05, 0.28, -1.35],
+        "radius": 0.48,
+        "width": 0.36,
+        "suspensionRestLength": 0.55,
+        "suspensionMaxTravel": 0.4,
+        "springStiffness": 30000,
+        "dampingRate": 3500,
+        "isFront": false,
+        "isLeft": true
+      },
+      {
+        "mountPoint": [1.05, 0.28, -1.35],
+        "radius": 0.48,
+        "width": 0.36,
+        "suspensionRestLength": 0.55,
+        "suspensionMaxTravel": 0.4,
+        "springStiffness": 30000,
+        "dampingRate": 3500,
+        "isFront": false,
+        "isLeft": false
+      }
+    ],
+    "visual": {
+      "type": "procedural",
+      "components": [
+        {
+          "name": "mainBody",
+          "type": "box",
+          "dimensions": [1.8, 0.55, 3.9],
+          "position": [0.0, 0.35, 0.0],
+          "material": "body"
+        },
+        {
+          "name": "cabin",
+          "type": "box",
+          "dimensions": [1.5, 0.6, 2.1],
+          "position": [0.0, 0.88, -0.2],
+          "material": "body"
+        },
+        {
+          "name": "bumper",
+          "type": "box",
+          "dimensions": [1.9, 0.3, 0.35],
+          "position": [0.0, 0.3, 2.05],
+          "material": "trim"
+        },
+        {
+          "name": "headlightLeft",
+          "type": "cylinder",
+          "dimensions": [0.14, 0.14, 0.1, 16],
+          "position": [-0.65, 0.4, 2.0],
+          "rotation": [1.5707963, 0.0, 0.0],
+          "material": "headlight"
+        },
+        {
+          "name": "headlightRight",
+          "type": "cylinder",
+          "dimensions": [0.14, 0.14, 0.1, 16],
+          "position": [0.65, 0.4, 2.0],
+          "rotation": [1.5707963, 0.0, 0.0],
+          "material": "headlight"
+        },
+        {
+          "name": "taillightLeft",
+          "type": "box",
+          "dimensions": [0.3, 0.15, 0.05],
+          "position": [-0.65, 0.45, -1.98],
+          "material": "taillight"
+        },
+        {
+          "name": "taillightRight",
+          "type": "box",
+          "dimensions": [0.3, 0.15, 0.05],
+          "position": [0.65, 0.45, -1.98],
+          "material": "taillight"
+        }
+      ]
+    }
+  }
+}
