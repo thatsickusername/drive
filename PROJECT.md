@@ -59,8 +59,8 @@ drive/
         │   └── terrainConfig.ts    # Seed, chunk dimensions, trail width & noise params
         ├── math/
         │   ├── prng.ts             # Deterministic cyrb128 hash + mulberry32 PRNG
-        │   ├── noiseLayers.ts      # Continental fBm, terraced rock, ridged spines
-        │   └── splineCarver.ts     # SDF continuous trail network & challenge zones
+        │   ├── noiseLayers.ts      # Macro massifs, spines, hummocks & bedrock ledges
+        │   └── splineCarver.ts     # Bench-cut switchbacks, summit spurs & ruts
         ├── biomes/
         │   └── biomeEvaluator.ts   # Slope/moisture/altitude vertex colors & river carve
         ├── generators/
@@ -90,19 +90,24 @@ Rapier3D and Three.js synchronize on a common local origin `(cx * chunkSize, 0, 
 * **Watertight Seams:** Vertices evaluate continuous world coordinates `(cx * chunkSize + localX, cz * chunkSize + localZ)`. The eastern edge of chunk $(cx, cz)$ strictly evaluates to the exact same $(worldX, worldZ)$ as the western edge of chunk $(cx+1, cz)$ ($0.0\text{m}$ seam delta).
 
 #### Math Layers (`src/world/math/`):
-1. **Base Continental Valley (`getBaseElevation`):** 3-octave fBm scaled through power curve $(normalized)^{1.8}$ to ensure valleys stay wide and driveable while peaks rise sharply.
-2. **Rock-Crawling Terraces (`getTerracedRock`):** Floor stepping function creating rock ledges:
-   $$T(h) = \lfloor h/S \rfloor \cdot S + S \cdot \text{smoothstep}(0, 1, \text{fract}(h/S)^{\text{sharpness}})$$
-3. **Ridged Mountain Spines (`getRidgedNoise`):** Jagged spines via $(1.0 - |\text{noise2D}|)^2$.
-4. **Continuous Spline Trails (`splineCarver.ts`):** Infinite arterial trail along $Z(x) = \sin(0.003x) \cdot 180 + \text{noise}(0.0015x, 100) \cdot 140$ blended via `smoothstep` with graded centerline heights, secondary warped branching trails, and technical challenge zones (boulder gardens and depressed mud ruts).
+1. **Macro Mountain Massifs & Spine Ridges (`getMacroTopography`):** Wide-wavelength continuous mountain bodies ($\lambda \ge 150\text{m}$, elevation up to $240\text{m}+$, slopes $15^\circ\text{–}38^\circ$) using domain-warped regional mountain masks ($\lambda \approx 2.5\text{km}$), hyperbolic smooth-abs rounded spines without $C^0$ needle creases, and secondary spurs/foothills.
+2. **Drivable Off-Trail Surface Detail (`getOffRoadSurfaceDetail`):** Separates macro relief from surface roughness so off-trail hillslopes remain drivable under 4L crawling. Uses medium-scale hummocks ($\lambda \approx 45\text{m}, \pm 2.2\text{m}$), localized bedrock ledges in alpine rock zones (flat shelves with $40^\circ$ climbable ramps), and micro soil/root undulations ($\lambda \approx 8\text{m}, 0.28\text{m}$).
+3. **Bench-Cut Mountain Switchbacks (`splineCarver.ts`):** Normalizes lateral Euclidean distance via arc-length derivative $\Delta z / \sqrt{1 + (Z'(x))^2}$ to prevent hairpin pinching. Climbs dynamically with the mountain's centerline macro height, carving a level $7.0\text{m}$ bench shelf with a $15\text{m}$ graded mountain bank, dual wheel ruts ($-0.12\text{m}$), and center road crown ($+0.08\text{m}$).
+4. **Secondary Summit Spur Trails:** Narrower single-track $4.8\text{m}$ ridge climbs ($X(z)$ running perpendicular to the arterial route) climbing to radio towers, fire lookouts, and alpine summits.
 
 #### Biomes & Riverbeds (`src/world/biomes/`):
-* Vertex coloring evaluates local slope (finite difference gradient), moisture, and world height into linear RGB colors (Slate Grey/Basalt rock, Dry Earth clay, Wet Mud, Olive Moss tundra, Ash Frost snow).
-* Rivers carve channels where $|noise(x, z)| < 0.045$ down to `riverLevel - 2.5m` with low-poly translucent water planes at $y = \text{riverLevel}$.
+* **3-Tier Altitude & Slope Biomes (`biomeEvaluator.ts`):**
+  1. **Valley Floor & Boreal Forest ($0\text{m}\text{–}65\text{m}$):** Dense pine forest, rich olive moss/earth modulated by Laplacian curvature, deep brown mud washouts (friction 0.35), compacted dirt trail (friction 0.82), forest floor (friction 0.78).
+  2. **Sub-Alpine Timberline & Scree ($65\text{m}\text{–}145\text{m}$):** Trees thin out by 70%, golden-brown alpine tundra grass (friction 0.85), exposed slate rock outcrops with horizontal sedimentary strata banding $\sin(\text{worldY} \cdot 1.8) \cdot 0.06$ (friction 0.95).
+  3. **High Alpine Peaks & Snow Slopes ($145\text{m}+$):** Crisp alpine snow on slopes under $38^\circ$ (`slope <= 0.65`, friction 0.42), dark basalt cliff rock strata where `slope > 0.65` (friction 0.95).
+* Rivers carve channels where $|noise(x, z)| < 0.045$ down to `riverLevel - 2.5m` strictly in low valley/lake basins ($y < 35\text{m}$), never carving trenches through alpine mountain peaks.
 
 #### Structures & Props (`src/world/generators/`):
 * **Structure Placer (`structurePlacer.ts`):** Evaluates deterministic POIs (Fuel Depots, Outposts, Cabins, Watchtowers) and applies radial pad flattening with blend skirts before heightfield creation.
-* **Foliage Spawner (`foliageSpawner.ts`):** Emits transformation matrices for `THREE.InstancedMesh` (pine trees and dodecahedron boulders) and fixed Rapier colliders. Trees near trails are flagged with `{ type: 'winch_anchor' }`.
+* **Foliage Spawner (`foliageSpawner.ts`):** Emits transformation matrices for `THREE.InstancedMesh` (pine trees and dodecahedron boulders) and fixed Rapier colliders:
+  * **Timberline Transition:** Dense forest below $65\text{m}$, 70% tree thinning between $65\text{m}\text{–}135\text{m}$, and complete tree cut-off above $135\text{m}$.
+  * **Winch Anchors:** Trees located along trail shoulders or on steep hillsides ($>0.32$ slope) are flagged with `{ type: 'winch_anchor' }`.
+  * **Ridge Boulders:** Clustered physical boulder colliders placed along technical rock crawls, steep switchback shoulders, and alpine scree slopes.
 
 #### Worker Offloading & Streaming (`src/world/managers/`):
 * **`terrainWorker.ts`:** Computes chunk geometry off the main thread and transfers typed arrays (`rapierHeights`, `positions`, `normals`, `colors`, `indices`, instance matrices) via zero-copy transferable buffers.
