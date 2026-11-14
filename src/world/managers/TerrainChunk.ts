@@ -2,7 +2,6 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ChunkWorkerOutput } from '../generators/terrainWorker';
 import { TerrainConfig } from '../config/terrainConfig';
-import { getSlowRoadsPipeline } from '../math/slowRoadsCore';
 
 export class TerrainChunk {
   public readonly cx: number;
@@ -11,7 +10,6 @@ export class TerrainChunk {
 
   public group: THREE.Group;
   private terrainMesh: THREE.Mesh | null = null;
-  private roadMesh: THREE.Mesh | null = null;
   private waterMesh: THREE.Mesh | null = null;
   private treeInstancedMesh: THREE.InstancedMesh | null = null;
   private boulderInstancedMesh: THREE.InstancedMesh | null = null;
@@ -62,47 +60,6 @@ export class TerrainChunk {
     this.terrainMesh.receiveShadow = true;
     this.terrainMesh.castShadow = false;
     this.group.add(this.terrainMesh);
-
-    // 1b. Build Slow Roads continuous ribbon road mesh if passing through this chunk
-    const pipeline = getSlowRoadsPipeline(config.seed, config.roadMode);
-    const halfChunk = config.chunkSize * 0.5 + 20;
-    const chunkMinX = worldCenterX - halfChunk;
-    const chunkMaxX = worldCenterX + halfChunk;
-    const chunkMinZ = worldCenterZ - halfChunk;
-    const chunkMaxZ = worldCenterZ + halfChunk;
-
-    const nodesToUse = pipeline.fineNodes.length > 0 ? pipeline.fineNodes : pipeline.roadNodes;
-    const chunkRoadNodes = nodesToUse.filter((node: any) =>
-      node.p.x >= chunkMinX && node.p.x <= chunkMaxX &&
-      node.p.z >= chunkMinZ && node.p.z <= chunkMaxZ
-    );
-
-    if (chunkRoadNodes.length >= 2) {
-      const roadData = pipeline.roadMeshGen.generateRoadMesh(chunkRoadNodes);
-      if (roadData) {
-        const roadGeo = new THREE.BufferGeometry();
-        const localPos = new Float32Array(roadData.positions.length);
-        for (let i = 0; i < roadData.positions.length; i += 3) {
-          localPos[i + 0] = roadData.positions[i + 0] - worldCenterX;
-          localPos[i + 1] = roadData.positions[i + 1] + 0.04; // Sit right on top of carved roadbed
-          localPos[i + 2] = roadData.positions[i + 2] - worldCenterZ;
-        }
-        roadGeo.setAttribute('position', new THREE.BufferAttribute(localPos, 3));
-        roadGeo.setAttribute('normal', new THREE.BufferAttribute(roadData.normals, 3));
-        roadGeo.setAttribute('uv', new THREE.BufferAttribute(roadData.uvs, 2));
-        roadGeo.setIndex(new THREE.BufferAttribute(roadData.indices, 1));
-
-        const roadMat = new THREE.MeshStandardMaterial({
-          color: 0x22262a,
-          roughness: 0.78,
-          metalness: 0.12,
-        });
-        this.roadMesh = new THREE.Mesh(roadGeo, roadMat);
-        this.roadMesh.position.set(worldCenterX, 0, worldCenterZ);
-        this.roadMesh.receiveShadow = true;
-        this.group.add(this.roadMesh);
-      }
-    }
 
     // 2. Rapier Heightfield Collider
     const scale = new rapier.Vector3(config.chunkSize, 1.0, config.chunkSize);
@@ -299,10 +256,6 @@ export class TerrainChunk {
     if (this.terrainMesh) {
       this.terrainMesh.geometry.dispose();
       this.terrainMesh = null;
-    }
-    if (this.roadMesh) {
-      this.roadMesh.geometry.dispose();
-      this.roadMesh = null;
     }
     if (this.waterMesh) {
       this.waterMesh.geometry.dispose();

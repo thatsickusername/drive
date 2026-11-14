@@ -88,11 +88,7 @@ export function getSlowRoadsPipeline(
   }
 
   // Extend fine Catmull-Rom nodes between anchor nodes
-  while (
-    ms.fineTail &&
-    ms.fineTail.next &&
-    ms.fineTail.i < (ms.tail?.i || 0) - 5
-  ) {
+  while (ms.fineTail && ms.fineTail.next && ms.fineTail.next.next) {
     surveyor.extendFine();
   }
 
@@ -120,7 +116,7 @@ export function getSlowRoadsPipeline(
   let fineCurr = ms.head;
   while (fineCurr) {
     fineNodes.push(fineCurr);
-    fineCurr = fineCurr.nextFine || fineCurr.next;
+    fineCurr = fineCurr.nextFine;
   }
 
   // Establish spawn pose on surveyed road with seamless immersion (road behind & ahead)
@@ -178,7 +174,7 @@ export function getSlowRoadsPipeline(
       }
     }
 
-    // Keep vehicleIndex safely bounded behind tail so complex turnback reverts never trigger false restartGeneration
+    // Keep vehicleIndex safely bounded so complex turnback reverts never trigger false restartGeneration
     ms.vehicleIndex = Math.min(closestNode.i, Math.max(0, (ms.tail?.i || 0) - 50));
     ms.vehicleNode = closestNode;
 
@@ -189,18 +185,13 @@ export function getSlowRoadsPipeline(
 
     const previousTail = ms.tail;
     let stepCount = 0;
-    while ((ms.tail?.i || 0) < targetTailIndex && stepCount < 250) {
-      const ok = surveyor.update();
+    while ((ms.tail?.i || 0) < targetTailIndex && stepCount < 300) {
+      surveyor.update();
       stepCount++;
-      if (!ok) break;
     }
 
     // Subdivide new fine Catmull-Rom nodes
-    while (
-      ms.fineTail &&
-      ms.fineTail.next &&
-      ms.fineTail.i < (ms.tail?.i || 0) - 5
-    ) {
+    while (ms.fineTail && ms.fineTail.next && ms.fineTail.next.next) {
       surveyor.extendFine();
     }
 
@@ -210,19 +201,21 @@ export function getSlowRoadsPipeline(
       spatialIndex.update();
     }
 
-    // Append newly surveyed anchor nodes to cache
-    let n = previousTail ? previousTail.next : null;
+    // Re-synchronize authoritative roadNodes list from head to tail
+    roadNodes.length = 0;
+    let n = ms.head;
     while (n) {
       roadNodes.push(n);
+      if (n === ms.tail) break;
       n = n.next;
     }
 
-    // Append newly subdivided fine nodes to cache
-    const lastFine = fineNodes.length > 0 ? fineNodes[fineNodes.length - 1] : null;
-    let fn = lastFine ? (lastFine.nextFine || lastFine.next) : ms.head;
+    // Re-synchronize authoritative fineNodes list from head to fineTail
+    fineNodes.length = 0;
+    let fn = ms.head;
     while (fn) {
       fineNodes.push(fn);
-      fn = fn.nextFine || fn.next;
+      fn = fn.nextFine;
     }
   };
 

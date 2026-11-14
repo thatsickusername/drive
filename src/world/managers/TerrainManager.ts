@@ -7,12 +7,14 @@ import { createSeededNoise2D } from '../math/prng';
 import { computeRawTerrainHeight } from '../math/splineCarver';
 import { evaluateStructureForChunk, applyPadFlattening } from '../generators/structurePlacer';
 import { getSlowRoadsPipeline } from '../math/slowRoadsCore';
+import { RoadMeshManager } from './RoadMeshManager';
 
 export class TerrainManager {
   public config: TerrainConfig;
   private scene: THREE.Scene;
   private rapier: typeof RAPIER;
   private world: RAPIER.World;
+  public roadMeshManager: RoadMeshManager;
 
   public chunks = new Map<string, TerrainChunk>();
   private pendingRequests = new Set<string>();
@@ -76,6 +78,9 @@ export class TerrainManager {
       this.resolveInitialBoot = resolve;
     });
 
+    const pipeline = getSlowRoadsPipeline(this.config.seed, this.config.roadMode);
+    this.roadMeshManager = new RoadMeshManager(this.scene, pipeline);
+
     this.initWorkers();
   }
 
@@ -126,6 +131,13 @@ export class TerrainManager {
     this.lastCarX = carX;
     this.lastCarZ = carZ;
 
+    // Dynamic Slow Roads horizon streaming for ENDLESS mode (2.5km lookahead)
+    if (this.config.roadMode === 'ENDLESS') {
+      const pipeline = getSlowRoadsPipeline(this.config.seed, this.config.roadMode);
+      pipeline.ensureRoadHorizon(carX, carZ, 2500);
+    }
+    this.roadMeshManager.update(carX, carZ);
+
     const chunkSize = this.config.chunkSize;
     const currentCx = Math.floor((carX + chunkSize * 0.5) / chunkSize);
     const currentCz = Math.floor((carZ + chunkSize * 0.5) / chunkSize);
@@ -136,12 +148,6 @@ export class TerrainManager {
       return;
     }
     this.lastCheckPos.set(carX, carZ);
-
-    // Dynamic Slow Roads horizon streaming for ENDLESS mode (2.5km lookahead)
-    if (this.config.roadMode === 'ENDLESS') {
-      const pipeline = getSlowRoadsPipeline(this.config.seed, this.config.roadMode);
-      pipeline.ensureRoadHorizon(carX, carZ, 2500);
-    }
 
     const radius = this.config.viewRadiusChunks;
     const unloadDist = radius + 1;
@@ -288,6 +294,7 @@ export class TerrainManager {
       chunk.dispose(this.scene, this.world);
     }
     this.chunks.clear();
+    this.roadMeshManager.dispose();
 
     // Dispose shared assets
     this.sharedMaterials.terrainMaterial.dispose();
