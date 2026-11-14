@@ -75,7 +75,7 @@ export function evaluateTrails(
   noise2D: NoiseFunction2D,
   config: TerrainConfig
 ): TrailSample {
-  const pipeline = getSlowRoadsPipeline(config.seed);
+  const pipeline = getSlowRoadsPipeline(config.seed, config.roadMode);
   const roadHit = pipeline.getRoadHit(worldX, worldZ);
   const dist = roadHit ? roadHit.d : 999.0;
   const halfWidth = (config.trailWidth || 8.0) * 0.5;
@@ -104,6 +104,6 @@ export function computeRawTerrainHeight(
   _noise2D: NoiseFunction2D,
   config: TerrainConfig
 ): number {
-  const pipeline = getSlowRoadsPipeline(config.seed);
+  const pipeline = getSlowRoadsPipeline(config.seed, config.roadMode);
   return pipeline.getHeight(wx, wz);
 }

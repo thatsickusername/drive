@@ -64,7 +64,7 @@ export class TerrainChunk {
     this.group.add(this.terrainMesh);
 
     // 1b. Build Slow Roads continuous ribbon road mesh if passing through this chunk
-    const pipeline = getSlowRoadsPipeline(config.seed);
+    const pipeline = getSlowRoadsPipeline(config.seed, config.roadMode);
     const halfChunk = config.chunkSize * 0.5 + 20;
     const chunkMinX = worldCenterX - halfChunk;
     const chunkMaxX = worldCenterX + halfChunk;

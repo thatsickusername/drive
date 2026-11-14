@@ -9,7 +9,7 @@ import { PlayerSlotInfo } from './network/protocol';
 import { DynamicCameraDirector } from './camera';
 import { UnifiedInputController } from './input';
 import { TerrainManager } from './world/managers/TerrainManager';
-import { DEFAULT_TERRAIN_CONFIG } from './world/config/terrainConfig';
+import { DEFAULT_TERRAIN_CONFIG, RoadMode } from './world/config/terrainConfig';
 import { getSlowRoadsPipeline } from './world/math/slowRoadsCore';
 
 class Game {
@@ -19,6 +19,7 @@ class Game {
   public terrainManager: TerrainManager | null = null;
   public currentMapType: 'TRAINING' | 'PROCEDURAL' = 'TRAINING';
   public currentSeed: string = DEFAULT_TERRAIN_CONFIG.seed;
+  public currentRoadMode: RoadMode = 'ENDLESS';
   public isLoadingMap: boolean = false;
   public car!: Car;
 
@@ -75,10 +76,12 @@ class Game {
     const urlParams = new URLSearchParams(window.location.search);
     const initialMap = urlParams.get('map')?.toUpperCase() === 'PROCEDURAL' ? 'PROCEDURAL' : 'TRAINING';
     const initialSeed = urlParams.get('seed') || DEFAULT_TERRAIN_CONFIG.seed;
+    const initialRoadMode: RoadMode = urlParams.get('roadMode')?.toUpperCase() === 'FIXED_5KM' ? 'FIXED_5KM' : 'ENDLESS';
     this.currentSeed = initialSeed;
+    this.currentRoadMode = initialRoadMode;
 
     if (initialMap === 'PROCEDURAL') {
-      await this.switchMap('PROCEDURAL', initialSeed);
+      await this.switchMap('PROCEDURAL', initialSeed, initialRoadMode);
     } else {
       this.map = new GameMap(this.renderer.scene, this.physics.rapier, this.physics.world);
       this.renderMapPickerUI();
@@ -91,7 +94,7 @@ class Game {
 
   private resetVehicle(): void {
     if (this.currentMapType === 'PROCEDURAL' && this.terrainManager) {
-      const spawn = getSlowRoadsPipeline(this.currentSeed).getSpawnPosition();
+      const spawn = getSlowRoadsPipeline(this.currentSeed, this.currentRoadMode).getSpawnPosition();
       this.car.reset(spawn.x, spawn.y, spawn.z, spawn.heading);
       this.car.body.setLinvel(new this.physics.rapier.Vector3(0, 0, 0), true);
       this.car.body.setAngvel(new this.physics.rapier.Vector3(0, 0, 0), true);
@@ -153,6 +156,13 @@ class Game {
           <option value="PROCEDURAL" ${isProcedural ? 'selected' : ''}>Procedural Wasteland (Rapier Heightfield)</option>
         </select>
       </div>
+      <div id="road-mode-row" style="display:${isProcedural ? 'flex' : 'none'};gap:8px;align-items:center;">
+        <label style="font-size:11px;color:#aaa;">Road:</label>
+        <select id="road-mode-select" style="background:#222a35;color:#60a5fa;border:1px solid #444;border-radius:4px;padding:3px 6px;font-family:monospace;font-size:11px;flex:1;">
+          <option value="ENDLESS" ${this.currentRoadMode === 'ENDLESS' ? 'selected' : ''}>Endless Highway (Streaming)</option>
+          <option value="FIXED_5KM" ${this.currentRoadMode === 'FIXED_5KM' ? 'selected' : ''}>5km Scenic Trail (Fixed)</option>
+        </select>
+      </div>
       <div id="seed-row" style="display:${isProcedural ? 'flex' : 'none'};gap:6px;align-items:center;">
         <label style="font-size:11px;color:#aaa;">Seed:</label>
         <input id="seed-input" type="text" value="${this.currentSeed}" style="background:#222a35;color:#4ade80;border:1px solid #444;border-radius:4px;padding:3px 6px;font-family:monospace;font-size:11px;flex:1;" />
@@ -166,14 +176,18 @@ class Game {
     `;
 
     const mapSelect = document.getElementById('map-select') as HTMLSelectElement;
+    const roadModeRow = document.getElementById('road-mode-row');
+    const roadModeSelect = document.getElementById('road-mode-select') as HTMLSelectElement;
     const seedRow = document.getElementById('seed-row');
     const seedInput = document.getElementById('seed-input') as HTMLInputElement;
     const randBtn = document.getElementById('rand-seed-btn');
     const applyBtn = document.getElementById('apply-map-btn');
 
-    if (mapSelect && seedRow) {
+    if (mapSelect && seedRow && roadModeRow) {
       mapSelect.onchange = () => {
-        seedRow.style.display = mapSelect.value === 'PROCEDURAL' ? 'flex' : 'none';
+        const isProc = mapSelect.value === 'PROCEDURAL';
+        seedRow.style.display = isProc ? 'flex' : 'none';
+        roadModeRow.style.display = isProc ? 'flex' : 'none';
       };
     }
 
@@ -189,16 +203,18 @@ class Game {
       applyBtn.onclick = () => {
         const targetMap = mapSelect.value as 'TRAINING' | 'PROCEDURAL';
         const targetSeed = seedInput ? seedInput.value.trim() : this.currentSeed;
-        this.switchMap(targetMap, targetSeed);
+        const targetRoadMode = (roadModeSelect ? roadModeSelect.value : this.currentRoadMode) as RoadMode;
+        this.switchMap(targetMap, targetSeed, targetRoadMode);
       };
     }
   }
 
-  public async switchMap(mapType: 'TRAINING' | 'PROCEDURAL', seed?: string): Promise<void> {
+  public async switchMap(mapType: 'TRAINING' | 'PROCEDURAL', seed?: string, roadMode?: RoadMode): Promise<void> {
     if (this.isLoadingMap) return;
     this.isLoadingMap = true;
     this.currentMapType = mapType;
     if (seed) this.currentSeed = seed;
+    if (roadMode) this.currentRoadMode = roadMode;
     this.renderMapPickerUI();
 
     // Spawn Safety Lock: Freeze vehicle RigidBody during chunk generation
@@ -231,10 +247,10 @@ class Game {
         this.renderer.scene,
         this.physics.rapier,
         this.physics.world,
-        { seed: this.currentSeed }
+        { seed: this.currentSeed, roadMode: this.currentRoadMode }
       );
 
-      const spawn = getSlowRoadsPipeline(this.currentSeed).getSpawnPosition();
+      const spawn = getSlowRoadsPipeline(this.currentSeed, this.currentRoadMode).getSpawnPosition();
       const spawnX = spawn.x;
       const spawnZ = spawn.z;
 
@@ -272,8 +288,10 @@ class Game {
     url.searchParams.set('map', mapType.toLowerCase());
     if (mapType === 'PROCEDURAL') {
       url.searchParams.set('seed', this.currentSeed);
+      url.searchParams.set('roadMode', this.currentRoadMode.toLowerCase());
     } else {
       url.searchParams.delete('seed');
+      url.searchParams.delete('roadMode');
     }
     window.history.replaceState(null, '', url.toString());
   }
@@ -553,7 +571,7 @@ class Game {
     const gradePercent = Math.round(Math.tan((tele.inclineDeg * Math.PI) / 180) * 100);
 
     const mapBadge = this.currentMapType === 'PROCEDURAL'
-      ? `<span style="color:#4ade80;font-weight:bold;">PROCEDURAL [${this.currentSeed}]</span>`
+      ? `<span style="color:#4ade80;font-weight:bold;">PROCEDURAL [${this.currentSeed} // ${this.currentRoadMode}]</span>`
       : `<span style="color:#60a5fa;font-weight:bold;">PROVING GROUND (TESTING MAP)</span>`;
 
     this.hudElement.innerHTML = `

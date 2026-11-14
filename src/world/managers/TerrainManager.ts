@@ -6,6 +6,7 @@ import { ChunkWorkerInput, ChunkWorkerOutput, generateChunkData } from '../gener
 import { createSeededNoise2D } from '../math/prng';
 import { computeRawTerrainHeight } from '../math/splineCarver';
 import { evaluateStructureForChunk, applyPadFlattening } from '../generators/structurePlacer';
+import { getSlowRoadsPipeline } from '../math/slowRoadsCore';
 
 export class TerrainManager {
   public config: TerrainConfig;
@@ -130,6 +131,12 @@ export class TerrainManager {
       return;
     }
     this.lastCheckPos.set(carX, carZ);
+
+    // Dynamic Slow Roads horizon streaming for ENDLESS mode
+    if (this.config.roadMode === 'ENDLESS') {
+      const pipeline = getSlowRoadsPipeline(this.config.seed, this.config.roadMode);
+      pipeline.ensureRoadHorizon(carX, carZ, 2000);
+    }
 
     const radius = this.config.viewRadiusChunks;
     const unloadDist = radius + 1;

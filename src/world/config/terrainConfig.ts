@@ -1,3 +1,5 @@
+export type RoadMode = 'ENDLESS' | 'FIXED_5KM';
+
 export interface TerrainConfig {
   seed: string;
   chunkSize: number;       // 128 meters
@@ -7,6 +9,7 @@ export interface TerrainConfig {
   trailBlendWidth: number; // 15.0 meters (shoulder blend into mountain slope)
   riverLevel: number;      // -4.0 meters
   viewRadiusChunks: number;
+  roadMode: RoadMode;
 }
 
 export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
@@ -18,4 +21,5 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
   trailBlendWidth: 15.0,
   riverLevel: -4.0,
   viewRadiusChunks: 2,
+  roadMode: 'ENDLESS',
 };
