@@ -10,8 +10,7 @@ import { DynamicCameraDirector } from './camera';
 import { UnifiedInputController } from './input';
 import { TerrainManager } from './world/managers/TerrainManager';
 import { DEFAULT_TERRAIN_CONFIG } from './world/config/terrainConfig';
-import { createSeededNoise2D } from './world/math/prng';
-import { getMainTrailCenterZ } from './world/math/splineCarver';
+import { getSlowRoadsPipeline } from './world/math/slowRoadsCore';
 
 class Game {
   private renderer!: Renderer;
@@ -92,16 +91,14 @@ class Game {
 
   private resetVehicle(): void {
     if (this.currentMapType === 'PROCEDURAL' && this.terrainManager) {
-      const noise = createSeededNoise2D(this.currentSeed);
-      const trailZ = getMainTrailCenterZ(0, noise);
-      const groundY = this.terrainManager.getTerrainHeightAt(0, trailZ);
-      this.car.reset(0, groundY + 0.85, trailZ, 0);
+      const spawn = getSlowRoadsPipeline(this.currentSeed).getSpawnPosition();
+      this.car.reset(spawn.x, spawn.y, spawn.z, spawn.heading);
       this.car.body.setLinvel(new this.physics.rapier.Vector3(0, 0, 0), true);
       this.car.body.setAngvel(new this.physics.rapier.Vector3(0, 0, 0), true);
       this.car.body.wakeUp();
       this.cameraDirector.initPosition(this.car.mesh.position, this.car.mesh.quaternion);
       if (this.network) {
-        this.network.sendRespawn([0, groundY + 0.85, trailZ], 0);
+        this.network.sendRespawn([spawn.x, spawn.y, spawn.z], spawn.heading);
       }
       return;
     }
@@ -237,10 +234,9 @@ class Game {
         { seed: this.currentSeed }
       );
 
-      const noise = createSeededNoise2D(this.currentSeed);
-      const trailZ = getMainTrailCenterZ(0, noise);
-      const spawnX = 0;
-      const spawnZ = trailZ;
+      const spawn = getSlowRoadsPipeline(this.currentSeed).getSpawnPosition();
+      const spawnX = spawn.x;
+      const spawnZ = spawn.z;
 
       const chunkSize = this.terrainManager.config.chunkSize;
       const spawnCx = Math.floor((spawnX + chunkSize * 0.5) / chunkSize);
@@ -260,8 +256,7 @@ class Game {
       // Step physics once to rebuild Rapier broadphase BVH acceleration structure
       this.physics.world.step();
 
-      const groundY = this.terrainManager.getTerrainHeightAt(spawnX, spawnZ);
-      this.car.reset(spawnX, groundY + 0.85, spawnZ, 0);
+      this.car.reset(spawnX, spawn.y, spawnZ, spawn.heading);
       this.car.body.setBodyType(this.physics.rapier.RigidBodyType.Dynamic, true);
       this.car.body.setLinvel(new this.physics.rapier.Vector3(0, 0, 0), true);
       this.car.body.setAngvel(new this.physics.rapier.Vector3(0, 0, 0), true);
