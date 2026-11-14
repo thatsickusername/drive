@@ -53,6 +53,7 @@ export class TerrainChunk {
       roughness: 0.92,
       metalness: 0.05,
       flatShading: true,
+      side: THREE.DoubleSide,
     });
 
     this.terrainMesh = new THREE.Mesh(geometry, mat);

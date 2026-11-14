@@ -20,6 +20,6 @@ export const DEFAULT_TERRAIN_CONFIG: TerrainConfig = {
   trailWidth: 7.0,
   trailBlendWidth: 15.0,
   riverLevel: -4.0,
-  viewRadiusChunks: 2,
+  viewRadiusChunks: 3,
   roadMode: 'ENDLESS',
 };

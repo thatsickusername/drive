@@ -1,7 +1,7 @@
 import { TerrainConfig } from '../config/terrainConfig';
 import { createSeededNoise2D } from '../math/prng';
 import { evaluateTrails, computeRawTerrainHeight } from '../math/splineCarver';
-import { getSlowRoadsPipeline } from '../math/slowRoadsCore';
+import { getSlowRoadsPipeline, SerializedRoadNode, syncWorkerRoadNodes } from '../math/slowRoadsCore';
 import { evaluateVertexSurface } from '../biomes/biomeEvaluator';
 import { evaluateStructureForChunk, applyPadFlattening, StructurePOI } from './structurePlacer';
 import { spawnFoliageAndBoulders, TreeColliderData, BoulderColliderData } from './foliageSpawner';
@@ -12,6 +12,7 @@ export interface ChunkWorkerInput {
   config: TerrainConfig;
   carX?: number;
   carZ?: number;
+  roadNodes?: SerializedRoadNode[];
 }
 
 export interface ChunkWorkerOutput {
@@ -33,8 +34,14 @@ export interface ChunkWorkerOutput {
 if (typeof self !== 'undefined') {
   self.onmessage = (event: MessageEvent<ChunkWorkerInput>) => {
     if (!event.data || !event.data.config) return;
-    const { cx, cz, config, carX, carZ } = event.data;
-    const output = generateChunkData(cx, cz, config, carX, carZ);
+    const { cx, cz, config, carX, carZ, roadNodes } = event.data;
+
+    // Synchronize authoritative road nodes if provided by main thread
+    if (roadNodes && roadNodes.length > 0) {
+      syncWorkerRoadNodes(config.seed, config.roadMode, roadNodes);
+    }
+
+    const output = generateChunkData(cx, cz, config, carX, carZ, roadNodes);
 
     const transferables = [
       output.rapierHeights.buffer,
@@ -55,7 +62,8 @@ export function generateChunkData(
   cz: number,
   config: TerrainConfig,
   carX?: number,
-  carZ?: number
+  carZ?: number,
+  roadNodes?: SerializedRoadNode[]
 ): ChunkWorkerOutput {
   const noise2D = createSeededNoise2D(config.seed);
   const N = config.segments;
@@ -64,8 +72,8 @@ export function generateChunkData(
   const worldChunkCenterX = cx * chunkSize;
   const worldChunkCenterZ = cz * chunkSize;
 
-  // Synchronize dynamic road streaming horizon inside Web Worker thread
-  if (config.roadMode === 'ENDLESS') {
+  // Synchronize dynamic road streaming horizon inside Web Worker thread if roadNodes wasn't passed directly
+  if (config.roadMode === 'ENDLESS' && (!roadNodes || roadNodes.length === 0)) {
     const pipeline = getSlowRoadsPipeline(config.seed, config.roadMode);
     if (carX !== undefined && carZ !== undefined) {
       pipeline.ensureRoadHorizon(carX, carZ, 2500);
@@ -89,11 +97,20 @@ export function generateChunkData(
     return y;
   }
 
-  const numVertices = V * V;
-  const rapierHeights = new Float32Array(numVertices);
-  const positions = new Float32Array(numVertices * 3);
-  const normals = new Float32Array(numVertices * 3);
-  const colors = new Float32Array(numVertices * 3);
+  const skirtDepth = 25.0; // 25-meter vertical perimeter skirts to eliminate terrain seams
+  const gridVerts = V * V;
+  const skirtVerts = V * 4;
+  const totalVerts = gridVerts + skirtVerts;
+
+  const gridTriangles = N * N * 2;
+  const skirtTriangles = N * 4 * 2;
+  const totalTriangles = gridTriangles + skirtTriangles;
+
+  const rapierHeights = new Float32Array(gridVerts);
+  const positions = new Float32Array(totalVerts * 3);
+  const normals = new Float32Array(totalVerts * 3);
+  const colors = new Float32Array(totalVerts * 3);
+  const indices = new Uint32Array(totalTriangles * 3);
 
   let hasRiver = false;
 
@@ -162,9 +179,7 @@ export function generateChunkData(
     }
   }
 
-  // Generate triangle indices
-  const numQuads = N * N;
-  const indices = new Uint32Array(numQuads * 6);
+  // 2. Surface grid triangle indices
   let idxOffset = 0;
 
   for (let r = 0; r < N; r++) {
@@ -184,6 +199,59 @@ export function generateChunkData(
       indices[idxOffset++] = e;
     }
   }
+
+  // 3. Vertical skirts along all 4 perimeter borders to eliminate LOD seams and sky gaps
+  let vIdx = gridVerts;
+  const addSkirtEdge = (startGridIdx: number, stride: number, count: number, isReversed: boolean) => {
+    const edgeStart = vIdx;
+    for (let i = 0; i < count; i++) {
+      const surfaceIdx = startGridIdx + i * stride;
+      positions[vIdx * 3 + 0] = positions[surfaceIdx * 3 + 0];
+      positions[vIdx * 3 + 1] = positions[surfaceIdx * 3 + 1] - skirtDepth;
+      positions[vIdx * 3 + 2] = positions[surfaceIdx * 3 + 2];
+
+      normals[vIdx * 3 + 0] = normals[surfaceIdx * 3 + 0];
+      normals[vIdx * 3 + 1] = normals[surfaceIdx * 3 + 1];
+      normals[vIdx * 3 + 2] = normals[surfaceIdx * 3 + 2];
+
+      colors[vIdx * 3 + 0] = colors[surfaceIdx * 3 + 0];
+      colors[vIdx * 3 + 1] = colors[surfaceIdx * 3 + 1];
+      colors[vIdx * 3 + 2] = colors[surfaceIdx * 3 + 2];
+
+      vIdx++;
+    }
+
+    for (let i = 0; i < count - 1; i++) {
+      const topA = startGridIdx + i * stride;
+      const topB = startGridIdx + (i + 1) * stride;
+      const botA = edgeStart + i;
+      const botB = edgeStart + (i + 1);
+
+      if (isReversed) {
+        indices[idxOffset++] = topA;
+        indices[idxOffset++] = botA;
+        indices[idxOffset++] = topB;
+
+        indices[idxOffset++] = topB;
+        indices[idxOffset++] = botA;
+        indices[idxOffset++] = botB;
+      } else {
+        indices[idxOffset++] = topA;
+        indices[idxOffset++] = topB;
+        indices[idxOffset++] = botA;
+
+        indices[idxOffset++] = topB;
+        indices[idxOffset++] = botB;
+        indices[idxOffset++] = botA;
+      }
+    }
+  };
+
+  // 4 perimeter edges (N, S, W, E)
+  addSkirtEdge(0, 1, V, false);
+  addSkirtEdge(N * V, 1, V, true);
+  addSkirtEdge(0, V, V, true);
+  addSkirtEdge(N, V, V, false);
 
   // Foliage and boulder scatter
   const foliage = spawnFoliageAndBoulders(

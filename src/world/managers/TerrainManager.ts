@@ -6,7 +6,7 @@ import { ChunkWorkerInput, ChunkWorkerOutput, generateChunkData } from '../gener
 import { createSeededNoise2D } from '../math/prng';
 import { computeRawTerrainHeight } from '../math/splineCarver';
 import { evaluateStructureForChunk, applyPadFlattening } from '../generators/structurePlacer';
-import { getSlowRoadsPipeline } from '../math/slowRoadsCore';
+import { getSlowRoadsPipeline, serializeRoadNodes } from '../math/slowRoadsCore';
 import { RoadMeshManager } from './RoadMeshManager';
 
 export class TerrainManager {
@@ -32,6 +32,7 @@ export class TerrainManager {
       roughness: 0.92,
       metalness: 0.05,
       flatShading: true,
+      side: THREE.DoubleSide,
     }),
     waterMaterial: new THREE.MeshStandardMaterial({
       color: 0x1f3844,
@@ -189,6 +190,9 @@ export class TerrainManager {
   private processQueue(): void {
     if (this.queue.length === 0) return;
 
+    const pipeline = getSlowRoadsPipeline(this.config.seed, this.config.roadMode);
+    const roadNodesData = serializeRoadNodes(pipeline.roadNodes);
+
     if (!this.useWorker || this.workerPool.length === 0) {
       // Fallback synchronous processing
       while (this.queue.length > 0) {
@@ -196,7 +200,7 @@ export class TerrainManager {
         const key = `${item.cx},${item.cz}`;
         if (this.chunks.has(key)) continue;
 
-        const data = generateChunkData(item.cx, item.cz, this.config, this.lastCarX, this.lastCarZ);
+        const data = generateChunkData(item.cx, item.cz, this.config, this.lastCarX, this.lastCarZ, roadNodesData);
         this.instantiateChunk(data);
       }
       return;
@@ -217,6 +221,7 @@ export class TerrainManager {
         config: this.config,
         carX: this.lastCarX,
         carZ: this.lastCarZ,
+        roadNodes: roadNodesData,
       };
       worker.postMessage(payload);
     }

@@ -261,3 +261,58 @@ export function getMainTrailCenterZ(
 }
 
 export const getRoadCenterZ = getMainTrailCenterZ;
+
+export interface SerializedRoadNode {
+  i: number;
+  p: { x: number; y: number; z: number };
+  a: number;
+  h: number;
+  g: number;
+  gfa: number;
+  blend: number;
+  bridge: boolean;
+}
+
+export function serializeRoadNodes(nodes: any[]): SerializedRoadNode[] {
+  if (!nodes || nodes.length === 0) return [];
+  return nodes.map((n) => ({
+    i: n.i,
+    p: { x: n.p.x, y: n.p.y, z: n.p.z },
+    a: n.a || 0,
+    h: n.h || 0,
+    g: n.g || 0,
+    gfa: n.gfa || 0,
+    blend: n.blend !== undefined ? n.blend : 1,
+    bridge: !!n.bridge,
+  }));
+}
+
+export function syncWorkerRoadNodes(
+  seed: string = '20',
+  roadMode: RoadMode = 'ENDLESS',
+  serialized: SerializedRoadNode[]
+): void {
+  if (!serialized || serialized.length === 0) return;
+  const pipeline = getSlowRoadsPipeline(seed, roadMode);
+
+  // Reconstruct contiguous linked list for spatial index
+  const nodes = serialized.map((s) => ({
+    ...s,
+    next: null as any,
+    prev: null as any,
+  }));
+
+  for (let i = 0; i < nodes.length - 1; i++) {
+    nodes[i].next = nodes[i + 1];
+    nodes[i + 1].prev = nodes[i];
+  }
+
+  pipeline.spatialIndex.initialise(nodes[0]);
+  pipeline.spatialIndex.update();
+
+  pipeline.roadNodes.length = 0;
+  for (const n of nodes) {
+    pipeline.roadNodes.push(n);
+  }
+}
+
