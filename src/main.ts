@@ -10,7 +10,7 @@ import { DynamicCameraDirector } from './camera';
 import { UnifiedInputController } from './input';
 import { TerrainManager } from './world/managers/TerrainManager';
 import { DEFAULT_TERRAIN_CONFIG, RoadMode } from './world/config/terrainConfig';
-import { getSlowRoadsPipeline } from './world/math/slowRoadsCore';
+import { getSlowRoadsPipeline, clearSlowRoadsCache } from './world/math/slowRoadsCore';
 
 class Game {
   private renderer!: Renderer;
@@ -215,6 +215,7 @@ class Game {
     this.currentMapType = mapType;
     if (seed) this.currentSeed = seed;
     if (roadMode) this.currentRoadMode = roadMode;
+    clearSlowRoadsCache();
     this.renderMapPickerUI();
 
     // Spawn Safety Lock: Freeze vehicle RigidBody during chunk generation
@@ -261,13 +262,11 @@ class Game {
       // Queue initial chunks centered on player spawn position
       this.terrainManager.update(spawnX, spawnZ);
 
-      // Await the exact chunk containing the vehicle spawn point
-      await this.terrainManager.waitForChunk(spawnCx, spawnCz);
-
-      // Also ensure chunk (0, 0) is ready
-      if (spawnCx !== 0 || spawnCz !== 0) {
-        await this.terrainManager.waitForChunk(0, 0);
-      }
+      // Await the exact chunk containing the vehicle spawn point (with 4s safety timeout)
+      await Promise.race([
+        this.terrainManager.waitForChunk(spawnCx, spawnCz),
+        new Promise((resolve) => setTimeout(resolve, 4000))
+      ]);
 
       // Step physics once to rebuild Rapier broadphase BVH acceleration structure
       this.physics.world.step();

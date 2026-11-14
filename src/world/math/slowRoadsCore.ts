@@ -33,6 +33,10 @@ export interface SlowRoadsPipeline {
 
 const pipelineCache = new Map<string, SlowRoadsPipeline>();
 
+export function clearSlowRoadsCache(): void {
+  pipelineCache.clear();
+}
+
 export function getSlowRoadsPipeline(
   seed: string = '20',
   roadMode: RoadMode = 'ENDLESS'
@@ -71,9 +75,12 @@ export function getSlowRoadsPipeline(
 
   const ms = MidlineState as any;
 
-  // 2. Initial Survey: Option A (ENDLESS) starts with 150 nodes (~1.5km), Option B (FIXED_5KM) surveys 500 nodes (5km)
-  const targetNodes = roadMode === 'FIXED_5KM' ? 500 : 150;
-  const maxIters = roadMode === 'FIXED_5KM' ? 1200 : 250;
+  // 2. Initial Survey:
+  // Option A (ENDLESS) surveys 300 nodes (~3.0km: 800m behind spawn + 2.2km ahead)
+  // Option B (FIXED_5KM) surveys 580 nodes (~5.8km: 800m behind spawn + 5.0km ahead)
+  const SPAWN_NODE_INDEX = 80;
+  const targetNodes = roadMode === 'FIXED_5KM' ? 580 : 300;
+  const maxIters = roadMode === 'FIXED_5KM' ? 1400 : 650;
   let iters = 0;
   while ((ms.tail?.i || 0) < targetNodes && iters < maxIters) {
     surveyor.update();
@@ -116,7 +123,13 @@ export function getSlowRoadsPipeline(
     fineCurr = fineCurr.nextFine || fineCurr.next;
   }
 
-  const startHead = ms.head || { p: new Vector3(0, 70, 0), a: 0 };
+  // Establish spawn pose on surveyed road with seamless immersion (road behind & ahead)
+  let spawnNode = roadNodes.find((n: any) => n.i === SPAWN_NODE_INDEX);
+  if (!spawnNode && roadNodes.length > 0) {
+    const fallbackIdx = Math.min(SPAWN_NODE_INDEX, roadNodes.length - 1);
+    spawnNode = roadNodes[fallbackIdx];
+  }
+  const startHead = spawnNode || ms.head || { p: new Vector3(0, 70, 0), a: 0 };
   const startPose = {
     x: startHead.p.x,
     y: startHead.p.y,
@@ -150,7 +163,7 @@ export function getSlowRoadsPipeline(
   };
 
   // Option A (ENDLESS): Dynamically stream road nodes ahead of vehicle
-  const ensureRoadHorizon = (carX: number, carZ: number, horizonMeters: number = 2000): void => {
+  const ensureRoadHorizon = (carX: number, carZ: number, horizonMeters: number = 2500): void => {
     if (roadMode !== 'ENDLESS') return;
     if (roadNodes.length === 0) return;
 
@@ -165,7 +178,8 @@ export function getSlowRoadsPipeline(
       }
     }
 
-    ms.vehicleIndex = closestNode.i;
+    // Keep vehicleIndex safely bounded behind tail so complex turnback reverts never trigger false restartGeneration
+    ms.vehicleIndex = Math.min(closestNode.i, Math.max(0, (ms.tail?.i || 0) - 50));
     ms.vehicleNode = closestNode;
 
     const targetTailIndex = closestNode.i + Math.ceil(horizonMeters / 10);
@@ -175,9 +189,10 @@ export function getSlowRoadsPipeline(
 
     const previousTail = ms.tail;
     let stepCount = 0;
-    while ((ms.tail?.i || 0) < targetTailIndex && stepCount < 50) {
-      surveyor.update();
+    while ((ms.tail?.i || 0) < targetTailIndex && stepCount < 250) {
+      const ok = surveyor.update();
       stepCount++;
+      if (!ok) break;
     }
 
     // Subdivide new fine Catmull-Rom nodes
@@ -198,18 +213,15 @@ export function getSlowRoadsPipeline(
     // Append newly surveyed anchor nodes to cache
     let n = previousTail ? previousTail.next : null;
     while (n) {
-      if (!roadNodes.includes(n)) {
-        roadNodes.push(n);
-      }
+      roadNodes.push(n);
       n = n.next;
     }
 
     // Append newly subdivided fine nodes to cache
-    let fn = fineNodes.length > 0 ? (fineNodes[fineNodes.length - 1].nextFine || fineNodes[fineNodes.length - 1].next) : ms.head;
+    const lastFine = fineNodes.length > 0 ? fineNodes[fineNodes.length - 1] : null;
+    let fn = lastFine ? (lastFine.nextFine || lastFine.next) : ms.head;
     while (fn) {
-      if (!fineNodes.includes(fn)) {
-        fineNodes.push(fn);
-      }
+      fineNodes.push(fn);
       fn = fn.nextFine || fn.next;
     }
   };

@@ -55,6 +55,8 @@ export class TerrainManager {
   };
 
   private lastCheckPos = new THREE.Vector2(99999, 99999);
+  private lastCarX: number = 0;
+  private lastCarZ: number = 0;
   private initialBootPromise: Promise<TerrainChunk>;
   private resolveInitialBoot!: (chunk: TerrainChunk) => void;
   private chunkWaiters = new Map<string, Array<(chunk: TerrainChunk) => void>>();
@@ -121,6 +123,9 @@ export class TerrainManager {
   }
 
   public update(carX: number, carZ: number): void {
+    this.lastCarX = carX;
+    this.lastCarZ = carZ;
+
     const chunkSize = this.config.chunkSize;
     const currentCx = Math.floor((carX + chunkSize * 0.5) / chunkSize);
     const currentCz = Math.floor((carZ + chunkSize * 0.5) / chunkSize);
@@ -132,10 +137,10 @@ export class TerrainManager {
     }
     this.lastCheckPos.set(carX, carZ);
 
-    // Dynamic Slow Roads horizon streaming for ENDLESS mode
+    // Dynamic Slow Roads horizon streaming for ENDLESS mode (2.5km lookahead)
     if (this.config.roadMode === 'ENDLESS') {
       const pipeline = getSlowRoadsPipeline(this.config.seed, this.config.roadMode);
-      pipeline.ensureRoadHorizon(carX, carZ, 2000);
+      pipeline.ensureRoadHorizon(carX, carZ, 2500);
     }
 
     const radius = this.config.viewRadiusChunks;
@@ -185,7 +190,7 @@ export class TerrainManager {
         const key = `${item.cx},${item.cz}`;
         if (this.chunks.has(key)) continue;
 
-        const data = generateChunkData(item.cx, item.cz, this.config);
+        const data = generateChunkData(item.cx, item.cz, this.config, this.lastCarX, this.lastCarZ);
         this.instantiateChunk(data);
       }
       return;
@@ -204,6 +209,8 @@ export class TerrainManager {
         cx: item.cx,
         cz: item.cz,
         config: this.config,
+        carX: this.lastCarX,
+        carZ: this.lastCarZ,
       };
       worker.postMessage(payload);
     }
@@ -233,7 +240,7 @@ export class TerrainManager {
     );
     this.chunks.set(key, chunk);
 
-    if (data.cx === 0 && data.cz === 0) {
+    if (this.chunks.size === 1) {
       this.resolveInitialBoot(chunk);
     }
 

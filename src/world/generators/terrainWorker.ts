@@ -1,6 +1,7 @@
 import { TerrainConfig } from '../config/terrainConfig';
 import { createSeededNoise2D } from '../math/prng';
 import { evaluateTrails, computeRawTerrainHeight } from '../math/splineCarver';
+import { getSlowRoadsPipeline } from '../math/slowRoadsCore';
 import { evaluateVertexSurface } from '../biomes/biomeEvaluator';
 import { evaluateStructureForChunk, applyPadFlattening, StructurePOI } from './structurePlacer';
 import { spawnFoliageAndBoulders, TreeColliderData, BoulderColliderData } from './foliageSpawner';
@@ -9,6 +10,8 @@ export interface ChunkWorkerInput {
   cx: number;
   cz: number;
   config: TerrainConfig;
+  carX?: number;
+  carZ?: number;
 }
 
 export interface ChunkWorkerOutput {
@@ -29,8 +32,9 @@ export interface ChunkWorkerOutput {
 
 if (typeof self !== 'undefined') {
   self.onmessage = (event: MessageEvent<ChunkWorkerInput>) => {
-    const { cx, cz, config } = event.data;
-    const output = generateChunkData(cx, cz, config);
+    if (!event.data || !event.data.config) return;
+    const { cx, cz, config, carX, carZ } = event.data;
+    const output = generateChunkData(cx, cz, config, carX, carZ);
 
     const transferables = [
       output.rapierHeights.buffer,
@@ -46,13 +50,27 @@ if (typeof self !== 'undefined') {
   };
 }
 
-export function generateChunkData(cx: number, cz: number, config: TerrainConfig): ChunkWorkerOutput {
+export function generateChunkData(
+  cx: number,
+  cz: number,
+  config: TerrainConfig,
+  carX?: number,
+  carZ?: number
+): ChunkWorkerOutput {
   const noise2D = createSeededNoise2D(config.seed);
   const N = config.segments;
   const V = N + 1;
   const chunkSize = config.chunkSize;
   const worldChunkCenterX = cx * chunkSize;
   const worldChunkCenterZ = cz * chunkSize;
+
+  // Synchronize dynamic road streaming horizon inside Web Worker thread
+  if (config.roadMode === 'ENDLESS') {
+    const pipeline = getSlowRoadsPipeline(config.seed, config.roadMode);
+    if (carX !== undefined && carZ !== undefined) {
+      pipeline.ensureRoadHorizon(carX, carZ, 2500);
+    }
+  }
 
   // Raw terrain height function without structure flattening
   function computeRaw(wx: number, wz: number): number {
