@@ -272,48 +272,11 @@ export class RoadTerrainBlender {
         return roadSurfaceY;
       }
 
-      const tNorm = Math.max(0, Math.min(1, (dist - effectiveHalfWidth) / roadMargin));
-      let lerpFactor = quinticSmooth(tNorm);
-
-      if (this.isOffroad) {
-        const hFactor = 1 - ga;
-        if (hFactor > 0) {
-          const atVal = 3.0;
-          if (hit.d < w) {
-            modifiedTerrain += atVal * hFactor;
-          } else {
-            modifiedTerrain += quinticSmooth(1 - (hit.d - w) / roadMargin) * atVal * hFactor;
-          }
-        }
-        roadY += this.noiseQs.getXZ(worldX, worldZ);
-
-        // Superelevation / road banking adjustment
-        const slope = (nodeA.bank || 0) * (1 - t) + (nodeB.bank || 0) * t;
-        let bankFactor = (widthLerp * side + 1) / 2;
-        bankFactor = bankFactor * bankFactor * 2 - 1;
-        roadY += Math.abs(slope) * bankFactor * (this.isGreenlane ? 0.5 : 1);
-      }
-
-      // Bridge handling: suppress terrain elevation changes under bridge spans
-      if (nodeA.bridge && nodeB.bridge) {
-        if (nodeB.next && nodeB.next.bridge) {
-          if (nodeA.prev && nodeA.prev.bridge) {
-            lerpFactor = 1;
-          } else {
-            lerpFactor = Math.max(t, lerpFactor);
-          }
-        } else {
-          lerpFactor = Math.max(1 - t, lerpFactor);
-        }
-
-        const bridgeMargin = 4;
-        if (dist < this.halfWidth + this.curbWidth + bridgeMargin && modifiedTerrain > roadY) {
-          let m = 1 - Math.max(0, (this.halfWidth + this.curbWidth + bridgeMargin - dist) / bridgeMargin);
-          const sub = lerpFactor * 0.33;
-          m = (m - sub) * (1 / (1 - sub));
-          lerpFactor = m;
-        }
-      }
+      // Smooth embankment blend: on bridges/causeways, use an engineered 8.0m slope margin
+      // that smoothly transitions down to the valley/lake floor with C2 continuity (eliminates jagged raster teeth).
+      const transitionMargin = isBridge ? 8.0 : roadMargin;
+      const tNorm = Math.max(0, Math.min(1, (dist - effectiveHalfWidth) / transitionMargin));
+      const lerpFactor = quinticSmooth(tNorm);
 
       return modifiedTerrain * lerpFactor + roadSurfaceY * (1 - lerpFactor);
     }

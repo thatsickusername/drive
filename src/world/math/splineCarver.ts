@@ -11,6 +11,7 @@ export interface TrailSample {
   surfaceProfile: number;  // road crown (+0.08m) and dual wheel ruts (-0.12m)
   isMudPit: boolean;
   isRockCrawl: boolean;
+  isBridge: boolean;
 }
 
 /**
@@ -89,6 +90,8 @@ export function evaluateTrails(
   const trailMask = smoothstep(halfWidth, halfWidth + blendWidth, dist);
   const challengeNoise = noise2D ? noise2D(worldX * 0.012, worldZ * 0.012) : 0;
 
+  const isBridge = !!(roadHit && roadHit.n && (roadHit.n.bridge || (roadHit.n.next && roadHit.n.next.bridge)));
+
   return {
     trailMask,
     corridorMask: trailMask,
@@ -97,6 +100,7 @@ export function evaluateTrails(
     surfaceProfile: 0,
     isMudPit: false,
     isRockCrawl: challengeNoise > 0.65 && trailMask > 0.8,
+    isBridge,
   };
 }
 

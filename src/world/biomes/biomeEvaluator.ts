@@ -25,6 +25,8 @@ const COLOR_WET_MUD = hexToRgb(0x3b2f26);
 const COLOR_OLIVE_MOSS = hexToRgb(0x555e4b);
 const COLOR_DEAD_GRASS = hexToRgb(0x686452);
 const COLOR_ASH_FROST = hexToRgb(0xc8ced4);
+const COLOR_BRIDGE_DECK = hexToRgb(0x383b3f); // Weathered structural asphalt/concrete bridge deck
+const COLOR_BRIDGE_EMBANKMENT = hexToRgb(0x4c5055); // Engineered crushed rock rip-rap / causeway stone
 
 export function getRiverCarveOffset(
   worldX: number,
@@ -56,7 +58,8 @@ export function evaluateVertexSurface(
   isMudPit: boolean,
   noise2D: NoiseFunction2D,
   config: TerrainConfig,
-  curvature = 0.0 // Laplacian curvature: positive = concave dip/valley, negative = convex ridge
+  curvature = 0.0, // Laplacian curvature: positive = concave dip/valley, negative = convex ridge
+  isBridge = false
 ): VertexSurfaceInfo {
   // Moisture: low-frequency noise
   const rawMoisture = noise2D(worldX * 0.001, worldZ * 0.001) * 0.5 + 0.5;
@@ -74,7 +77,37 @@ export function evaluateVertexSurface(
     };
   }
 
-  // 2. Compacted Dirt / Crushed Rock Trail
+  // 2. Bridge / Causeway Structure: Dedicated engineered deck & rip-rap abutment stone
+  if (isBridge && trailMask < 0.45) {
+    const deckNoise = (noise2D(worldX * 0.08, worldZ * 0.08) + 1) * 0.5;
+    if (trailMask < 0.20) {
+      // Main bridge roadbed surface: engineered concrete / paved bridge deck
+      const r = lerp(COLOR_BRIDGE_DECK[0], COLOR_DARK_BASALT[0], deckNoise * 0.25);
+      const g = lerp(COLOR_BRIDGE_DECK[1], COLOR_DARK_BASALT[1], deckNoise * 0.25);
+      const b = lerp(COLOR_BRIDGE_DECK[2], COLOR_DARK_BASALT[2], deckNoise * 0.25);
+      return {
+        r,
+        g,
+        b,
+        friction: 0.90,
+        surfaceType: 'TRAIL',
+      };
+    } else {
+      // Causeway embankment slope: protective crushed rock rip-rap / retaining abutment
+      const r = lerp(COLOR_BRIDGE_EMBANKMENT[0], COLOR_SLATE_GREY[0], deckNoise * 0.3);
+      const g = lerp(COLOR_BRIDGE_EMBANKMENT[1], COLOR_SLATE_GREY[1], deckNoise * 0.3);
+      const b = lerp(COLOR_BRIDGE_EMBANKMENT[2], COLOR_SLATE_GREY[2], deckNoise * 0.3);
+      return {
+        r,
+        g,
+        b,
+        friction: 0.88,
+        surfaceType: 'ROCK',
+      };
+    }
+  }
+
+  // 3. Compacted Dirt / Crushed Rock Trail
   if (trailMask < 0.35 && challengeNoise <= 0.55) {
     const dirtNoise = (noise2D(worldX * 0.05, worldZ * 0.05) + 1) * 0.5;
     const isAlpineTrail = worldY > 110.0;

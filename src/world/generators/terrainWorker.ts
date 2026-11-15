@@ -170,7 +170,8 @@ export function generateChunkData(
         trail.isMudPit,
         noise2D,
         config,
-        curvature
+        curvature,
+        trail.isBridge
       );
 
       colors[pIdx + 0] = surface.r;
