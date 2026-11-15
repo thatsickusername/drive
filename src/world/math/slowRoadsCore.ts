@@ -14,7 +14,6 @@ import {
 } from '../slowroads/index.js';
 import { RoadMode } from '../config/terrainConfig';
 import { cyrb128 } from './prng';
-import { smoothstep } from './noiseLayers';
 import { computeAlpineElevation } from './alpineNoise';
 
 export interface SurveyorDebugInfo {
@@ -183,11 +182,8 @@ export function getSlowRoadsPipeline(
 
   const getNaturalHeight = (x: number, z: number): number => {
     const baseH = heightmap.getXZ(x, z);
-    const hit = spatialIndex.getClosestNode(x, z, 50);
-    const distToRoad = hit ? hit.d : 999.0;
-    const roadMask = smoothstep(25.0, 55.0, distToRoad);
     const alpineDelta = computeAlpineElevation(x, z, baseH, seed || '20');
-    return baseH + alpineDelta * roadMask;
+    return baseH + alpineDelta;
   };
 
   const getRoadHit = (x: number, z: number): any => {
