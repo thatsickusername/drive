@@ -827,7 +827,9 @@ class Game {
     }
 
     this.dbgEls.fineNodes.textContent = `${surveyorInfo.totalFineNodes}`;
-    this.dbgEls.meshes.textContent = `${roadMeshInfo.segmentCount} (Seg ${roadMeshInfo.minSegment}..${roadMeshInfo.maxSegment})`;
+    this.dbgEls.meshes.textContent = roadMeshInfo.enabled
+      ? `${roadMeshInfo.segmentCount} (Seg ${roadMeshInfo.minSegment}..${roadMeshInfo.maxSegment})`
+      : '0 (Terrain Only)';
     this.dbgEls.chunks.textContent = `${this.terrainManager.chunks.size}`;
 
     this.latestDebugReportString = `=== SLOW ROADS STREAMING DIAGNOSTICS ===

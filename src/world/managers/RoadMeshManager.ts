@@ -11,6 +11,10 @@ export class RoadMeshManager {
   private segments = new Map<number, THREE.Mesh>();
   private segmentSignatures = new Map<number, string>();
   private material: THREE.Material;
+  // Terrain pipeline already carves and vertex-colors the road directly into the heightfield.
+  // Superimposing floating ribbon plane meshes creates z-fighting, pass-through ghost planes,
+  // and floating step artifacts. Keep disabled so user sees the clean road terrain.
+  public enabled = false;
 
   constructor(scene: THREE.Scene, pipeline: SlowRoadsPipeline) {
     this.scene = scene;
@@ -28,6 +32,13 @@ export class RoadMeshManager {
   }
 
   public update(carX: number, carZ: number): void {
+    if (!this.enabled) {
+      if (this.segments.size > 0) {
+        this.dispose();
+      }
+      return;
+    }
+
     const fineNodes = this.pipeline.fineNodes;
     if (fineNodes.length < 2) return;
 
@@ -53,8 +64,9 @@ export class RoadMeshManager {
       if (segmentNodes.length < 2) continue;
 
       const p0 = segmentNodes[0].p;
+      const pMid = segmentNodes[Math.floor(segmentNodes.length / 2)].p;
       const p1 = segmentNodes[segmentNodes.length - 1].p;
-      const signature = `${p0.x.toFixed(1)},${p0.z.toFixed(1)}_${p1.x.toFixed(1)},${p1.z.toFixed(1)}`;
+      const signature = `${p0.x.toFixed(1)},${p0.y.toFixed(1)},${p0.z.toFixed(1)}_${pMid.y.toFixed(1)}_${p1.x.toFixed(1)},${p1.y.toFixed(1)},${p1.z.toFixed(1)}`;
 
       if (this.segments.has(segIdx)) {
         if (this.segmentSignatures.get(segIdx) === signature) {
@@ -110,9 +122,10 @@ export class RoadMeshManager {
     }
   }
 
-  public getDebugInfo(): { segmentCount: number; minSegment: number; maxSegment: number } {
+  public getDebugInfo(): { segmentCount: number; minSegment: number; maxSegment: number; enabled: boolean } {
     const keys = Array.from(this.segments.keys());
     return {
+      enabled: this.enabled,
       segmentCount: keys.length,
       minSegment: keys.length > 0 ? Math.min(...keys) : 0,
       maxSegment: keys.length > 0 ? Math.max(...keys) : 0,

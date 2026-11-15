@@ -119,8 +119,9 @@ export function getSlowRoadsPipeline(
     iters++;
   }
 
-  // Extend fine Catmull-Rom nodes between anchor nodes
-  while (ms.fineTail && ms.fineTail.next && ms.fineTail.next.next) {
+  // Extend fine Catmull-Rom nodes between smoothed anchor nodes
+  const maxSmoothIdx = surveyor.smoothWindowHead ? surveyor.smoothWindowHead.i : (ms.tail?.i || 0) - 10;
+  while (ms.fineTail && ms.fineTail.next && ms.fineTail.next.next && ms.fineTail.i < maxSmoothIdx) {
     surveyor.extendFine();
   }
 
@@ -239,8 +240,9 @@ export function getSlowRoadsPipeline(
 
     const didRetract = (ms.tail?.i || 0) < initialTailIndex;
 
-    // Subdivide new fine Catmull-Rom nodes
-    while (ms.fineTail && ms.fineTail.next && ms.fineTail.next.next) {
+    // Subdivide new fine Catmull-Rom nodes only up to smoothed anchor nodes
+    const maxSmoothIdx = surveyor.smoothWindowHead ? surveyor.smoothWindowHead.i : (ms.tail?.i || 0) - 10;
+    while (ms.fineTail && ms.fineTail.next && ms.fineTail.next.next && ms.fineTail.i < maxSmoothIdx) {
       surveyor.extendFine();
     }
 
