@@ -13,6 +13,7 @@ import {
   Vector3
 } from '../../../slow_roads_extracted_core/src/index.js';
 import { RoadMode } from '../config/terrainConfig';
+import { cyrb128 } from './prng';
 
 export interface SlowRoadsPipeline {
   heightmap: any;
@@ -86,9 +87,11 @@ export function getSlowRoadsPipeline(
 
   // Macro undulating arterial heading: base ~0.2 rad with gentle +/- 0.55 rad meander (wavelength ~1.8km and ~4km)
   // allows the road to traverse mountain saddles, valleys, and switch naturally between left and right mountain flanks
+  const [s1] = cyrb128(seed || '20');
+  const seedPhase = (s1 % 10000) * 0.01;
   const updateSurveyorTarget = () => {
     const dist = (ms.tail?.i || 0) * 10;
-    const wanderAngle = 0.2 + Math.sin(dist * 0.0035) * 0.55 + Math.sin(dist * 0.001) * 0.25;
+    const wanderAngle = 0.2 + Math.sin(dist * 0.0035 + seedPhase) * 0.55 + Math.sin(dist * 0.001 + seedPhase * 1.7) * 0.25;
     (surveyor as any).targetDir.set(Math.cos(wanderAngle), 0, Math.sin(wanderAngle)).normalize();
   };
 
