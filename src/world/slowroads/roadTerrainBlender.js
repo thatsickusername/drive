@@ -148,44 +148,65 @@ export class RoadTerrainBlender {
     }
 
     if (dist < w + roadMargin) {
-      // Natural off-road cross-section profile:
-      // Center is depressed (compacted / rutted by wheels), sides are raised (displaced dirt berms)
-      // with continuous longitudinal procedural variance.
+      // Natural heavily-traveled multi-vehicle off-road profile:
+      // Broad, deeply scooped wheel lanes (~4.6m separation across 8m roadbed),
+      // wide undulating center crown, and thick rounded earthen shoulder berms.
+      // Uses smooth C1 cosine bells and macro longitudinal wavelengths (>=35m) to eliminate all polygon choppiness.
       const isBridge = !!(nodeA.bridge || nodeB.bridge);
       let profileDelta = 0;
 
       if (!isBridge) {
-        const u = dist / this.halfWidth;
         const sLong = ((nodeA.i || 0) + t) * 10.0;
 
-        // Longitudinal procedural modulators
-        const depthMod = 0.85 + 0.35 * Math.sin(sLong * 0.012) + 0.25 * Math.cos(sLong * 0.0047);
-        const sideAsym = Math.sin(sLong * 0.008 + 1.2) * 0.4;
+        // Non-linear probability distribution for rut depth:
+        // In the most probable/predominant scenario (~75-80% of the trail), deformation is mild (~0.35x - 0.50x or -0.10m to -0.14m).
+        // Only in occasional stretches (~20% of the trail: dips, wet basins, steep turns) does it surge up to full depth (1.0x or -0.28m).
+        const rawWander = 0.50 + 0.30 * Math.sin(sLong * 0.012) + 0.20 * Math.cos(sLong * 0.0051 + 0.8);
+        const normWander = Math.max(0, Math.min(1, rawWander));
+        const depthMod = 0.35 + 0.65 * Math.pow(normWander, 2.4);
+        const sideAsym = Math.sin(sLong * 0.009 + 0.9) * 0.35;
         const sideFactor = 1.0 + side * sideAsym;
-        const rutBlend = 0.5 + 0.5 * Math.sin(sLong * 0.021);
-        const bermPeakU = 0.90 + 0.12 * Math.sin(sLong * 0.017 + side);
 
-        // 1. Center trough & wheel rut depressions
-        const troughShape = Math.max(0, 1 - (u / 0.75) ** 2) ** 2;
-        const troughOffset = -0.15 * troughShape * depthMod;
+        // Long-wave natural trail washboard / whoop undulations along vehicle paths
+        const trailWhoop = (Math.sin(sLong * 0.032) * 0.10 + Math.sin(sLong * 0.071 + 1.2) * 0.06) * depthMod;
 
-        const rutDist = Math.abs(u - 0.28);
-        const rutShape = Math.exp(-(rutDist * rutDist) / 0.035);
-        const centerCrown = 0.04 * Math.max(0, 1 - (u / 0.18) ** 2);
-        const dualRutOffset = (-0.16 * rutShape + centerCrown) * depthMod;
+        // 1. Wide, heavily-traveled multi-vehicle wheel ruts:
+        // Positioned wider at ~2.3m lateral offset (4.6m total track separation across 8m roadbed)
+        const rutCenter = 2.30 + 0.30 * Math.sin(sLong * 0.018 + side * 0.7);
+        const rutHalfWidth = 1.65; // Wide 3.3m diameter scooped wheel lane
 
-        const rutOffset = rutBlend * dualRutOffset + (1 - rutBlend) * troughOffset;
+        let rutOffset = 0;
+        const rutDist = Math.abs(dist - rutCenter);
+        if (rutDist < rutHalfWidth) {
+          // Smooth, rounded cosine cradle with zero derivative at bottom and edges (no kinks)
+          const rutNorm = rutDist / rutHalfWidth;
+          const rutShape = 0.5 + 0.5 * Math.cos(Math.PI * rutNorm);
+          rutOffset = -0.28 * depthMod * rutShape;
+        }
 
-        // 2. Displaced dirt berm along road shoulders
-        const bermDist = (u - bermPeakU) / 0.28;
-        const bermShape = Math.exp(-bermDist * bermDist);
-        const bermOffset = 0.14 * depthMod * sideFactor * bermShape;
+        // 2. Broad, weathered center crown / hump between left and right ruts
+        let crownOffset = 0;
+        if (dist < rutCenter) {
+          const crownNorm = dist / rutCenter;
+          const crownShape = 0.5 + 0.5 * Math.cos(Math.PI * crownNorm);
+          crownOffset = 0.09 * depthMod * crownShape;
+        }
 
-        // 3. Tactile micro soil roughness / gravel chatter
-        const microRoughness = (this.noiseQs.getXZ(worldX, worldZ) * 0.025 +
-          Math.sin(worldX * 0.8 + worldZ * 0.9) * 0.012) * Math.max(0, 1 - (u - 0.8) / 0.4);
+        // 3. Thick, rounded outer dirt berm (shoulder banks pushed outward by traffic)
+        let bermOffset = 0;
+        const bermPeak = 4.10 + 0.35 * Math.sin(sLong * 0.013);
+        const bermHalfWidth = 1.70; // 3.4m wide rounded earthen mound
+        const bermDist = Math.abs(dist - bermPeak);
+        if (bermDist < bermHalfWidth) {
+          const bermNorm = bermDist / bermHalfWidth;
+          const bermShape = 0.5 + 0.5 * Math.cos(Math.PI * bermNorm);
+          bermOffset = 0.24 * depthMod * sideFactor * bermShape;
+        }
 
-        profileDelta = rutOffset + bermOffset + microRoughness;
+        // Combine into continuous macro off-road profile:
+        // Whoops naturally concentrate in the wheel ruts where vehicle torque carves depressions
+        const whoopFactor = Math.max(0, 1 - Math.abs(dist - rutCenter) / 2.0);
+        profileDelta = rutOffset + crownOffset + bermOffset + trailWhoop * whoopFactor;
       }
 
       const roadSurfaceY = roadY + profileDelta;
