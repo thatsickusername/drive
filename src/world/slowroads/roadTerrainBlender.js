@@ -174,16 +174,24 @@ export class RoadTerrainBlender {
         const sideAsym = Math.sin(sLong * 0.009 + 0.9) * 0.35;
         const sideFactor = 1.0 + side * sideAsym;
 
+        // Micro-Sinuosity Centerline Meander:
+        // Real vehicle tracks snake and weave naturally within the cleared corridor (+/-0.40m)
+        // rather than tracking a rigid mathematical vector.
+        const centerMeander = (Math.sin(sLong * 0.014) * 0.26 + Math.cos(sLong * 0.0071 + 1.3) * 0.16) * depthMod;
+        const trackSignedDist = (side * dist) - centerMeander;
+        const trackDist = Math.abs(trackSignedDist);
+        const trackSide = Math.sign(trackSignedDist) || 1;
+
         // Long-wave natural trail washboard / whoop undulations along vehicle paths
         const trailWhoop = (Math.sin(sLong * 0.032) * 0.10 + Math.sin(sLong * 0.071 + 1.2) * 0.06) * depthMod;
 
         // 1. Wide, heavily-traveled multi-vehicle wheel ruts:
-        // Positioned proportionally to current road width
-        const rutCenter = effectiveHalfWidth * 0.58 + 0.25 * Math.sin(sLong * 0.018 + side * 0.7);
+        // Positioned proportionally to current road width and weaving with micro-sinuosity
+        const rutCenter = effectiveHalfWidth * 0.58 + 0.20 * Math.sin(sLong * 0.018 + trackSide * 0.7);
         const rutHalfWidth = effectiveHalfWidth * 0.42;
 
         let rutOffset = 0;
-        const rutDist = Math.abs(dist - rutCenter);
+        const rutDist = Math.abs(trackDist - rutCenter);
         if (rutDist < rutHalfWidth) {
           // Smooth, rounded cosine cradle with zero derivative at bottom and edges (no kinks)
           const rutNorm = rutDist / rutHalfWidth;
@@ -193,8 +201,8 @@ export class RoadTerrainBlender {
 
         // 2. Broad, weathered center crown / hump between left and right ruts
         let crownOffset = 0;
-        if (dist < rutCenter) {
-          const crownNorm = dist / rutCenter;
+        if (trackDist < rutCenter) {
+          const crownNorm = trackDist / rutCenter;
           const crownShape = 0.5 + 0.5 * Math.cos(Math.PI * crownNorm);
           crownOffset = 0.09 * depthMod * crownShape;
         }
@@ -245,7 +253,7 @@ export class RoadTerrainBlender {
 
         // Combine into continuous macro off-road profile:
         // Whoops naturally concentrate in the wheel ruts where vehicle torque carves depressions
-        const whoopFactor = Math.max(0, 1 - Math.abs(dist - rutCenter) / (effectiveHalfWidth * 0.5));
+        const whoopFactor = Math.max(0, 1 - Math.abs(trackDist - rutCenter) / (effectiveHalfWidth * 0.5));
         profileDelta = rutOffset + crownOffset + bermOffset + trailWhoop * whoopFactor + bankDelta;
       }
 
