@@ -14,6 +14,8 @@ import {
 } from '../slowroads/index.js';
 import { RoadMode } from '../config/terrainConfig';
 import { cyrb128 } from './prng';
+import { smoothstep } from './noiseLayers';
+import { computeAlpineElevation } from './alpineNoise';
 
 export interface SurveyorDebugInfo {
   tailIndex: number;
@@ -180,7 +182,12 @@ export function getSlowRoadsPipeline(
   };
 
   const getNaturalHeight = (x: number, z: number): number => {
-    return heightmap.getXZ(x, z);
+    const baseH = heightmap.getXZ(x, z);
+    const hit = spatialIndex.getClosestNode(x, z, 50);
+    const distToRoad = hit ? hit.d : 999.0;
+    const roadMask = smoothstep(10.0, 26.0, distToRoad);
+    const alpineDelta = computeAlpineElevation(x, z, baseH, seed || '20');
+    return baseH + alpineDelta * roadMask;
   };
 
   const getRoadHit = (x: number, z: number): any => {
@@ -189,7 +196,7 @@ export function getSlowRoadsPipeline(
 
   // 4. Use RoadTerrainBlender to carve the terrain around the surveyed road
   const getHeight = (x: number, z: number): number => {
-    const nh = heightmap.getXZ(x, z);
+    const nh = getNaturalHeight(x, z);
     const hit = spatialIndex.getClosestNode(x, z, 50);
     return hit ? blender.getBlendedHeight(nh, hit, x, z) : nh;
   };
