@@ -234,10 +234,36 @@ export class RoadTerrainBlender {
           bermOffset += 0.18 * fillFactor * depthMod * fillShape;
         }
 
+        // 5. Diagonal Drainage Water Bars (Earthen swales for cross-axle suspension articulation)
+        // Angled at ~35 degrees across the roadbed spaced ~88m apart on mountain grades.
+        // As vehicles cross, diagonal wheel pairs articulate alternately (front-left compresses, then front-right).
+        let waterBarDelta = 0;
+        const roadSlope = Math.abs((nodeB.p.y - nodeA.p.y) / 10.0);
+        const slopeActive = Math.min(1, Math.max(0, (roadSlope - 0.02) * 20.0));
+
+        if (slopeActive > 0.05 && dist < effectiveHalfWidth * 1.1) {
+          const signedDist = side * dist;
+          // Diagonal projection: 35 degrees across the travel line (~0.70 slope)
+          const diagCoord = sLong + signedDist * 0.70;
+          const barPeriod = 88.0; // Every 88 meters
+          const barPhase = ((diagCoord % barPeriod) + barPeriod) % barPeriod;
+          const distToBar = barPhase - barPeriod * 0.5;
+          const barHalfWidth = 1.6; // 3.2m total swale wavelength
+
+          if (Math.abs(distToBar) < barHalfWidth) {
+            const xBar = distToBar / barHalfWidth;
+            // Sinuous dip-then-crest profile: zero derivative at edges
+            const barShape = Math.sin(Math.PI * xBar) * Math.pow(Math.cos(Math.PI * 0.5 * xBar), 2);
+            const barAmp = 0.13 * slopeActive * depthMod;
+            const roadbedFalloff = Math.max(0, 1 - dist / (effectiveHalfWidth * 1.08));
+            waterBarDelta = barAmp * barShape * roadbedFalloff;
+          }
+        }
+
         // Combine into continuous macro off-road profile:
         // Whoops naturally concentrate in the wheel ruts where vehicle torque carves depressions
         const whoopFactor = Math.max(0, 1 - Math.abs(dist - rutCenter) / (effectiveHalfWidth * 0.5));
-        profileDelta = rutOffset + crownOffset + bermOffset + trailWhoop * whoopFactor;
+        profileDelta = rutOffset + crownOffset + bermOffset + trailWhoop * whoopFactor + waterBarDelta;
       }
 
       const roadSurfaceY = roadY + profileDelta;
