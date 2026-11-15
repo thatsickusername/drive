@@ -148,12 +148,53 @@ export class RoadTerrainBlender {
     }
 
     if (dist < w + roadMargin) {
-      // Under paved road surface (without bridge), clamp directly to road elevation
-      if (!this.isOffroad && dist < this.halfWidth && !nodeA.bridge) {
-        return roadY;
+      // Natural off-road cross-section profile:
+      // Center is depressed (compacted / rutted by wheels), sides are raised (displaced dirt berms)
+      // with continuous longitudinal procedural variance.
+      const isBridge = !!(nodeA.bridge || nodeB.bridge);
+      let profileDelta = 0;
+
+      if (!isBridge) {
+        const u = dist / this.halfWidth;
+        const sLong = ((nodeA.i || 0) + t) * 10.0;
+
+        // Longitudinal procedural modulators
+        const depthMod = 0.85 + 0.35 * Math.sin(sLong * 0.012) + 0.25 * Math.cos(sLong * 0.0047);
+        const sideAsym = Math.sin(sLong * 0.008 + 1.2) * 0.4;
+        const sideFactor = 1.0 + side * sideAsym;
+        const rutBlend = 0.5 + 0.5 * Math.sin(sLong * 0.021);
+        const bermPeakU = 0.90 + 0.12 * Math.sin(sLong * 0.017 + side);
+
+        // 1. Center trough & wheel rut depressions
+        const troughShape = Math.max(0, 1 - (u / 0.75) ** 2) ** 2;
+        const troughOffset = -0.15 * troughShape * depthMod;
+
+        const rutDist = Math.abs(u - 0.28);
+        const rutShape = Math.exp(-(rutDist * rutDist) / 0.035);
+        const centerCrown = 0.04 * Math.max(0, 1 - (u / 0.18) ** 2);
+        const dualRutOffset = (-0.16 * rutShape + centerCrown) * depthMod;
+
+        const rutOffset = rutBlend * dualRutOffset + (1 - rutBlend) * troughOffset;
+
+        // 2. Displaced dirt berm along road shoulders
+        const bermDist = (u - bermPeakU) / 0.28;
+        const bermShape = Math.exp(-bermDist * bermDist);
+        const bermOffset = 0.14 * depthMod * sideFactor * bermShape;
+
+        // 3. Tactile micro soil roughness / gravel chatter
+        const microRoughness = (this.noiseQs.getXZ(worldX, worldZ) * 0.025 +
+          Math.sin(worldX * 0.8 + worldZ * 0.9) * 0.012) * Math.max(0, 1 - (u - 0.8) / 0.4);
+
+        profileDelta = rutOffset + bermOffset + microRoughness;
       }
 
-      const tNorm = Math.max(0, Math.min(1, (dist - w) / roadMargin));
+      const roadSurfaceY = roadY + profileDelta;
+
+      if (dist < this.halfWidth) {
+        return roadSurfaceY;
+      }
+
+      const tNorm = Math.max(0, Math.min(1, (dist - this.halfWidth) / roadMargin));
       let lerpFactor = quinticSmooth(tNorm);
 
       if (this.isOffroad) {
@@ -196,7 +237,7 @@ export class RoadTerrainBlender {
         }
       }
 
-      return modifiedTerrain * lerpFactor + roadY * (1 - lerpFactor);
+      return modifiedTerrain * lerpFactor + roadSurfaceY * (1 - lerpFactor);
     }
 
     return modifiedTerrain;

@@ -79,9 +79,25 @@ export function evaluateVertexSurface(
     const dirtNoise = (noise2D(worldX * 0.05, worldZ * 0.05) + 1) * 0.5;
     const isAlpineTrail = worldY > 110.0;
     const baseColor = isAlpineTrail ? COLOR_DARK_BASALT : COLOR_DRY_EARTH;
-    const r = lerp(baseColor[0], COLOR_DARK_BASALT[0], dirtNoise * 0.3);
-    const g = lerp(baseColor[1], COLOR_DARK_BASALT[1], dirtNoise * 0.3);
-    const b = lerp(baseColor[2], COLOR_DARK_BASALT[2], dirtNoise * 0.3);
+    let r = lerp(baseColor[0], COLOR_DARK_BASALT[0], dirtNoise * 0.3);
+    let g = lerp(baseColor[1], COLOR_DARK_BASALT[1], dirtNoise * 0.3);
+    let b = lerp(baseColor[2], COLOR_DARK_BASALT[2], dirtNoise * 0.3);
+
+    // Subtle off-road rut/berm shading from surface curvature:
+    // Curvature > 0: concave compacted rut trough (slightly darker, damp soil)
+    // Curvature < 0: convex raised berm crest (slightly lighter, loose displaced earth/gravel)
+    if (curvature > 0.015) {
+      const rutShade = clamp((curvature - 0.015) * 4.0, 0, 0.35);
+      r = lerp(r, COLOR_WET_MUD[0], rutShade);
+      g = lerp(g, COLOR_WET_MUD[1], rutShade);
+      b = lerp(b, COLOR_WET_MUD[2], rutShade);
+    } else if (curvature < -0.015) {
+      const bermShade = clamp((-curvature - 0.015) * 3.5, 0, 0.25);
+      r = clamp(r + bermShade * 0.04, 0, 1);
+      g = clamp(g + bermShade * 0.035, 0, 1);
+      b = clamp(b + bermShade * 0.03, 0, 1);
+    }
+
     return {
       r,
       g,
