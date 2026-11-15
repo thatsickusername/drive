@@ -31,7 +31,7 @@ export class TerrainManager {
       vertexColors: true,
       roughness: 0.92,
       metalness: 0.05,
-      flatShading: true,
+      flatShading: false,
       side: THREE.DoubleSide,
     }),
     waterMaterial: new THREE.MeshStandardMaterial({

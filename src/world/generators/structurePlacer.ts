@@ -1,6 +1,7 @@
 import { cyrb128, mulberry32 } from '../math/prng';
 import { smoothstep, lerp } from '../math/noiseLayers';
 import { TerrainConfig } from '../config/terrainConfig';
+import { getSlowRoadsPipeline } from '../math/slowRoadsCore';
 
 export interface StructurePOI {
   type: 'FUEL_DEPOT' | 'OUTPOST' | 'RANGER_CABIN' | 'WATCHTOWER';
@@ -55,6 +56,13 @@ export function evaluateStructureForChunk(
 
   // Reject if too close to or below water
   if (yCenter <= config.riverLevel + 2.0) {
+    return null;
+  }
+
+  // Reject if too close to the surveyed road corridor to prevent flattened pad steps on the road/embankment
+  const pipeline = getSlowRoadsPipeline(config.seed, config.roadMode);
+  const roadHit = pipeline.getRoadHit(centerX, centerZ);
+  if (roadHit && roadHit.d < radius + blendSkirt + 30.0) {
     return null;
   }
 

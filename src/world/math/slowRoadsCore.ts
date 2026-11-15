@@ -56,8 +56,10 @@ export function getSlowRoadsPipeline(
     ...preset.midline,
     seed: seed || '20',
     maxStartElev: 500,
-    maxGradLon: 25,
-    direction: { x: 1, y: 0, z: 0.2 }
+    maxGradLon: 35,
+    direction: { x: 1, y: 0, z: 0.2 },
+    turnbackLimits: [6.0, 6.0, 6.0, 6.0],
+    canEmergencyBridge: true
   };
 
   const heightmapState = { set: () => {} };
@@ -80,9 +82,19 @@ export function getSlowRoadsPipeline(
   // Option B (FIXED_5KM) surveys 580 nodes (~5.8km: 800m behind spawn + 5.0km ahead)
   const SPAWN_NODE_INDEX = 80;
   const targetNodes = roadMode === 'FIXED_5KM' ? 580 : 300;
-  const maxIters = roadMode === 'FIXED_5KM' ? 1400 : 650;
+  const maxIters = roadMode === 'FIXED_5KM' ? 1400 : 850;
+
+  // Macro undulating arterial heading: base ~0.2 rad with gentle +/- 0.55 rad meander (wavelength ~1.8km and ~4km)
+  // allows the road to traverse mountain saddles, valleys, and switch naturally between left and right mountain flanks
+  const updateSurveyorTarget = () => {
+    const dist = (ms.tail?.i || 0) * 10;
+    const wanderAngle = 0.2 + Math.sin(dist * 0.0035) * 0.55 + Math.sin(dist * 0.001) * 0.25;
+    (surveyor as any).targetDir.set(Math.cos(wanderAngle), 0, Math.sin(wanderAngle)).normalize();
+  };
+
   let iters = 0;
   while ((ms.tail?.i || 0) < targetNodes && iters < maxIters) {
+    updateSurveyorTarget();
     surveyor.update();
     iters++;
   }
@@ -185,7 +197,8 @@ export function getSlowRoadsPipeline(
 
     const previousTail = ms.tail;
     let stepCount = 0;
-    while ((ms.tail?.i || 0) < targetTailIndex && stepCount < 300) {
+    while ((ms.tail?.i || 0) < targetTailIndex && stepCount < 500) {
+      updateSurveyorTarget();
       surveyor.update();
       stepCount++;
     }

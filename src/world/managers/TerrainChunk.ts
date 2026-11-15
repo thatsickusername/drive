@@ -46,13 +46,12 @@ export class TerrainChunk {
     geometry.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(data.colors, 3));
     geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
-    geometry.computeVertexNormals();
 
     const mat = sharedMaterials?.terrainMaterial || new THREE.MeshStandardMaterial({
       vertexColors: true,
       roughness: 0.92,
       metalness: 0.05,
-      flatShading: true,
+      flatShading: false,
       side: THREE.DoubleSide,
     });
 
