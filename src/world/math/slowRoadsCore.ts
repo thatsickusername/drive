@@ -11,7 +11,7 @@ import {
   RoadMeshGenerator,
   BiomePresets,
   Vector3
-} from '../../../slow_roads_extracted_core/src/index.js';
+} from '../slowroads/index.js';
 import { RoadMode } from '../config/terrainConfig';
 import { cyrb128 } from './prng';
 

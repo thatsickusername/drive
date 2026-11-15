@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { RoadMeshGenerator } from '../../../slow_roads_extracted_core/src/index.js';
+import { RoadMeshGenerator } from '../slowroads/index.js';
 import { SlowRoadsPipeline } from '../math/slowRoadsCore';
 
 const SEGMENT_SIZE = 50; // 50 fine nodes per road segment (~50m continuous ribbon)

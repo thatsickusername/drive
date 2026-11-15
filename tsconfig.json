@@ -16,5 +16,5 @@
     "noFallthroughCasesInSwitch": true,
     "allowJs": true
   },
-  "include": ["src", "slow_roads_extracted_core/src"]
+  "include": ["src"]
 }
