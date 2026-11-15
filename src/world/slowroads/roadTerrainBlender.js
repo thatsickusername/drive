@@ -203,6 +203,28 @@ export class RoadTerrainBlender {
           bermOffset = 0.24 * depthMod * sideFactor * bermShape;
         }
 
+        // 4. Bench-Cut Hillside Cut-and-Fill Asymmetry:
+        // Evaluates whether this side of the road cuts into the uphill mountain face (cut bank)
+        // or overlooks the downhill valley (fill slope).
+        const hillsideDelta = terrainHeight - roadY;
+        const cutFillBias = Math.max(-1, Math.min(1, hillsideDelta / 3.5));
+
+        if (cutFillBias > 0.05) {
+          // Uphill Cut Flank: Dirt was excavated into the mountain.
+          // Forms an uphill drainage ditch/swale along the inner shoulder (dist ~3.2m - 4.2m)
+          const swaleDist = Math.abs(dist - 3.6);
+          if (swaleDist < 1.1) {
+            const swaleShape = 0.5 + 0.5 * Math.cos(Math.PI * (swaleDist / 1.1));
+            bermOffset -= 0.16 * cutFillBias * depthMod * swaleShape;
+          }
+        } else if (cutFillBias < -0.05) {
+          // Downhill Fill Flank: Excavated earth was pushed over the cliff edge.
+          // Builds up a taller, protective earthen fill-berm on the precipice side
+          const fillFactor = -cutFillBias;
+          const fillShape = bermDist < bermHalfWidth ? 0.5 + 0.5 * Math.cos(Math.PI * (bermDist / bermHalfWidth)) : 0;
+          bermOffset += 0.18 * fillFactor * depthMod * fillShape;
+        }
+
         // Combine into continuous macro off-road profile:
         // Whoops naturally concentrate in the wheel ruts where vehicle torque carves depressions
         const whoopFactor = Math.max(0, 1 - Math.abs(dist - rutCenter) / 2.0);
