@@ -185,7 +185,7 @@ export function getSlowRoadsPipeline(
     const baseH = heightmap.getXZ(x, z);
     const hit = spatialIndex.getClosestNode(x, z, 50);
     const distToRoad = hit ? hit.d : 999.0;
-    const roadMask = smoothstep(10.0, 26.0, distToRoad);
+    const roadMask = smoothstep(25.0, 55.0, distToRoad);
     const alpineDelta = computeAlpineElevation(x, z, baseH, seed || '20');
     return baseH + alpineDelta * roadMask;
   };

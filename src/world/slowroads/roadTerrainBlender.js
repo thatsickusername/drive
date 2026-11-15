@@ -166,80 +166,77 @@ export class RoadTerrainBlender {
         effectiveHalfWidth = this.halfWidth * (1.0 + widthWander * 0.28);
 
         // Non-linear probability distribution for rut depth:
-        // In the most probable/predominant scenario (~75-80% of the trail), deformation is mild (~0.35x - 0.50x or -0.10m to -0.14m).
-        // Only in occasional stretches (~20% of the trail: dips, wet basins, steep turns) does it surge up to full depth (1.0x or -0.28m).
+        // By default (>85% of the trail), ruts are very subtle and shallow (~-0.04m to -0.06m).
+        // Only in rare, occasional spots (mud hollows, tight bends) does it reach mild peak depth (~-0.14m).
         const rawWander = 0.50 + 0.30 * Math.sin(sLong * 0.012) + 0.20 * Math.cos(sLong * 0.0051 + 0.8);
         const normWander = Math.max(0, Math.min(1, rawWander));
-        const depthMod = 0.35 + 0.65 * Math.pow(normWander, 2.4);
-        const sideAsym = Math.sin(sLong * 0.009 + 0.9) * 0.35;
+        const depthMod = 0.25 + 0.75 * Math.pow(normWander, 3.2);
+        const sideAsym = Math.sin(sLong * 0.009 + 0.9) * 0.25;
         const sideFactor = 1.0 + side * sideAsym;
 
-        // Micro-Sinuosity Centerline Meander:
-        // Real vehicle tracks snake and weave naturally within the cleared corridor (+/-0.40m)
-        // rather than tracking a rigid mathematical vector.
-        const centerMeander = (Math.sin(sLong * 0.014) * 0.26 + Math.cos(sLong * 0.0071 + 1.3) * 0.16) * depthMod;
+        // Increased Micro-Sinuosity Centerline Wander:
+        // Real vehicle tracks snake and weave naturally within the cleared corridor (+/-0.65m)
+        // following continuous smooth wavelengths without any sign-flip steps.
+        const centerMeander = Math.sin(sLong * 0.012) * 0.42 + Math.cos(sLong * 0.0055 + 1.2) * 0.26;
         const trackSignedDist = (side * dist) - centerMeander;
         const trackDist = Math.abs(trackSignedDist);
-        const trackSide = Math.sign(trackSignedDist) || 1;
 
-        // Long-wave natural trail washboard / whoop undulations along vehicle paths
-        const trailWhoop = (Math.sin(sLong * 0.032) * 0.10 + Math.sin(sLong * 0.071 + 1.2) * 0.06) * depthMod;
+        // Long-wave subtle trail undulations along vehicle paths (smooth, no sharp ripples)
+        const trailWhoop = (Math.sin(sLong * 0.025) * 0.05 + Math.sin(sLong * 0.055 + 1.2) * 0.03) * depthMod;
 
-        // 1. Wide, heavily-traveled multi-vehicle wheel ruts:
-        // Positioned proportionally to current road width and weaving with micro-sinuosity
-        const rutCenter = effectiveHalfWidth * 0.58 + 0.20 * Math.sin(sLong * 0.018 + trackSide * 0.7);
-        const rutHalfWidth = effectiveHalfWidth * 0.42;
+        // 1. Soft, gentle wheel ruts:
+        // Wide, shallow scoops positioned proportionally to current road width (C1 smooth everywhere)
+        const rutCenter = effectiveHalfWidth * 0.58 + 0.12 * Math.sin(sLong * 0.016);
+        const rutHalfWidth = effectiveHalfWidth * 0.48; // Wide, soft cradle
 
         let rutOffset = 0;
         const rutDist = Math.abs(trackDist - rutCenter);
         if (rutDist < rutHalfWidth) {
-          // Smooth, rounded cosine cradle with zero derivative at bottom and edges (no kinks)
           const rutNorm = rutDist / rutHalfWidth;
           const rutShape = 0.5 + 0.5 * Math.cos(Math.PI * rutNorm);
-          rutOffset = -0.28 * depthMod * rutShape;
+          rutOffset = -0.14 * depthMod * rutShape;
         }
 
-        // 2. Broad, weathered center crown / hump between left and right ruts
+        // 2. Subtle, low center crown between left and right ruts
         let crownOffset = 0;
         if (trackDist < rutCenter) {
           const crownNorm = trackDist / rutCenter;
           const crownShape = 0.5 + 0.5 * Math.cos(Math.PI * crownNorm);
-          crownOffset = 0.09 * depthMod * crownShape;
+          crownOffset = 0.045 * depthMod * crownShape;
         }
 
-        // 3. Thick, rounded outer dirt berm (shoulder banks pushed outward by traffic)
+        // 3. Gentle, soft earthen shoulder berms
         let bermOffset = 0;
-        const bermPeak = effectiveHalfWidth * 1.03 + 0.25 * Math.sin(sLong * 0.013);
-        const bermHalfWidth = effectiveHalfWidth * 0.42;
+        const bermPeak = effectiveHalfWidth * 1.02 + 0.15 * Math.sin(sLong * 0.013);
+        const bermHalfWidth = effectiveHalfWidth * 0.45;
         const bermDist = Math.abs(dist - bermPeak);
         if (bermDist < bermHalfWidth) {
           const bermNorm = bermDist / bermHalfWidth;
           const bermShape = 0.5 + 0.5 * Math.cos(Math.PI * bermNorm);
-          bermOffset = 0.24 * depthMod * sideFactor * bermShape;
+          bermOffset = 0.12 * depthMod * sideFactor * bermShape;
         }
 
-        // 4. Bench-Cut Hillside Cut-and-Fill Asymmetry:
+        // 4. Continuous Bench-Cut Hillside Cut-and-Fill:
         // Evaluates whether this side of the road cuts into the uphill mountain face (cut bank)
-        // or overlooks the downhill valley (fill slope).
+        // or overlooks the downhill valley (fill slope) using continuous polynomial weights.
         const hillsideDelta = terrainHeight - roadY;
-        const cutFillBias = Math.max(-1, Math.min(1, hillsideDelta / 3.5));
+        const cutFillBias = Math.max(-1, Math.min(1, hillsideDelta / 4.0));
+        const uphillWeight = Math.max(0, cutFillBias);
+        const downhillWeight = Math.max(0, -cutFillBias);
 
-        if (cutFillBias > 0.05) {
-          // Uphill Cut Flank: Dirt was excavated into the mountain.
-          // Forms an uphill drainage ditch/swale along the inner shoulder
-          const swaleCenter = effectiveHalfWidth * 0.90;
-          const swaleWidth = effectiveHalfWidth * 0.28;
-          const swaleDist = Math.abs(dist - swaleCenter);
-          if (swaleDist < swaleWidth) {
-            const swaleShape = 0.5 + 0.5 * Math.cos(Math.PI * (swaleDist / swaleWidth));
-            bermOffset -= 0.16 * cutFillBias * depthMod * swaleShape;
-          }
-        } else if (cutFillBias < -0.05) {
-          // Downhill Fill Flank: Excavated earth was pushed over the cliff edge.
-          // Builds up a taller, protective earthen fill-berm on the precipice side
-          const fillFactor = -cutFillBias;
-          const fillShape = bermDist < bermHalfWidth ? 0.5 + 0.5 * Math.cos(Math.PI * (bermDist / bermHalfWidth)) : 0;
-          bermOffset += 0.18 * fillFactor * depthMod * fillShape;
+        // Uphill Cut Flank: Gentle drainage swale along the inner shoulder
+        const swaleCenter = effectiveHalfWidth * 0.90;
+        const swaleWidth = effectiveHalfWidth * 0.32;
+        const swaleDist = Math.abs(dist - swaleCenter);
+        if (swaleDist < swaleWidth) {
+          const swaleShape = 0.5 + 0.5 * Math.cos(Math.PI * (swaleDist / swaleWidth));
+          bermOffset -= 0.08 * uphillWeight * depthMod * swaleShape;
+        }
+
+        // Downhill Fill Flank: Gentle protective fill-bank
+        if (bermDist < bermHalfWidth) {
+          const fillShape = 0.5 + 0.5 * Math.cos(Math.PI * (bermDist / bermHalfWidth));
+          bermOffset += 0.09 * downhillWeight * depthMod * fillShape;
         }
 
         // 5. Dynamic Superelevation (Banked Curves & Apex Camber):

@@ -55,17 +55,14 @@ export function computeAlpineElevation(
 
   const totalRidge = (spineRidge + spurRidge + crags) * altMask;
 
-  // 4. Stratified bedrock ledges on high alpine rock zones
+  // 4. Smooth geological rock strata on high alpine summits (pure continuous harmonics, no sharp staircases)
   let bedrockLedges = 0.0;
-  if (baseHeight > 85.0) {
-    const stepSize = 3.6; // 3.6m vertical rock shelves
-    const shelfNoise = noise2D(x * 0.008 + 300.0, z * 0.008 + 300.0) * 2.5;
-    const phase = (baseHeight + totalRidge * 0.4 + shelfNoise) / stepSize;
-    const f = phase - Math.floor(phase);
-    // Flat rock shelf + ~40 degree climbable escarpment ramp
-    const ledgeDelta = (smoothstep(0.55, 0.90, f) - f) * stepSize;
-    const highRockMask = smoothstep(85.0, 140.0, baseHeight);
-    bedrockLedges = ledgeDelta * highRockMask * 0.55;
+  if (baseHeight > 95.0) {
+    const strataWavelength = 8.0;
+    const strataPhase = (baseHeight + totalRidge * 0.3) / strataWavelength;
+    const smoothStrata = Math.sin(strataPhase * Math.PI * 2) * 1.2;
+    const highRockMask = smoothstep(95.0, 145.0, baseHeight);
+    bedrockLedges = smoothStrata * highRockMask * 0.5;
   }
 
   return totalRidge + bedrockLedges;
