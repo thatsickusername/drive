@@ -248,10 +248,23 @@ export class RoadTerrainBlender {
         const lateralRatio = Math.min(1.0, dist / effectiveHalfWidth);
         const bankDelta = bankIntensity * side * lateralRatio * depthMod;
 
+        // 6. Gradient-Triggered Washboard Corrugations on Steep Inclines:
+        // Spaced at ~3.2m wavelength, activating only on mountain inclines (>5% slope)
+        // where tire slip under wheel torque carves rhythmic transverse corrugations.
+        let washboardDelta = 0;
+        const roadGradient = Math.abs((nodeB.p.y - nodeA.p.y) / 10.0);
+        if (roadGradient > 0.05) {
+          const gradeFactor = Math.min(1.0, (roadGradient - 0.05) / 0.07);
+          const trackProximity = Math.max(0, 1 - Math.abs(trackDist - rutCenter) / rutHalfWidth);
+          // 3.2m wavelength (k ≈ 1.96 rad/m) safely sampled on 1m mesh grid, 3.2cm peak amplitude
+          const ripple = Math.sin(sLong * 1.96) * 0.032;
+          washboardDelta = ripple * gradeFactor * trackProximity * depthMod;
+        }
+
         // Combine into continuous macro off-road profile:
         // Whoops naturally concentrate in the wheel ruts where vehicle torque carves depressions
         const whoopFactor = Math.max(0, 1 - Math.abs(trackDist - rutCenter) / (effectiveHalfWidth * 0.5));
-        profileDelta = rutOffset + crownOffset + bermOffset + trailWhoop * whoopFactor + bankDelta;
+        profileDelta = rutOffset + crownOffset + bermOffset + trailWhoop * whoopFactor + bankDelta + washboardDelta;
       }
 
       const roadSurfaceY = roadY + profileDelta;
