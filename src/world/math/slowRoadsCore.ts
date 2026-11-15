@@ -15,6 +15,16 @@ import {
 import { RoadMode } from '../config/terrainConfig';
 import { cyrb128 } from './prng';
 
+export interface SurveyorDebugInfo {
+  tailIndex: number;
+  tailPos: { x: number; y: number; z: number } | null;
+  headIndex: number;
+  totalRoadNodes: number;
+  totalFineNodes: number;
+  vehicleIndex: number;
+  lastViolation: string | null;
+}
+
 export interface SlowRoadsPipeline {
   heightmap: any;
   blender: any;
@@ -30,6 +40,7 @@ export interface SlowRoadsPipeline {
   getRoadHit: (x: number, z: number) => any;
   getSpawnPosition: () => { x: number; y: number; z: number; heading: number };
   ensureRoadHorizon: (carX: number, carZ: number, horizonMeters?: number) => void;
+  getSurveyorDebugInfo: () => SurveyorDebugInfo;
 }
 
 const pipelineCache = new Map<string, SlowRoadsPipeline>();
@@ -59,7 +70,13 @@ export function getSlowRoadsPipeline(
     maxStartElev: 500,
     maxGradLon: 35,
     direction: { x: 1, y: 0, z: 0.2 },
-    turnbackLimits: [6.0, 6.0, 6.0, 6.0],
+    turnTrackers: [
+      { i: 0, m: 15, r: 15, a: 6.0, daThreshold: 6.0 },
+      { i: 1, m: 30, r: 10, a: 8.0, daThreshold: 8.0, gThreshold: 45 },
+      { i: 2, m: 60, r: 15, a: 12.0, daThreshold: 12.0, gThreshold: 55 },
+      { i: 3, m: 120, r: 20, a: 16.0, daThreshold: 16.0 }
+    ],
+    turnbackLimits: [6.0, 8.0, 12.0, 16.0],
     canEmergencyBridge: true
   };
 
@@ -141,11 +158,24 @@ export function getSlowRoadsPipeline(
     spawnNode = roadNodes[fallbackIdx];
   }
   const startHead = spawnNode || ms.head || { p: new Vector3(0, 70, 0), a: 0 };
+  let roadHeading = 0;
+  if (spawnNode && spawnNode.next) {
+    const dx = spawnNode.next.p.x - spawnNode.p.x;
+    const dz = spawnNode.next.p.z - spawnNode.p.z;
+    roadHeading = Math.atan2(dx, dz);
+  } else if (startHead && startHead.next) {
+    const dx = startHead.next.p.x - startHead.p.x;
+    const dz = startHead.next.p.z - startHead.p.z;
+    roadHeading = Math.atan2(dx, dz);
+  } else {
+    roadHeading = Math.atan2(Math.sin(startHead.a || 0), Math.cos(startHead.a || 0));
+  }
+
   const startPose = {
     x: startHead.p.x,
     y: startHead.p.y,
     z: startHead.p.z,
-    heading: startHead.a || 0
+    heading: roadHeading
   };
 
   const getNaturalHeight = (x: number, z: number): number => {
@@ -199,6 +229,7 @@ export function getSlowRoadsPipeline(
     }
 
     const previousTail = ms.tail;
+    const initialTailIndex = ms.tail?.i || 0;
     let stepCount = 0;
     while ((ms.tail?.i || 0) < targetTailIndex && stepCount < 500) {
       updateSurveyorTarget();
@@ -206,13 +237,19 @@ export function getSlowRoadsPipeline(
       stepCount++;
     }
 
+    const didRetract = (ms.tail?.i || 0) < initialTailIndex;
+
     // Subdivide new fine Catmull-Rom nodes
     while (ms.fineTail && ms.fineTail.next && ms.fineTail.next.next) {
       surveyor.extendFine();
     }
 
-    // Update spatial index with newly added lookahead segment
-    if (previousTail && previousTail.next) {
+    // Update spatial index: if surveyor retracted, completely re-index from ms.head
+    // to eliminate stale/retracted nodes from spatial tiles; otherwise append newly surveyed segment.
+    if (didRetract || !previousTail || !previousTail.next) {
+      spatialIndex.initialise(ms.head);
+      spatialIndex.update();
+    } else {
       spatialIndex.lookaheadNode = previousTail.next;
       spatialIndex.update();
     }
@@ -249,7 +286,16 @@ export function getSlowRoadsPipeline(
     getNaturalHeight,
     getRoadHit,
     getSpawnPosition,
-    ensureRoadHorizon
+    ensureRoadHorizon,
+    getSurveyorDebugInfo: (): SurveyorDebugInfo => ({
+      tailIndex: ms.tail?.i ?? 0,
+      tailPos: ms.tail ? { x: ms.tail.p.x, y: ms.tail.p.y, z: ms.tail.p.z } : null,
+      headIndex: ms.head?.i ?? 0,
+      totalRoadNodes: roadNodes.length,
+      totalFineNodes: fineNodes.length,
+      vehicleIndex: ms.vehicleIndex ?? 0,
+      lastViolation: (surveyor as any).trackerViolation || null
+    })
   };
 
   pipelineCache.set(cacheKey, pipeline);

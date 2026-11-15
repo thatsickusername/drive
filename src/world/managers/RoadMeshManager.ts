@@ -9,6 +9,7 @@ export class RoadMeshManager {
   private roadMeshGen: any;
   private pipeline: SlowRoadsPipeline;
   private segments = new Map<number, THREE.Mesh>();
+  private segmentSignatures = new Map<number, string>();
   private material: THREE.Material;
 
   constructor(scene: THREE.Scene, pipeline: SlowRoadsPipeline) {
@@ -33,35 +34,60 @@ export class RoadMeshManager {
     // Check if new continuous segments can be built
     const totalSegments = Math.floor((fineNodes.length - 1) / SEGMENT_SIZE);
 
-    for (let segIdx = 0; segIdx < totalSegments; segIdx++) {
-      if (this.segments.has(segIdx)) continue;
+    // 1. Cull any stale/retracted segment meshes beyond current totalSegments
+    for (const [segIdx, mesh] of this.segments.entries()) {
+      if (segIdx >= totalSegments) {
+        this.scene.remove(mesh);
+        mesh.geometry.dispose();
+        this.segments.delete(segIdx);
+        this.segmentSignatures.delete(segIdx);
+      }
+    }
 
+    // 2. Build or update continuous segments
+    for (let segIdx = 0; segIdx < totalSegments; segIdx++) {
       const startIdx = segIdx * SEGMENT_SIZE;
       // Overlap by 1 node so segment N seamlessly connects with segment N+1
       const endIdx = Math.min(startIdx + SEGMENT_SIZE + 1, fineNodes.length);
       const segmentNodes = fineNodes.slice(startIdx, endIdx);
+      if (segmentNodes.length < 2) continue;
 
-      if (segmentNodes.length >= 2) {
-        const meshData = this.roadMeshGen.generateRoadMesh(segmentNodes);
-        if (meshData && meshData.positions && meshData.positions.length > 0) {
-          const geo = new THREE.BufferGeometry();
-          // Road positions sit 0.04m above carved terrain bed to eliminate z-fighting
-          const pos = new Float32Array(meshData.positions.length);
-          for (let i = 0; i < meshData.positions.length; i += 3) {
-            pos[i] = meshData.positions[i];
-            pos[i + 1] = meshData.positions[i + 1] + 0.04;
-            pos[i + 2] = meshData.positions[i + 2];
-          }
-          geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-          geo.setAttribute('normal', new THREE.BufferAttribute(meshData.normals, 3));
-          geo.setAttribute('uv', new THREE.BufferAttribute(meshData.uvs, 2));
-          geo.setIndex(new THREE.BufferAttribute(meshData.indices, 1));
+      const p0 = segmentNodes[0].p;
+      const p1 = segmentNodes[segmentNodes.length - 1].p;
+      const signature = `${p0.x.toFixed(1)},${p0.z.toFixed(1)}_${p1.x.toFixed(1)},${p1.z.toFixed(1)}`;
 
-          const mesh = new THREE.Mesh(geo, this.material);
-          mesh.receiveShadow = true;
-          this.scene.add(mesh);
-          this.segments.set(segIdx, mesh);
+      if (this.segments.has(segIdx)) {
+        if (this.segmentSignatures.get(segIdx) === signature) {
+          continue; // Mesh matches current road path geometry
         }
+        // Mesh signature mismatch: road retracted or re-routed, remove obsolete ghost mesh
+        const oldMesh = this.segments.get(segIdx)!;
+        this.scene.remove(oldMesh);
+        oldMesh.geometry.dispose();
+        this.segments.delete(segIdx);
+        this.segmentSignatures.delete(segIdx);
+      }
+
+      const meshData = this.roadMeshGen.generateRoadMesh(segmentNodes);
+      if (meshData && meshData.positions && meshData.positions.length > 0) {
+        const geo = new THREE.BufferGeometry();
+        // Road positions sit 0.04m above carved terrain bed to eliminate z-fighting
+        const pos = new Float32Array(meshData.positions.length);
+        for (let i = 0; i < meshData.positions.length; i += 3) {
+          pos[i] = meshData.positions[i];
+          pos[i + 1] = meshData.positions[i + 1] + 0.04;
+          pos[i + 2] = meshData.positions[i + 2];
+        }
+        geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        geo.setAttribute('normal', new THREE.BufferAttribute(meshData.normals, 3));
+        geo.setAttribute('uv', new THREE.BufferAttribute(meshData.uvs, 2));
+        geo.setIndex(new THREE.BufferAttribute(meshData.indices, 1));
+
+        const mesh = new THREE.Mesh(geo, this.material);
+        mesh.receiveShadow = true;
+        this.scene.add(mesh);
+        this.segments.set(segIdx, mesh);
+        this.segmentSignatures.set(segIdx, signature);
       }
     }
 
@@ -77,10 +103,20 @@ export class RoadMeshManager {
             this.scene.remove(mesh);
             mesh.geometry.dispose();
             this.segments.delete(segIdx);
+            this.segmentSignatures.delete(segIdx);
           }
         }
       }
     }
+  }
+
+  public getDebugInfo(): { segmentCount: number; minSegment: number; maxSegment: number } {
+    const keys = Array.from(this.segments.keys());
+    return {
+      segmentCount: keys.length,
+      minSegment: keys.length > 0 ? Math.min(...keys) : 0,
+      maxSegment: keys.length > 0 ? Math.max(...keys) : 0,
+    };
   }
 
   public dispose(): void {
@@ -89,6 +125,7 @@ export class RoadMeshManager {
       mesh.geometry.dispose();
     }
     this.segments.clear();
+    this.segmentSignatures.clear();
     this.material.dispose();
   }
 }

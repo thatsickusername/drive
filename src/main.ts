@@ -42,6 +42,35 @@ class Game {
   private lastHudUpdateTime: number = 0;
   private hudElement!: HTMLElement;
   private mapPickerElement!: HTMLElement;
+  private roadDebugHudElement!: HTMLElement;
+  private isDebugHudCollapsed: boolean = false;
+  private spawnPosition = new THREE.Vector3();
+  private totalOdometerMeters: number = 0;
+  private lastOdometerPos = new THREE.Vector3();
+  private latestDebugReportString: string = '';
+  private dbgEls!: {
+    seed: HTMLElement;
+    mode: HTMLElement;
+    carPos: HTMLElement;
+    speed: HTMLElement;
+    heading: HTMLElement;
+    dist: HTMLElement;
+    odom: HTMLElement;
+    nodeIdx: HTMLElement;
+    latOff: HTMLElement;
+    deltaY: HTMLElement;
+    tailIdx: HTMLElement;
+    buffer: HTMLElement;
+    travelDir: HTMLElement;
+    status: HTMLElement;
+    violation: HTMLElement;
+    fineNodes: HTMLElement;
+    meshes: HTMLElement;
+    chunks: HTMLElement;
+    body: HTMLElement;
+    copyBtn: HTMLElement;
+    toggleBtn: HTMLElement;
+  };
   private carLinvel = new THREE.Vector3();
 
   public async start(): Promise<void> {
@@ -103,6 +132,9 @@ class Game {
       if (this.network) {
         this.network.sendRespawn([spawn.x, spawn.y, spawn.z], spawn.heading);
       }
+      this.spawnPosition.copy(this.car.mesh.position);
+      this.lastOdometerPos.copy(this.car.mesh.position);
+      this.totalOdometerMeters = 0;
       return;
     }
 
@@ -112,6 +144,9 @@ class Game {
     const syaw = this.selfSlot ? this.selfSlot.spawnYaw : 0;
     this.car.reset(sx, sy, sz, syaw);
     this.cameraDirector.initPosition(this.car.mesh.position, this.car.mesh.quaternion);
+    this.spawnPosition.copy(this.car.mesh.position);
+    this.lastOdometerPos.copy(this.car.mesh.position);
+    this.totalOdometerMeters = 0;
     if (this.network) {
       this.network.sendRespawn([sx, sy, sz], syaw);
     }
@@ -279,6 +314,10 @@ class Game {
       this.cameraDirector.initPosition(this.car.mesh.position, this.car.mesh.quaternion);
     }
 
+    this.spawnPosition.copy(this.car.mesh.position);
+    this.lastOdometerPos.copy(this.car.mesh.position);
+    this.totalOdometerMeters = 0;
+
     this.isLoadingMap = false;
     this.renderMapPickerUI();
 
@@ -400,6 +439,7 @@ class Game {
     this.networkHudElement.style.zIndex = '999';
     document.body.appendChild(this.networkHudElement);
     this.updateNetworkHUD();
+    this.setupRoadDebugHUD();
   }
 
   private updateNetworkHUD(): void {
@@ -497,11 +537,19 @@ class Game {
     // 8. Close Off-Road Follow Camera Director (Tight tracking with gentle speed-lag)
     this.cameraDirector.update(delta, this.car.mesh.position, this.car.mesh.quaternion, this.carLinvel);
 
+    // Track vehicle odometer distance
+    const stepDist = this.car.mesh.position.distanceTo(this.lastOdometerPos);
+    if (stepDist > 0.05 && stepDist < 50) {
+      this.totalOdometerMeters += stepDist;
+      this.lastOdometerPos.copy(this.car.mesh.position);
+    }
+
     // 9. Throttled Telemetry HUD Update (15Hz: eliminates DOM layout thrashing in 120Hz render loop)
     if (currentTime - this.lastHudUpdateTime >= 66) {
       this.lastHudUpdateTime = currentTime;
       const tele = this.car.getDrivetrainTelemetry();
       this.updateHUD(tele);
+      this.updateRoadDebugHUD(tele);
     }
 
     // 10. Render Three.js scene (PBR + Tone Mapping)
@@ -593,6 +641,205 @@ class Game {
       <div>FL: ${slipFL} | FR: ${slipFR} || RL: ${slipRL} | RR: ${slipRR}</div>
       <div style="margin-top:6px;color:#aaa;font-size:11px;">[W/S | RT/LT] Throttle/Reverse | [Space/RB] Handbrake | [L/LB] 4H/4L | [Left Stick] Steer | [R/Back] Reset</div>
     `;
+  }
+
+  private setupRoadDebugHUD(): void {
+    this.roadDebugHudElement = document.createElement('div');
+    this.roadDebugHudElement.id = 'road-debug-hud';
+    this.roadDebugHudElement.style.position = 'fixed';
+    this.roadDebugHudElement.style.bottom = '16px';
+    this.roadDebugHudElement.style.right = '16px';
+    this.roadDebugHudElement.style.backgroundColor = 'rgba(14, 18, 22, 0.92)';
+    this.roadDebugHudElement.style.border = '1px solid rgba(74, 222, 128, 0.4)';
+    this.roadDebugHudElement.style.borderRadius = '6px';
+    this.roadDebugHudElement.style.padding = '10px 14px';
+    this.roadDebugHudElement.style.fontFamily = 'monospace';
+    this.roadDebugHudElement.style.fontSize = '12px';
+    this.roadDebugHudElement.style.lineHeight = '1.45';
+    this.roadDebugHudElement.style.color = '#e0e0e0';
+    this.roadDebugHudElement.style.zIndex = '999';
+    this.roadDebugHudElement.style.minWidth = '340px';
+    this.roadDebugHudElement.style.maxWidth = '400px';
+    this.roadDebugHudElement.style.boxShadow = '0 6px 20px rgba(0,0,0,0.5)';
+    this.roadDebugHudElement.style.userSelect = 'text';
+
+    this.roadDebugHudElement.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;border-bottom:1px solid rgba(255,255,255,0.15);padding-bottom:4px;">
+        <span style="font-weight:bold;color:#4ade80;">🛣️ ROAD STREAMING TELEMETRY</span>
+        <div style="display:flex;gap:6px;">
+          <button id="dbg-copy-btn" style="background:#15803d;color:#fff;border:none;border-radius:3px;padding:2px 7px;font-family:monospace;font-size:11px;cursor:pointer;font-weight:bold;">Copy</button>
+          <button id="dbg-toggle-btn" style="background:#334155;color:#fff;border:none;border-radius:3px;padding:2px 7px;font-family:monospace;font-size:11px;cursor:pointer;">_</button>
+        </div>
+      </div>
+      <div id="dbg-body">
+        <div>Seed: <strong id="dbg-seed" style="color:#60a5fa;"></strong> | Mode: <strong id="dbg-mode" style="color:#f59e0b;"></strong></div>
+        <div>Car Pos: <strong id="dbg-car-pos"></strong></div>
+        <div>Speed: <strong id="dbg-speed"></strong> | Heading: <strong id="dbg-heading"></strong></div>
+        <div>Distance: <strong id="dbg-dist" style="color:#38bdf8;"></strong> (Odom: <span id="dbg-odom"></span>)</div>
+        <div style="margin-top:4px;border-top:1px dashed rgba(255,255,255,0.12);padding-top:4px;">
+          Closest Node: <strong id="dbg-node-idx" style="color:#facc15;"></strong> | Lat Off: <span id="dbg-lat-off"></span>
+        </div>
+        <div>Car vs Road: <strong id="dbg-delta-y"></strong></div>
+        <div style="margin-top:4px;border-top:1px dashed rgba(255,255,255,0.12);padding-top:4px;">
+          Surveyor Tail: <strong id="dbg-tail-idx" style="color:#a78bfa;"></strong> (Buffer: <span id="dbg-buffer"></span>)
+        </div>
+        <div>Heading Along Road: <span id="dbg-travel-dir"></span></div>
+        <div>Status: <span id="dbg-status"></span></div>
+        <div id="dbg-violation-row" style="display:none;color:#f87171;font-size:11px;">Violation: <span id="dbg-violation"></span></div>
+        <div style="margin-top:4px;border-top:1px dashed rgba(255,255,255,0.12);padding-top:4px;font-size:11px;color:#94a3b8;">
+          Fine: <span id="dbg-fine-nodes"></span> | Meshes: <span id="dbg-meshes"></span> | Chunks: <span id="dbg-chunks"></span>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(this.roadDebugHudElement);
+
+    const copyBtn = document.getElementById('dbg-copy-btn') as HTMLElement;
+    const toggleBtn = document.getElementById('dbg-toggle-btn') as HTMLElement;
+    const body = document.getElementById('dbg-body') as HTMLElement;
+
+    this.dbgEls = {
+      seed: document.getElementById('dbg-seed') as HTMLElement,
+      mode: document.getElementById('dbg-mode') as HTMLElement,
+      carPos: document.getElementById('dbg-car-pos') as HTMLElement,
+      speed: document.getElementById('dbg-speed') as HTMLElement,
+      heading: document.getElementById('dbg-heading') as HTMLElement,
+      dist: document.getElementById('dbg-dist') as HTMLElement,
+      odom: document.getElementById('dbg-odom') as HTMLElement,
+      nodeIdx: document.getElementById('dbg-node-idx') as HTMLElement,
+      latOff: document.getElementById('dbg-lat-off') as HTMLElement,
+      deltaY: document.getElementById('dbg-delta-y') as HTMLElement,
+      tailIdx: document.getElementById('dbg-tail-idx') as HTMLElement,
+      buffer: document.getElementById('dbg-buffer') as HTMLElement,
+      travelDir: document.getElementById('dbg-travel-dir') as HTMLElement,
+      status: document.getElementById('dbg-status') as HTMLElement,
+      violation: document.getElementById('dbg-violation') as HTMLElement,
+      fineNodes: document.getElementById('dbg-fine-nodes') as HTMLElement,
+      meshes: document.getElementById('dbg-meshes') as HTMLElement,
+      chunks: document.getElementById('dbg-chunks') as HTMLElement,
+      body,
+      copyBtn,
+      toggleBtn,
+    };
+
+    copyBtn.onclick = () => {
+      if (!this.latestDebugReportString) return;
+      navigator.clipboard.writeText(this.latestDebugReportString).then(() => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => {
+          copyBtn.textContent = 'Copy';
+        }, 2000);
+      });
+    };
+
+    const toggleHud = () => {
+      this.isDebugHudCollapsed = !this.isDebugHudCollapsed;
+      body.style.display = this.isDebugHudCollapsed ? 'none' : 'block';
+      toggleBtn.textContent = this.isDebugHudCollapsed ? '+' : '_';
+    };
+
+    toggleBtn.onclick = toggleHud;
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'F2') {
+        toggleHud();
+      }
+    });
+  }
+
+  private updateRoadDebugHUD(tele: ReturnType<Car['getDrivetrainTelemetry']>): void {
+    if (!this.dbgEls || !this.car) return;
+
+    const pos = this.car.mesh.position;
+    const rot = this.car.body.rotation();
+    const euler = new THREE.Euler().setFromQuaternion(
+      new THREE.Quaternion(rot.x, rot.y, rot.z, rot.w),
+      'YXZ'
+    );
+    const yawDeg = THREE.MathUtils.radToDeg(euler.y).toFixed(1);
+    const straightDist = pos.distanceTo(this.spawnPosition);
+
+    this.dbgEls.carPos.textContent = `X:${pos.x.toFixed(1)} Y:${pos.y.toFixed(1)} Z:${pos.z.toFixed(1)}`;
+    this.dbgEls.speed.textContent = `${tele.speedKmh} km/h`;
+    this.dbgEls.heading.textContent = `${yawDeg}°`;
+    this.dbgEls.dist.textContent = straightDist >= 1000 ? `${(straightDist / 1000).toFixed(2)} km` : `${straightDist.toFixed(0)} m`;
+    this.dbgEls.odom.textContent = this.totalOdometerMeters >= 1000 ? `${(this.totalOdometerMeters / 1000).toFixed(2)} km` : `${this.totalOdometerMeters.toFixed(0)} m`;
+
+    if (this.currentMapType !== 'PROCEDURAL' || !this.terrainManager) {
+      this.dbgEls.seed.textContent = 'PROVING_GROUND';
+      this.dbgEls.mode.textContent = 'TRAINING';
+      this.dbgEls.nodeIdx.textContent = 'N/A';
+      this.dbgEls.latOff.textContent = 'N/A';
+      this.dbgEls.deltaY.textContent = 'N/A';
+      this.dbgEls.tailIdx.textContent = 'N/A';
+      this.dbgEls.buffer.textContent = 'N/A';
+      this.dbgEls.status.innerHTML = '<span style="color:#60a5fa;">TRAINING MAP ACTIVE</span>';
+      this.dbgEls.fineNodes.textContent = '0';
+      this.dbgEls.meshes.textContent = '0';
+      this.dbgEls.chunks.textContent = '0';
+      return;
+    }
+
+    const pipeline = getSlowRoadsPipeline(this.currentSeed, this.currentRoadMode);
+    const hit = pipeline.spatialIndex?.getClosestNode(pos.x, pos.z, 300);
+    const closestNode = hit ? hit.n : (pipeline.roadNodes.length > 0 ? pipeline.roadNodes[0] : null);
+    const roadY = hit ? hit.n.p.y : (closestNode ? closestNode.p.y : 0);
+    const deltaY = pos.y - roadY;
+    const distToRoad = hit ? hit.d : 0;
+    const surveyorInfo = pipeline.getSurveyorDebugInfo();
+    const roadMeshInfo = this.terrainManager.roadMeshManager.getDebugInfo();
+
+    const carNodeIndex = closestNode ? closestNode.i : 0;
+    const tailIndex = surveyorInfo.tailIndex;
+    const bufferNodes = Math.max(0, tailIndex - carNodeIndex);
+    const bufferMeters = bufferNodes * 10;
+
+    this.dbgEls.seed.textContent = this.currentSeed;
+    this.dbgEls.mode.textContent = this.currentRoadMode;
+    this.dbgEls.nodeIdx.textContent = closestNode ? `#${closestNode.i} (${closestNode.p.x.toFixed(1)}, ${closestNode.p.z.toFixed(1)})` : 'N/A';
+    this.dbgEls.latOff.textContent = hit ? `${hit.d.toFixed(1)}m (${hit.s > 0 ? 'Right' : 'Left'})` : 'Off-road';
+    this.dbgEls.deltaY.textContent = `${deltaY >= 0 ? '+' : ''}${deltaY.toFixed(2)}m (Road Y: ${roadY.toFixed(1)}m)`;
+    this.dbgEls.tailIdx.textContent = `#${tailIndex}${surveyorInfo.tailPos ? ` (${surveyorInfo.tailPos.x.toFixed(1)}, ${surveyorInfo.tailPos.z.toFixed(1)})` : ''}`;
+    this.dbgEls.buffer.textContent = `${bufferMeters}m (${bufferNodes} nodes)`;
+
+    const headIndex = surveyorInfo.headIndex;
+    const distToHeadMeters = Math.max(0, (carNodeIndex - headIndex) * 10);
+
+    if (carNodeIndex <= headIndex + 2) {
+      this.dbgEls.travelDir.innerHTML = `<span style="color:#ef4444;font-weight:bold;">⚠️ AT ROAD HEAD (#${headIndex}) - DEAD END</span>`;
+      this.dbgEls.status.innerHTML = `<span style="color:#ef4444;font-weight:bold;">🔴 DEAD END: ROAD HEAD REACHED (${distToHeadMeters}m from head)</span>`;
+    } else {
+      this.dbgEls.travelDir.innerHTML = `<span style="color:#4ade80;">FORWARD (+${bufferMeters}m ahead | ${distToHeadMeters}m behind)</span>`;
+      if (bufferMeters <= 50) {
+        this.dbgEls.status.innerHTML = `<span style="color:#ef4444;font-weight:bold;">🔴 ROAD ENDED / STALLED (${bufferMeters}m)</span>`;
+      } else if (bufferMeters < 300) {
+        this.dbgEls.status.innerHTML = `<span style="color:#f59e0b;font-weight:bold;">🟡 BUFFER LOW (${bufferMeters}m)</span>`;
+      } else {
+        this.dbgEls.status.innerHTML = `<span style="color:#4ade80;font-weight:bold;">🟢 STREAMING OK (+${bufferMeters}m)</span>`;
+      }
+    }
+
+    const vRow = document.getElementById('dbg-violation-row');
+    if (surveyorInfo.lastViolation && vRow) {
+      vRow.style.display = 'block';
+      this.dbgEls.violation.textContent = surveyorInfo.lastViolation;
+    } else if (vRow) {
+      vRow.style.display = 'none';
+    }
+
+    this.dbgEls.fineNodes.textContent = `${surveyorInfo.totalFineNodes}`;
+    this.dbgEls.meshes.textContent = `${roadMeshInfo.segmentCount} (Seg ${roadMeshInfo.minSegment}..${roadMeshInfo.maxSegment})`;
+    this.dbgEls.chunks.textContent = `${this.terrainManager.chunks.size}`;
+
+    this.latestDebugReportString = `=== SLOW ROADS STREAMING DIAGNOSTICS ===
+Seed: ${this.currentSeed} | Mode: ${this.currentRoadMode}
+Dist From Spawn: ${straightDist.toFixed(1)}m | Odometer: ${this.totalOdometerMeters.toFixed(1)}m | Speed: ${tele.speedKmh} km/h
+Car Pos: (${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)}) | Heading: ${yawDeg}°
+Closest Road Node: #${carNodeIndex} at (${closestNode?.p?.x.toFixed(1)}, ${closestNode?.p?.y.toFixed(1)}, ${closestNode?.p?.z.toFixed(1)}) | DistToRoad: ${distToRoad.toFixed(1)}m | Car-Road ΔY: ${deltaY.toFixed(2)}m
+Surveyor Tail: #${tailIndex} at (${surveyorInfo.tailPos?.x.toFixed(1)}, ${surveyorInfo.tailPos?.z.toFixed(1)}) | Head: #${surveyorInfo.headIndex}
+Buffer Ahead: ${bufferMeters}m (${bufferNodes} nodes)
+Surveyor Last Violation: ${surveyorInfo.lastViolation ?? 'None'}
+Nodes: Road=${surveyorInfo.totalRoadNodes}, Fine=${surveyorInfo.totalFineNodes} | Road Meshes: ${roadMeshInfo.segmentCount} (Seg ${roadMeshInfo.minSegment}..${roadMeshInfo.maxSegment}) | Active Chunks: ${this.terrainManager.chunks.size}
+Timestamp: ${new Date().toISOString()}`;
   }
 }
 
