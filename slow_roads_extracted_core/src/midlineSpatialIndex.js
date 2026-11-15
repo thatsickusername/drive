@@ -3,7 +3,7 @@
 // Enables O(1) query of the nearest road segment and distance for terrain carving and meshing
 
 const TILE_OFFSET = 1000;
-const SEGMENT_CHUNK_SIZE = 20;
+const SEGMENT_CHUNK_SIZE = 6;
 
 function closestPointOnSegment(px, pz, ax, az, bx, bz) {
   const abx = bx - ax;
@@ -35,23 +35,21 @@ function distSqToNode(px, pz, node) {
 }
 
 export class MidlineSpatialIndex {
-  constructor(tileSize = 400) {
+  constructor(tileSize = 100) {
     this.tileSize = tileSize;
     this.tileIndex = {};
     this.lastSeenIndex = {};
     this.lookaheadNode = null;
-    this.margin = 120;
-    this.step = this.margin * 2;
-    if (this.step > this.tileSize) this.step *= 0.5;
+    this.margin = 60;
+    this.step = Math.min(this.tileSize * 0.5, 50);
   }
 
-  initialise(headNode, margin = 120) {
+  initialise(headNode, margin = 60) {
     this.tileIndex = {};
     this.lastSeenIndex = {};
     this.lookaheadNode = headNode;
     this.margin = margin;
-    this.step = margin * 2;
-    if (this.step > this.tileSize) this.step *= 0.5;
+    this.step = Math.min(this.tileSize * 0.5, 50);
   }
 
   update(horizonNodeIndex = null) {
@@ -62,8 +60,7 @@ export class MidlineSpatialIndex {
         break;
       }
 
-      let ptx = null;
-      let ptz = null;
+      const coveredTiles = new Set();
 
       for (let ox = -this.margin; ox <= this.margin; ox += this.step) {
         for (let oz = -this.margin; oz <= this.margin; oz += this.step) {
@@ -72,9 +69,9 @@ export class MidlineSpatialIndex {
           const tx = Math.floor(mx / this.tileSize) + TILE_OFFSET;
           const tz = Math.floor(mz / this.tileSize) + TILE_OFFSET;
 
-          if (tx === ptx && tz === ptz) continue;
-          ptx = tx;
-          ptz = tz;
+          const key = (tx << 16) | tz;
+          if (coveredTiles.has(key)) continue;
+          coveredTiles.add(key);
 
           if (!this.tileIndex[tx]) {
             this.tileIndex[tx] = {};
@@ -93,7 +90,7 @@ export class MidlineSpatialIndex {
             curSeg.tail.i < this.lookaheadNode.i - 2 ||
             curSeg.tail.i - curSeg.head.i >= SEGMENT_CHUNK_SIZE
           ) {
-            if (curSeg && curSeg.tail.i - curSeg.head.i > 15) {
+            if (curSeg && curSeg.tail.i - curSeg.head.i > 3) {
               curSeg.mid = curSeg.head;
               const half = (curSeg.tail.i + curSeg.head.i) / 2;
               while (curSeg.mid.i < half && curSeg.mid.next) {
@@ -221,10 +218,9 @@ export class MidlineSpatialIndex {
         seg.tail.p.x,
         seg.tail.p.z
       );
-      let useMidA = false;
-      let useMidB = false;
+      let cand = closest.t < 0.5 ? seg.head : seg.tail;
 
-      if (seg.mid && closest.dSq < closestDistSq * 2) {
+      if (seg.mid) {
         const cpA = closestPointOnSegment(
           worldX,
           worldZ,
@@ -241,26 +237,19 @@ export class MidlineSpatialIndex {
           seg.tail.p.x,
           seg.tail.p.z
         );
-        if (cpA.dSq < cpB.dSq) {
-          if (cpA.dSq < closest.dSq) {
-            closest = cpA;
-            useMidA = true;
-          }
-        } else {
-          if (cpB.dSq < closest.dSq) {
-            closest = cpB;
-            useMidB = true;
-          }
+        if (cpA.dSq < closest.dSq) {
+          closest = cpA;
+          cand = cpA.t < 0.5 ? seg.head : seg.mid;
+        }
+        if (cpB.dSq < closest.dSq) {
+          closest = cpB;
+          cand = cpB.t < 0.5 ? seg.mid : seg.tail;
         }
       }
 
-      if (closest.dSq < closestDistSq * 1.25) {
+      if (closest.dSq < closestDistSq) {
         closestDistSq = closest.dSq;
-        if (closest.t < 0.5) {
-          closestNode = useMidB ? seg.mid : seg.head;
-        } else {
-          closestNode = useMidA ? seg.mid : seg.tail;
-        }
+        closestNode = cand;
       }
     }
 

@@ -126,7 +126,7 @@ export function getSlowRoadsPipeline(
 
   const heightmap = surveyor.heightmap || new LayeredHeightmap(hmConfig);
   const blender = new RoadTerrainBlender(mlConfig);
-  const spatialIndex = new MidlineSpatialIndex(400);
+  const spatialIndex = new MidlineSpatialIndex(100);
   const roadMeshGen = new RoadMeshGenerator(mlConfig);
 
   // 3. Use MidlineSpatialIndex to index surveyed road nodes
