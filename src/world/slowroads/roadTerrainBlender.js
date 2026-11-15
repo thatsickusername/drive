@@ -155,8 +155,15 @@ export class RoadTerrainBlender {
       const isBridge = !!(nodeA.bridge || nodeB.bridge);
       let profileDelta = 0;
 
+      let effectiveHalfWidth = this.halfWidth;
+
       if (!isBridge) {
         const sLong = ((nodeA.i || 0) + t) * 10.0;
+
+        // Dynamic Road Width Breathing:
+        // Smoothly modulates road width between ~5.8m (technical bottleneck) and ~10.4m (passing turnout/apron)
+        const widthWander = Math.sin(sLong * 0.0062) * 0.65 + Math.cos(sLong * 0.0028 + 1.2) * 0.45;
+        effectiveHalfWidth = this.halfWidth * (1.0 + widthWander * 0.28);
 
         // Non-linear probability distribution for rut depth:
         // In the most probable/predominant scenario (~75-80% of the trail), deformation is mild (~0.35x - 0.50x or -0.10m to -0.14m).
@@ -171,9 +178,9 @@ export class RoadTerrainBlender {
         const trailWhoop = (Math.sin(sLong * 0.032) * 0.10 + Math.sin(sLong * 0.071 + 1.2) * 0.06) * depthMod;
 
         // 1. Wide, heavily-traveled multi-vehicle wheel ruts:
-        // Positioned wider at ~2.3m lateral offset (4.6m total track separation across 8m roadbed)
-        const rutCenter = 2.30 + 0.30 * Math.sin(sLong * 0.018 + side * 0.7);
-        const rutHalfWidth = 1.65; // Wide 3.3m diameter scooped wheel lane
+        // Positioned proportionally to current road width
+        const rutCenter = effectiveHalfWidth * 0.58 + 0.25 * Math.sin(sLong * 0.018 + side * 0.7);
+        const rutHalfWidth = effectiveHalfWidth * 0.42;
 
         let rutOffset = 0;
         const rutDist = Math.abs(dist - rutCenter);
@@ -194,8 +201,8 @@ export class RoadTerrainBlender {
 
         // 3. Thick, rounded outer dirt berm (shoulder banks pushed outward by traffic)
         let bermOffset = 0;
-        const bermPeak = 4.10 + 0.35 * Math.sin(sLong * 0.013);
-        const bermHalfWidth = 1.70; // 3.4m wide rounded earthen mound
+        const bermPeak = effectiveHalfWidth * 1.03 + 0.25 * Math.sin(sLong * 0.013);
+        const bermHalfWidth = effectiveHalfWidth * 0.42;
         const bermDist = Math.abs(dist - bermPeak);
         if (bermDist < bermHalfWidth) {
           const bermNorm = bermDist / bermHalfWidth;
@@ -211,10 +218,12 @@ export class RoadTerrainBlender {
 
         if (cutFillBias > 0.05) {
           // Uphill Cut Flank: Dirt was excavated into the mountain.
-          // Forms an uphill drainage ditch/swale along the inner shoulder (dist ~3.2m - 4.2m)
-          const swaleDist = Math.abs(dist - 3.6);
-          if (swaleDist < 1.1) {
-            const swaleShape = 0.5 + 0.5 * Math.cos(Math.PI * (swaleDist / 1.1));
+          // Forms an uphill drainage ditch/swale along the inner shoulder
+          const swaleCenter = effectiveHalfWidth * 0.90;
+          const swaleWidth = effectiveHalfWidth * 0.28;
+          const swaleDist = Math.abs(dist - swaleCenter);
+          if (swaleDist < swaleWidth) {
+            const swaleShape = 0.5 + 0.5 * Math.cos(Math.PI * (swaleDist / swaleWidth));
             bermOffset -= 0.16 * cutFillBias * depthMod * swaleShape;
           }
         } else if (cutFillBias < -0.05) {
@@ -227,17 +236,17 @@ export class RoadTerrainBlender {
 
         // Combine into continuous macro off-road profile:
         // Whoops naturally concentrate in the wheel ruts where vehicle torque carves depressions
-        const whoopFactor = Math.max(0, 1 - Math.abs(dist - rutCenter) / 2.0);
+        const whoopFactor = Math.max(0, 1 - Math.abs(dist - rutCenter) / (effectiveHalfWidth * 0.5));
         profileDelta = rutOffset + crownOffset + bermOffset + trailWhoop * whoopFactor;
       }
 
       const roadSurfaceY = roadY + profileDelta;
 
-      if (dist < this.halfWidth) {
+      if (dist < effectiveHalfWidth) {
         return roadSurfaceY;
       }
 
-      const tNorm = Math.max(0, Math.min(1, (dist - this.halfWidth) / roadMargin));
+      const tNorm = Math.max(0, Math.min(1, (dist - effectiveHalfWidth) / roadMargin));
       let lerpFactor = quinticSmooth(tNorm);
 
       if (this.isOffroad) {

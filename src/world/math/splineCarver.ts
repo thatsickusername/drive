@@ -78,7 +78,12 @@ export function evaluateTrails(
   const pipeline = getSlowRoadsPipeline(config.seed, config.roadMode);
   const roadHit = pipeline.getRoadHit(worldX, worldZ);
   const dist = roadHit ? roadHit.d : 999.0;
-  const halfWidth = (config.trailWidth || 8.0) * 0.5;
+  let halfWidth = (config.trailWidth || 8.0) * 0.5;
+  if (roadHit && roadHit.n) {
+    const sLong = ((roadHit.n.i || 0) + (roadHit.t || 0)) * 10.0;
+    const widthWander = Math.sin(sLong * 0.0062) * 0.65 + Math.cos(sLong * 0.0028 + 1.2) * 0.45;
+    halfWidth *= (1.0 + widthWander * 0.28);
+  }
   const blendWidth = config.trailBlendWidth || 16.0;
 
   const trailMask = smoothstep(halfWidth, halfWidth + blendWidth, dist);
