@@ -48,6 +48,16 @@ export class GmaPlayerPhysics {
   // Sub-step time accumulator for 333.3 Hz loop
   private subStepAccumulator: number = 0;
 
+  // Snowdepth suspension internal state
+  public snowDepthPos: number = 0;
+  public snowDepthVel: number = 0;
+
+  // Scratch vectors for zero-allocation 333.3 Hz physics hot loop
+  private readonly _gVec = new THREE.Vector3(0, -GRAVITY, 0);
+  private readonly _gNormal = new THREE.Vector3();
+  private readonly _gParallel = new THREE.Vector3();
+  private readonly _fPull = new THREE.Vector3();
+
   // Systems
   public controls = new ControlsProcessor();
   public trickScoring = new TrickScoringSystem();
@@ -78,6 +88,8 @@ export class GmaPlayerPhysics {
     this.slideTurnBoostTimer = 0;
     this.driftMilestoneIndex = 0;
     this.subStepAccumulator = 0;
+    this.snowDepthPos = 0;
+    this.snowDepthVel = 0;
 
     this.angularVelocitySpin = 0;
     this.angularVelocityFlip = 0;
@@ -168,9 +180,9 @@ export class GmaPlayerPhysics {
       this.subStepAccumulator -= subDt;
     }
 
-    // Maintain ground contact elevation when not airborne
+    // Maintain ground contact elevation with snowdepth spring absorption when not airborne
     if (this.state !== MovementState.Airborne) {
-      this.position.y = groundHeight;
+      this.position.y = groundHeight + this.snowDepthPos;
     }
   }
 
@@ -279,8 +291,20 @@ export class GmaPlayerPhysics {
     tacklePressed: boolean,
     groundHeight: number
   ): void {
-    // 1. Maintain ground contact elevation
-    this.position.y = groundHeight;
+    // 1. Snowdepth spring suspension model
+    // Spring constant: k = 20.0, Spring pull: 1.0, Velocity damping: 0.99, Position damping: 0.95
+    const targetElevation = groundHeight;
+    const compression = targetElevation - (this.position.y - this.snowDepthPos);
+    this.snowDepthVel += compression * this.config.snowdepth_vel_transfer * dt;
+    const springForce = -this.config.snowdepth_spring_constant * this.snowDepthPos * this.config.snowdepth_spring_pull;
+    this.snowDepthVel += springForce * dt;
+    this.snowDepthVel *= Math.pow(this.config.snowdepth_vel_damp, dt / 0.003);
+    this.snowDepthPos += this.snowDepthVel * dt;
+    this.snowDepthPos *= Math.pow(this.config.snowdepth_pos_damp, dt / 0.003);
+    this.snowDepthPos = THREE.MathUtils.clamp(this.snowDepthPos, -0.35, 0.35);
+
+    // Apply ground contact elevation with snowdepth absorption
+    this.position.y = groundHeight + this.snowDepthPos;
 
     // 2. Determine Turn Type
     const absSteer = Math.abs(steerInput);
@@ -374,14 +398,20 @@ export class GmaPlayerPhysics {
     // Project forward along terrain tangent
     this.forwardDir.addScaledVector(this.groundNormal, -this.forwardDir.dot(this.groundNormal)).normalize();
 
-    // 5. Slope Gravitational Projection: g_tangential = g - (g . n)n
-    const gravityVec = new THREE.Vector3(0, -GRAVITY, 0);
-    const normalComp = gravityVec.dot(this.groundNormal);
-    const slopeForce = gravityVec.clone().sub(this.groundNormal.clone().multiplyScalar(normalComp));
+    // 5. Slope Gravitational Decomposition & Contour Adhesion Pull
+    // g = (0, -9.81, 0)
+    // g_normal = (g . n) * n
+    // g_parallel = g - g_normal
+    // Apply tangential gravity: v += g_parallel * dt
+    const normalComp = this._gVec.dot(this.groundNormal);
+    this._gNormal.copy(this.groundNormal).multiplyScalar(normalComp);
+    this._gParallel.subVectors(this._gVec, this._gNormal);
+    this.velocity.addScaledVector(this._gParallel, dt);
 
-    // Adhesive ground-pull force keeps ski/board tips bound to contours (F_ground_pull = 5.0)
-    slopeForce.addScaledVector(this.groundNormal, -this.config.ground_pull_force);
-    this.velocity.addScaledVector(slopeForce, dt);
+    // Continuous adhesive normal pull: F_pull = -n * 5.0 m/s^2 (GMA contour adhesion)
+    // Eliminates unnatural airborne bouncing when skiing over small crests, wind lips, and undulating rollers
+    this._fPull.copy(this.groundNormal).multiplyScalar(-this.config.ground_pull_force);
+    this.velocity.addScaledVector(this._fPull, dt);
 
     // 6. Ground Friction & Twintip Switch Handling
     let effectiveFriction = this.config.ground_friction_base;
@@ -440,8 +470,7 @@ export class GmaPlayerPhysics {
     rollInput: number
   ): void {
     // 1. Gravity and Hover Lift
-    const gravityVec = new THREE.Vector3(0, -GRAVITY, 0);
-    this.velocity.addScaledVector(gravityVec, dt);
+    this.velocity.addScaledVector(this._gVec, dt);
 
     // Trick hover lift (+0.5 m/s^2 continuous upward force during aerial rotations)
     const isTricking = Math.abs(steerInput) > 0.05 || Math.abs(flipInput) > 0.05 || Math.abs(rollInput) > 0.05;

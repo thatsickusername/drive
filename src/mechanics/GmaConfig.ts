@@ -117,6 +117,14 @@ export interface PlayerConfig {
   crash_magnitude_object: number;
   max_turn_angle_deg: number;
   time_on_rough_ground_before_crash: number;
+
+  // Snowdepth spring suspension model
+  snowdepth_spring_constant: number;
+  snowdepth_spring_pull: number;
+  snowdepth_vel_damp: number;
+  snowdepth_pos_damp: number;
+  snowdepth_pos_addition: number;
+  snowdepth_vel_transfer: number;
 }
 
 export function createDefaultPlayerConfig(): PlayerConfig {
@@ -214,6 +222,13 @@ export function createDefaultPlayerConfig(): PlayerConfig {
     velocity_penalty_ground: 0.3,
     crash_magnitude_object: 40.0,
     max_turn_angle_deg: 120.0,
-    time_on_rough_ground_before_crash: 3.0
+    time_on_rough_ground_before_crash: 3.0,
+
+    snowdepth_spring_constant: 20.0,
+    snowdepth_spring_pull: 1.0,
+    snowdepth_vel_damp: 0.99,
+    snowdepth_pos_damp: 0.95,
+    snowdepth_pos_addition: 1.0,
+    snowdepth_vel_transfer: 10.0
   };
 }

@@ -83,34 +83,34 @@ Replicate the exact control processing pipeline recovered from `Controls.cpp` an
 
 Decouple kinematic integration from Rapier velocity fighting. The 333.3 Hz GMA sub-step loop (`player.deltatime: 0.003s`) must be the master authority, synchronizing to Rapier purely as a kinematic collider.
 
-- [ ] **3.1 Exact 333.3 Hz Sub-Stepping Loop Accumulator**
-  - [ ] Accumulator step: `dt_sub = 0.003s` (333.3 Hz).
-  - [ ] Clamp frame delta to $0.1\text{s}$ max to prevent spiral-of-death on frame hitches.
-  - [ ] Run fixed internal iterations until accumulator $< 0.003\text{s}$.
-- [ ] **3.2 Slope Gravitational Decomposition**
-  - [ ] For each sub-step on ground:
+- [x] **3.1 Exact 333.3 Hz Sub-Stepping Loop Accumulator**
+  - [x] Accumulator step: `dt_sub = 0.003s` (333.3 Hz).
+  - [x] Clamp frame delta to $0.1\text{s}$ max to prevent spiral-of-death on frame hitches.
+  - [x] Run fixed internal iterations until accumulator $< 0.003\text{s}$.
+- [x] **3.2 Slope Gravitational Decomposition**
+  - [x] For each sub-step on ground:
     $$\vec{g} = (0, -9.81, 0)$$
     $$\vec{g}_{\text{normal}} = (\vec{g} \cdot \vec{n})\vec{n}$$
     $$\vec{g}_{\parallel} = \vec{g} - \vec{g}_{\text{normal}}$$
-  - [ ] Apply tangential gravity: $\vec{v} \mathrel{+}= \vec{g}_{\parallel} \cdot dt$.
-- [ ] **3.3 Ground Pull Force (Contour Adhesion)**
-  - [ ] Apply GMA continuous adhesive normal pull:
+  - [x] Apply tangential gravity: $\vec{v} \mathrel{+}= \vec{g}_{\parallel} \cdot dt$.
+- [x] **3.3 Ground Pull Force (Contour Adhesion)**
+  - [x] Apply GMA continuous adhesive normal pull:
     $$\vec{F}_{\text{pull}} = -\vec{n} \cdot 5.0\text{ m/s}^2$$
     $$\vec{v} \mathrel{+}= \vec{F}_{\text{pull}} \cdot dt$$
-  - [ ] Eliminates unnatural airborne bouncing when skiing over small crests, wind lips, and undulating rollers.
-- [ ] **3.4 Multi-Point Longitudinal Ground Sampling**
-  - [ ] Triple probe raycast configuration along ski centerline:
+  - [x] Eliminates unnatural airborne bouncing when skiing over small crests, wind lips, and undulating rollers.
+- [x] **3.4 Multi-Point Longitudinal Ground Sampling**
+  - [x] Triple probe raycast configuration along ski centerline:
     - Center probe: $\vec{p}$
     - Tip/Nose probe: $\vec{p} + \vec{f}_{\text{ski}} \cdot 0.65\text{m}$
     - Tail probe: $\vec{p} - \vec{f}_{\text{ski}} \cdot 0.65\text{m}$
-  - [ ] Weight normals (Center: 2.0, Nose: 1.0, Tail: 1.0) and smoothly interpolate normal $\vec{n}$.
-- [ ] **3.5 Snowdepth Spring Model**
-  - [ ] Implement GMA snowdepth suspension equations:
+  - [x] Weight normals (Center: 2.0, Nose: 1.0, Tail: 1.0) and smoothly interpolate normal $\vec{n}$.
+- [x] **3.5 Snowdepth Spring Model**
+  - [x] Implement GMA snowdepth suspension equations:
     - Spring constant: $k = 20.0$
     - Spring pull: $1.0$
     - Velocity damping: $0.99$
     - Position damping: $0.95$
-  - [ ] Smoothly absorb micro-terrains into ski flex without jerking the camera or rigid body.
+  - [x] Smoothly absorb micro-terrains into ski flex without jerking the camera or rigid body.
 
 ---
 

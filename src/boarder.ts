@@ -848,15 +848,16 @@ export class Skier {
       const targetRoll = -this.leanAngle * 0.52 * speedRollScale;
       this.skisGroup.rotation.z = THREE.MathUtils.damp(this.skisGroup.rotation.z, targetRoll, 10, dt);
 
-      // 3. Hip Spring
+      // 3. Hip Spring & Snowdepth Suspension Absorption
       const tuckDrop = input.forward && this.speed > 8 ? -0.14 : 0;
-      const targetHipY = 0.55 + tuckDrop;
+      const targetHipY = 0.55 + tuckDrop + this.gmaPhysics.snowDepthPos * 0.5;
       const springK = 140;
       const damping = 16;
       const force = (targetHipY - (0.55 + this.hipOffsetY)) * springK - this.hipVelY * damping;
       this.hipVelY += force * dt;
       this.hipOffsetY += this.hipVelY * dt;
       this.hipsGroup.position.y = THREE.MathUtils.clamp(0.55 + this.hipOffsetY, 0.26, 0.70);
+      this.skisGroup.position.y = -this.cfg.sphereRadius + 0.02 - this.gmaPhysics.snowDepthPos * 0.4;
 
       // 4. Torso Counter-Rotation & Tuck (Forward-facing ski stance)
       this.torsoGroup.rotation.y = THREE.MathUtils.damp(this.torsoGroup.rotation.y, 0, 10, dt);
