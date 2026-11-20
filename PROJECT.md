@@ -1,25 +1,27 @@
 # Project Architecture & Handoff Guide
 
 ## 1. Project Overview & Scope
-This project is a high-performance 3D browser-based off-road vehicle simulation built with **TypeScript**, **Three.js** (WebGL PBR rendering), and **Rapier3D** (WebAssembly physics).
+This project is a high-performance 3D browser-based simulation platform built with **TypeScript**, **Three.js** (WebGL PBR rendering), and **Rapier3D** (WebAssembly physics). 
 
-The simulation features:
-1. **Proving Ground (Testing Map):** Flat asphalt proving grounds with engineered obstacles (speed bumps, articulation mounds, multi-angle incline ramps, mud bogs, and rock-crawling boulder zones) for tuning vehicle kinematics and suspension compliance.
-2. **Procedural Wasteland:** Infinite, deterministic, multi-pass heightfield terrain streaming pipeline driven by world seeds. Features continuous SDF trail networks, river ravines with water planes, terraced rock-crawling steps, mountain spines, slope/altitude/moisture vertex-colored biomes, deterministic POI structures with flattened pads, and instanced foliage/boulders with physical Rapier colliders (including winch anchors).
-3. **Map Switcher & Seed Picker:** Real-time in-game UI to switch seamlessly between maps with custom seed input, randomizer, URL parameter synchronization, and kinematic spawn safety locks.
-4. **Vehicle Dynamics & Drivetrain:** 4-wheel independent multi-probe raycast suspension, dual-range transfer case (**4H** and **4L Crawl 49.5:1**), automatic transmission with slope-lock, fluid torque converter simulation, and combined tire friction ellipse.
-5. **Multiplayer Subsystems:** Real-time room-based co-op with binary transform broadcasting, kinematic interpolation, and teammate telemetry HUD.
+The platform supports two major simulation modes:
+1. **Alpine Freeride (Grand Mountain Adventure Ski Resort):**
+   - A single massive 2.4 km × 2.4 km tilted escarpment (Alvdalen massif) sloping from a high alpine backwall (North, $z = -1200$, 520m summit) down to a wide flat frozen river lake basin (South, $z > 850$, $y = 0$).
+   - Physics-driven snowboard freeride controller with carving, edge bite, surface-dependent friction (powder, piste, rock, ice), jump pop, and dynamic slope orientation.
+   - Real-time aerial Trick Engine scoring airtime, grabs (Mute, Indie, Nose, Tail), multi-axis spins (180°–720°), front/back flips, combo multipliers, and crash detection.
+   - Dynamic third-person chase camera with velocity-lookahead lag and debug Fly-Cam inspection mode.
+2. **Procedural Off-Road Vehicle Simulation (Legacy / Dual-Stack):**
+   - 4-wheel independent multi-probe raycast suspension, dual-range transfer case (**4H** and **4L Crawl 49.5:1**), automatic transmission with slope-lock, fluid torque converter simulation, and combined tire friction ellipse.
+   - Infinite multi-pass heightfield terrain streaming pipeline with continuous SDF trail networks, river ravines, structure pads, and WebSocket binary transform multiplayer sync.
 
 ---
 
 ## 2. Technical Stack & Dependencies
 * **Language & Runtime:** TypeScript (strict mode enabled in `tsconfig.json`).
 * **Bundler / Dev Server:** Vite 5 (`vite`, `vite-plugin-wasm`, `vite-plugin-top-level-await`).
-* **Graphics:** `three` (^0.170.0) with ACESFilmic tone mapping, PCFSoftShadowMap, and vertex-colored low-poly materials.
+* **Graphics:** `three` (^0.170.0) with ACESFilmic tone mapping, PCFSoftShadowMap, vertex-colored low-poly terrain, and procedural instanced vegetation.
 * **Physics:** `@dimforge/rapier3d-compat` (^0.21.0) running WASM multithreaded/SIMD with fixed 60Hz timestep accumulation.
-* **Procedural Math:** `simplex-noise` (^4.0.3) wrapped with seeded `cyrb128` + `mulberry32` PRNG.
-* **Multi-threading:** Native Vite module Web Workers (`new Worker(new URL(...), { type: 'module' })`) for chunk heightfield calculation with zero-copy `ArrayBuffer` transfer.
-* **Multiplayer Server:** Node.js with `ws` (^8.22.2) binary WebSocket protocol.
+* **Procedural Math:** Seeded `cyrb128` + `mulberry32` PRNG wrapped 2D simplex noise with domain warping and smoothstep evaluators.
+* **Camera & Inputs:** Unified keyboard/gamepad controller with gamepad deadzone filtering, smooth mouse-look Euler rotation, and hotkey location teleports (1–6).
 
 ---
 
@@ -36,117 +38,100 @@ drive/
 ├── server/
 │   └── index.js             # WebSocket multiplayer relay server
 └── src/
-    ├── main.ts              # Game bootstrap, main loop, map switching, HUD & inputs
+    ├── main.ts              # Game bootstrap, main loop, HUD, hotkeys & spawn director
     ├── physics.ts           # Rapier3D world initialization & 60Hz accumulator
-    ├── renderer.ts          # Three.js scene, camera, lighting & shadow setup
-    ├── car.ts               # Vehicle controller: raycast suspension, engine & drivetrain
-    ├── map.ts               # Testing proving ground mesh and trimesh physics colliders
-    ├── camera.ts            # Dynamic follow camera director with speed-lag
+    ├── renderer.ts          # Three.js scene, camera, lighting (sun + hemi) & fog setup
+    ├── camera.ts            # Dynamic follow camera director & free-flying Fly-Cam
     ├── input.ts             # Unified keyboard and gamepad input controller
-    ├── remote-car.ts        # Teammate remote car visual & kinematic interpolation
-    ├── data/
-    │   ├── vehicle-registry.ts # Vehicle config loader
-    │   └── vehicles.json       # Chassis, wheel, suspension, engine & gearbox specs
-    ├── network/
-    │   ├── binary-sync.ts      # Binary transform serialization/deserialization
-    │   ├── interpolator.ts     # Snapshot interpolation buffer
-    │   ├── network-manager.ts  # WebSocket client connection & event handler
-    │   └── protocol.ts         # Network message types and interfaces
-    ├── types/
-    │   └── vehicle.ts          # TypeScript interfaces for vehicle specs
-    └── world/                  # Procedural Terrain Pipeline
-        ├── config/
-        │   └── terrainConfig.ts    # Seed, chunk dimensions, trail width & noise params
-        ├── math/
-        │   ├── prng.ts             # Deterministic cyrb128 hash + mulberry32 PRNG
-        │   ├── noiseLayers.ts      # Macro massifs, spines, hummocks & bedrock ledges
-        │   └── splineCarver.ts     # Bench-cut switchbacks, summit spurs & ruts
-        ├── biomes/
-        │   └── biomeEvaluator.ts   # Slope/moisture/altitude vertex colors & river carve
-        ├── generators/
-        │   ├── terrainWorker.ts    # Web Worker: computes heights, positions, colors
-        │   ├── structurePlacer.ts  # Deterministic POI sites & radial pad flattening
-        │   └── foliageSpawner.ts   # Jittered grid prop generator (trees & boulders)
-        └── managers/
-            ├── TerrainChunk.ts     # Chunk Mesh + Rapier Heightfield + Colliders
-            └── TerrainManager.ts   # Dynamic chunk streaming, worker pool & LOD queue
+    ├── car.ts               # Off-road vehicle controller (raycast suspension & drivetrain)
+    ├── map.ts               # Proving ground testing map and obstacle colliders
+    ├── remote-car.ts        # Multiplayer kinematic interpolation visualization
+    ├── player/
+    │   ├── SnowboardController.ts # Snowboard physics controller & edge carving
+    │   └── TrickEngine.ts         # Airborne trick, grab, spin, flip & score evaluator
+    ├── world/               # Procedural Alpine & Terrain Pipelines
+    │   ├── alpineHeightfield.ts   # 5-Layer Alvdalen Inclined Massif Procedural Engine
+    │   ├── AlpineMassif.ts        # 6x6 Chunked Meshes, Rapier Colliders, Ice & Pine Groves
+    │   ├── Phase1TestSlope.ts     # Minimalist debug test ramp
+    │   ├── biomes/
+    │   │   └── biomeEvaluator.ts  # Legacy slope/moisture/altitude vertex coloring
+    │   ├── config/
+    │   │   └── terrainConfig.ts   # Infinite wasteland chunk configuration
+    │   ├── generators/
+    │   │   ├── terrainWorker.ts   # Web Worker for threaded chunk generation
+    │   │   ├── structurePlacer.ts # POI sites & pad flattening
+    │   │   └── foliageSpawner.ts  # Foliage & boulder generator
+    │   ├── managers/
+    │   │   ├── TerrainChunk.ts    # Streaming chunk container
+    │   │   └── TerrainManager.ts  # Chunk streaming pool & LOD queue
+    │   └── math/
+    │       ├── prng.ts            # Deterministic cyrb128 hash + mulberry32 PRNG
+    │       ├── noiseLayers.ts     # Wasteland noise layers
+    │       └── splineCarver.ts    # Road & trail spline carver
+    └── network/
+        ├── binary-sync.ts         # Binary transform serialization
+        ├── interpolator.ts        # Snapshot interpolation buffer
+        ├── network-manager.ts     # WebSocket connection manager
+        └── protocol.ts            # Network packet schemas
 ```
 
 ---
 
 ## 4. Subsystem Breakdown & Implementation Details
 
-### 4.1 Procedural Terrain Pipeline (`src/world/`)
+### 4.1 Alvdalen Alpine Massif (`src/world/alpineHeightfield.ts` & `AlpineMassif.ts`)
 
-#### Coordinate Alignment & Heightfield Indexing (CRITICAL RULE)
-Rapier3D and Three.js synchronize on a common local origin `(cx * chunkSize, 0, cz * chunkSize)`.
-* **Rapier Heightfield:** `ColliderDesc.heightfield(segments, segments, rapierHeights, scale)`
-  * `segments = 128` per axis, grid is `129 x 129` vertices (`V = 129`).
-  * Indexing: `const rapierIndex = r * V + c;` where `r` corresponds to the row along local **X** and `c` corresponds to the column along local **Z**.
-  * Scale: `new RAPIER.Vector3(chunkSize, 1.0, chunkSize)`.
-* **Three.js BufferGeometry:**
-  * Positions: `vertIndex = r * V + c; positions[vertIndex * 3 + 0] = localX; positions[vertIndex * 3 + 1] = wy; positions[vertIndex * 3 + 2] = localZ;`
-  * Winding: Counter-clockwise triangles `(a, d, b)` and `(b, d, e)` facing `+Y`.
-* **Watertight Seams:** Vertices evaluate continuous world coordinates `(cx * chunkSize + localX, cz * chunkSize + localZ)`. The eastern edge of chunk $(cx, cz)$ strictly evaluates to the exact same $(worldX, worldZ)$ as the western edge of chunk $(cx+1, cz)$ ($0.0\text{m}$ seam delta).
+The mountain is modeled as a 2.4 km × 2.4 km single inclined massif ($x \in [-1200, 1200]$, $z \in [-1200, 1200]$) structured into 5 procedural mathematical layers:
 
-#### Math Layers (`src/world/math/`):
-1. **Macro Mountain Massifs & Spine Ridges (`getMacroTopography`):** Wide-wavelength continuous mountain bodies ($\lambda \ge 150\text{m}$, elevation up to $240\text{m}+$, slopes $15^\circ\text{–}38^\circ$) using domain-warped regional mountain masks ($\lambda \approx 2.5\text{km}$), hyperbolic smooth-abs rounded spines without $C^0$ needle creases, and secondary spurs/foothills.
-2. **Drivable Off-Trail Surface Detail (`getOffRoadSurfaceDetail`):** Separates macro relief from surface roughness so off-trail hillslopes remain drivable under 4L crawling. Uses medium-scale hummocks ($\lambda \approx 45\text{m}, \pm 2.2\text{m}$), localized bedrock ledges in alpine rock zones (flat shelves with $40^\circ$ climbable ramps), and micro soil/root undulations ($\lambda \approx 8\text{m}, 0.28\text{m}$).
-3. **Bench-Cut Mountain Switchbacks (`splineCarver.ts`):** Normalizes lateral Euclidean distance via arc-length derivative $\Delta z / \sqrt{1 + (Z'(x))^2}$ to prevent hairpin pinching. Climbs dynamically with the mountain's centerline macro height, carving a level $7.0\text{m}$ bench shelf with a $15\text{m}$ graded mountain bank, dual wheel ruts ($-0.12\text{m}$), and center road crown ($+0.08\text{m}$).
-4. **Secondary Summit Spur Trails:** Narrower single-track $4.8\text{m}$ ridge climbs ($X(z)$ running perpendicular to the arterial route) climbing to radio towers, fire lookouts, and alpine summits.
+1. **Layer 1: The Tilted Wedge (Macro Slope):**
+   $$t = \text{clamp}\left(\frac{850 - z}{2050}, 0, 1\right)$$
+   $$h_{\text{wedge}} = 520 \cdot t^{1.45}$$
+   - Generates a steep summit backwall at $z = -1200$ (520m high) that eases continuously into a flat shoreline at $z = 850$.
+   - For $z > 850$, drops terrain to $-8\text{m}$ with low-frequency island crests above $y = 0$.
+   - High alpine backwall and side containment ridges prevent riders from flying off the map boundaries.
+2. **Layer 2: The Central Dividing Gorge:**
+   - Meandering centerline: $x_{\text{center}} = \sin(z \cdot 0.0025) \cdot 90.0$.
+   - Inverted Gaussian trench flaring from 180m wide at summit to 280m at river, carving 45% of $h_{\text{wedge}}$ down to a smooth valley floor that splits the massif into West Flank and East Bowl.
+3. **Layer 3: Continuous Alpine Relief & Skiable Bowls:**
+   - Wide multi-octave FBM harmonic relief ($\lambda \approx 400\text{m}\text{–}600\text{m}$, 75m amplitude) creating natural concave powder bowls and convex spur ridges.
+   - Replaced artificial 1D global contour terracing with natural continuous downhill gradients ($18^\circ\text{–}28^\circ$) to preserve downhill momentum.
+4. **Layer 4: Smooth Ski Chutes & Wind Lips:**
+   - Domain-warped longitudinal drainage chutes along the fall line.
+   - Undulating snow hummocks and wind lips ($\pm 2\text{m}\text{–}4\text{m}$) providing natural kicker pop without $C^0$ absolute-value crease cuts or jagged sawtooth artifacts.
+5. **Layer 5: Surface Biomes & Readability Masking:**
+   - **Snow (85%+ Dominance):** Crisp white snow (`#eef3f8`) covering all slopes up to $42^\circ$.
+   - **Exposed Alpine Rock:** Warm brown-grey rock (`#6e5c52`) smoothly blended on steep precipices between $42^\circ$ and $50^\circ$, reaching full rock strata on cliffs $> 50^\circ$.
+   - **Frozen River Ice:** Blue-grey ice (`#7da3b8`) for $y \le 0.5\text{m}$, coupled with a dedicated flat ice plane mesh at $y = 0$ for $z \in [800, 1220]$.
+   - **Vegetation:** Instanced evergreen pine trees distributed via deterministic golden-angle copse clustering (groves) rather than uniform grid sampling to eliminate artificial tree rows.
 
-#### Biomes & Riverbeds (`src/world/biomes/`):
-* **3-Tier Altitude & Slope Biomes (`biomeEvaluator.ts`):**
-  1. **Valley Floor & Boreal Forest ($0\text{m}\text{–}65\text{m}$):** Dense pine forest, rich olive moss/earth modulated by Laplacian curvature, deep brown mud washouts (friction 0.35), compacted dirt trail (friction 0.82), forest floor (friction 0.78).
-  2. **Sub-Alpine Timberline & Scree ($65\text{m}\text{–}145\text{m}$):** Trees thin out by 70%, golden-brown alpine tundra grass (friction 0.85), exposed slate rock outcrops with horizontal sedimentary strata banding $\sin(\text{worldY} \cdot 1.8) \cdot 0.06$ (friction 0.95).
-  3. **High Alpine Peaks & Snow Slopes ($145\text{m}+$):** Crisp alpine snow on slopes under $38^\circ$ (`slope <= 0.65`, friction 0.42), dark basalt cliff rock strata where `slope > 0.65` (friction 0.95).
-* Rivers carve channels where $|noise(x, z)| < 0.045$ down to `riverLevel - 2.5m` strictly in low valley/lake basins ($y < 35\text{m}$), never carving trenches through alpine mountain peaks.
+### 4.2 Snowboard Controller & Trick Engine (`src/player/`)
 
-#### Structures & Props (`src/world/generators/`):
-* **Structure Placer (`structurePlacer.ts`):** Evaluates deterministic POIs (Fuel Depots, Outposts, Cabins, Watchtowers) and applies radial pad flattening with blend skirts before heightfield creation.
-* **Foliage Spawner (`foliageSpawner.ts`):** Emits transformation matrices for `THREE.InstancedMesh` (pine trees and dodecahedron boulders) and fixed Rapier colliders:
-  * **Timberline Transition:** Dense forest below $65\text{m}$, 70% tree thinning between $65\text{m}\text{–}135\text{m}$, and complete tree cut-off above $135\text{m}$.
-  * **Winch Anchors:** Trees located along trail shoulders or on steep hillsides ($>0.32$ slope) are flagged with `{ type: 'winch_anchor' }`.
-  * **Ridge Boulders:** Clustered physical boulder colliders placed along technical rock crawls, steep switchback shoulders, and alpine scree slopes.
+* **Physics Controller (`SnowboardController.ts`):**
+  - Rigid body kinematics with dynamic surface friction: ultra-low on frozen river ice (0.01), slick on groomed snow (0.03), deep powder drag (0.06), and high drag on rock (0.15).
+  - Slope-aligned steering with progressive edge-bite carving, speed-dependent roll banking, and jump pop impulse.
+* **Trick Engine (`TrickEngine.ts`):**
+  - Monitors airborne state, tracking total airtime, rotation around all three Euler axes, and grab inputs.
+  - Recognizes classic grabs (`Indie`, `Mute`, `Nosegrab`, `Tailgrab`), spins (180°, 360°, 540°, 720°), and front/back flips.
+  - Multiplies trick points based on combo variety and cleanly detects crash landings when the board angle deviates $> 45^\circ$ from ground normal at touchdown.
 
-#### Worker Offloading & Streaming (`src/world/managers/`):
-* **`terrainWorker.ts`:** Computes chunk geometry off the main thread and transfers typed arrays (`rapierHeights`, `positions`, `normals`, `colors`, `indices`, instance matrices) via zero-copy transferable buffers.
-* **`TerrainChunk.ts`:** Assembles Three.js mesh, Rapier heightfield collider, instanced meshes, and structure colliders. Exposes `dispose()` for leak-free unmounting.
-* **`TerrainManager.ts`:** Pools Web Workers, coordinates distance-sorted chunk generation centered on the car, unloads chunks beyond `viewRadiusChunks + 1` (Chebyshev distance), caches shared materials to prevent shader compilation hitches, and provides `waitForChunk(cx, cz)` promises.
+### 4.3 Camera Director & Fly-Cam (`src/camera.ts`)
 
----
-
-### 4.2 Map Switching & Spawn Safety (`src/main.ts`)
-* **Interactive UI:** Floating glassmorphism HUD panel (`#map-select`, `#seed-input`, random seed button 🎲, and `#apply-map-btn`).
-* **URL Synchronization:** Automatically updates `?map=procedural&seed=...` or `?map=training` without reloading.
-* **Spawn Safety Lock:** When switching maps, vehicle rigid bodies are frozen as `KinematicPositionBased`. The manager queues chunks centered on `(spawnX, spawnZ)` and awaits `waitForChunk(spawnCx, spawnCz)`.
-* **BVH Broadphase Step:** `physics.world.step()` is invoked once before dynamic activation to ensure Rapier builds its broadphase BVH index for new heightfield colliders.
-* **Spawn Elevation:** Vehicle chassis center is placed at `groundY + 0.85m` (calibrated so tire bottoms softly contact the surface at `groundY` with rest suspension length).
-
----
-
-### 4.3 Vehicle Kinematics & Physics (`src/car.ts`)
-* **Chassis Body:** Dynamic Rapier body with lower center of mass `(0, -0.35, 0)` and cuboid collision volume.
-* **Multi-Probe Raycast Suspension:** Each wheel casts multi-probe rays across the tire curvature up to `maxRayDist = suspensionRestLength + radius (1.03m)`.
-* **Asymmetric Damping:** Progressive rising-rate spring + softer compression damping (bump) to absorb hits without harshness, stiffer rebound damping to prevent pogo oscillation.
-* **Drivetrain & Transfer Case:**
-  * **4H (High Range):** Fast trail cruising (14.8:1 overall reduction).
-  * **4L (Low Range):** Rock crawling (49.5:1 crawl ratio) with automatic slope-hold gear locks.
-  * Friction ellipse combines longitudinal slip ratio and lateral slip angle.
-
----
-
-### 4.4 Multiplayer Co-op Network (`src/network/`)
-* **Topology:** Central Node.js WebSocket server (`server/index.js`) managing 1–4 player rooms (`TRAIL-1`, etc.).
-* **Binary State Sync:** Active drivers broadcast packed binary transform packets (position, quaternion, linear/angular velocity, suspension compression, wheel steer) at 60Hz moving / 12Hz idle.
-* **Remote Interpolation:** `RemoteCar` uses buffer interpolation (`src/network/interpolator.ts`) to render smooth motion under packet jitter.
+* **Snowboard Follow Camera:** Third-person trailing camera with speed-lag, orientation damping, dynamic pitch alignment, and FOV speed expansion.
+* **Fly-Cam Mode (`[C]` Key):** Free-flight debug camera with WASD strafing, Space/Shift vertical translation, mouse-look Euler navigation, coordinate HUD, and drop-rider spawn feature.
+* **Quick Teleport Hub (Hotkeys 1–6):**
+  - `1`: Main Summit Peak (Glacier Chute) `(-100, -880)`
+  - `2`: West Peak (Powder Highway) `(-680, -310)`
+  - `3`: East Park Ridge (Slopestyle Run) `(650, -250)`
+  - `4`: Mid-Mountain Hub Plateau `(0, 130)`
+  - `5`: Base Village Lodge `(0, 900)`
+  - `6`: Glacial Halfpipe Gully `(310, -60)`
 
 ---
 
 ## 5. Development & Verification Workflow
 
 ### Useful Commands
-* **Start Dev Server:** `npm run dev` (starts Vite dev server)
+* **Start Dev Server:** `npm run dev` (starts Vite dev server at `http://localhost:5173`)
 * **Start Multiplayer Server:** `npm run server` (starts WebSocket server on port 8080)
 * **Typecheck & Production Build:** `npm run build` (`tsc && vite build`)
 * **Preview Production Bundle:** `npm run preview`
@@ -155,7 +140,7 @@ Rapier3D and Three.js synchronize on a common local origin `(cx * chunkSize, 0, 
 
 ## 6. Crucial Rules for Incoming Agents
 
-1. **Heightfield Indexing Rule:** Rapier3D's heightfield array indexing is strictly `r * V + c` (where $r$ is along X and $c$ is along Z). Never transpose to `c * V + r`, as that rotates/mirrors physics 90 degrees across the diagonal, causing vehicles to fall through the visual mesh.
-2. **Spawn Await Rule:** When moving, resetting, or spawning vehicles, always query `terrainManager.waitForChunk(cx, cz)` and invoke `physics.world.step()` before switching rigid body type to `Dynamic`.
-3. **Raycast Suspension Decoupling:** Never bind visual wheels directly into the chassis collision shape. Wheels must remain dynamically positioned in `Car.syncRender()` based on suspension compression and steer angles.
-4. **Terminal & Safety Guardrails:** Follow the operating context rules in [AGENTS.md](file:///C:/Users/manis/Development/drive/AGENTS.md) (silent filtered command execution, turn caps, surgical diff patches, no eager reads of excluded paths).
+1. **Heightfield Indexing Rule:** Rapier3D's heightfield array indexing is strictly `r * V + c` (where $r$ is along X and $c$ is along Z). Never transpose to `c * V + r`.
+2. **Continuous Mountain Flow Rule:** Never apply 1D global contour quantizers (`smoothTerrace(h)`) or $C^0$ ridged noise (`1 - abs(noise)`) directly to mountain relief. Alpine freeride requires $C^1/C^2$ smooth differentiable slopes so riders maintain continuous downhill flow and snow meshes remain free of sawtooth normal creases.
+3. **Snow Dominance Rule:** Ski resort visual readability requires 80%–90% snow coverage. Keep rock slope transition thresholds at $> 42^\circ\text{–}50^\circ$ so skiable surfaces stay white.
+4. **Terminal & Safety Guardrails:** Follow the operating context rules in [AGENTS.md](file:///C:/Users/manis/Development/drive/AGENTS.md) (silent filtered command execution, turn caps, surgical patches, no reads of excluded paths).

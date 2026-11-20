@@ -9,6 +9,7 @@ export class AlpineMassif {
   private rigidBodies: RAPIER.RigidBody[] = [];
   private colliders: RAPIER.Collider[] = [];
   private treeInstancedMesh: THREE.InstancedMesh | null = null;
+  private iceMesh: THREE.Mesh | null = null;
 
   // Fixed 6x6 Grid of 400m chunks (2,400m x 2,400m total span)
   public readonly chunkSize = 400.0;
@@ -36,6 +37,7 @@ export class AlpineMassif {
     });
 
     this.generateMassif();
+    this.createFrozenRiverPlane();
     this.spawnInstancedPines();
   }
 
@@ -54,8 +56,9 @@ export class AlpineMassif {
     const totalTriangles = gridTriangles + skirtTriangles;
 
     const colorPiste = new THREE.Color(0xf4f8ff);
-    const colorPowder = new THREE.Color(0xe8eef5);
-    const colorRock = new THREE.Color(0x4a525d);
+    const colorPowder = new THREE.Color(0xeef3f8);
+    const colorRock = new THREE.Color(0x6e5c52);
+    const colorIce = new THREE.Color(0x7da3b8);
 
     // 6x6 chunks: cx in [-3, -2, -1, 0, 1, 2], cz in [-3, -2, -1, 0, 1, 2]
     for (let cx = -3; cx <= 2; cx++) {
@@ -96,13 +99,15 @@ export class AlpineMassif {
             normals[pIdx + 1] = sample.normal.y;
             normals[pIdx + 2] = sample.normal.z;
 
-            // Vertex Color blending
-            if (sample.surfaceType === 'PISTE') {
+            // Vertex Color blending (Alvdalen natural snow-dominant alpine biome)
+            if (wy <= 0.5) {
+              tempColor.copy(colorIce);
+            } else if (sample.slopeDeg > 42.0) {
+              const rockBlend = Math.min(1.0, (sample.slopeDeg - 42.0) / 8.0);
+              tempColor.copy(colorPowder).lerp(colorRock, rockBlend);
+            } else if (sample.surfaceType === 'PISTE') {
               const blend = Math.max(0, Math.min(1, 1.0 - sample.pisteDist / 32.0));
               tempColor.copy(colorPowder).lerp(colorPiste, blend);
-            } else if (sample.slopeDeg > 38.0) {
-              const rockBlend = Math.min(1.0, (sample.slopeDeg - 38.0) / 14.0);
-              tempColor.copy(colorPowder).lerp(colorRock, rockBlend);
             } else {
               tempColor.copy(colorPowder);
             }
@@ -220,6 +225,22 @@ export class AlpineMassif {
     }
   }
 
+  // Flat Frozen River / Ice Mesh across the bottom basin (z in [800, 1220]) at y = 0
+  private createFrozenRiverPlane(): void {
+    const iceGeom = new THREE.PlaneGeometry(2400, 420);
+    iceGeom.rotateX(-Math.PI / 2);
+    const iceMat = new THREE.MeshStandardMaterial({
+      color: 0x7da3b8,
+      roughness: 0.12,
+      metalness: 0.18,
+      side: THREE.FrontSide
+    });
+    this.iceMesh = new THREE.Mesh(iceGeom, iceMat);
+    this.iceMesh.position.set(0, 0, 1010);
+    this.iceMesh.receiveShadow = true;
+    this.group.add(this.iceMesh);
+  }
+
   // Spawn 14m - 24m tall alpine pine trees (roughly 10x player height to sell real mountain scale)
   private spawnInstancedPines(): void {
     // Build stylized alpine pine geometry: 3 tiered foliage cones + trunk
@@ -264,32 +285,56 @@ export class AlpineMassif {
     const dummy = new THREE.Object3D();
     let treeCount = 0;
 
-    // Deterministic jittered grid distribution across the lower and mid mountain (y < 360m)
-    const step = 45; // 45m grid
-    for (let x = -1050; x <= 1050; x += step) {
-      for (let z = -650; z <= 900; z += step) {
+    // Deterministic organic grove clustering (natural pine stands instead of grid lines)
+    const groveCount = 55;
+    const treesPerGrove = 22;
+
+    for (let g = 0; g < groveCount; g++) {
+      if (treeCount >= maxTrees) break;
+
+      // Seeded pseudo-random placement for grove centers
+      const gAngle = g * 2.39996; // Golden angle distribution
+      const gDist = 180.0 + Math.sqrt(g / groveCount) * 820.0;
+      const gcx = Math.cos(gAngle) * gDist;
+      const gcz = -350.0 + (g / groveCount) * 1150.0 + (Math.sin(g * 7.1) * 90.0);
+
+      // Check grove center validity
+      const centerSample = this.heightfield.sampleTerrain(gcx, gcz);
+      if (
+        centerSample.height < 2.0 ||
+        centerSample.height > 270.0 ||
+        centerSample.slopeDeg > 30.0 ||
+        centerSample.surfaceType === 'ROCK' ||
+        centerSample.surfaceType === 'ICE'
+      ) {
+        continue;
+      }
+
+      // Scatter organic pine cluster around grove center
+      const groveRadius = 38.0 + Math.abs(Math.sin(g * 3.7)) * 25.0;
+
+      for (let t = 0; t < treesPerGrove; t++) {
         if (treeCount >= maxTrees) break;
 
-        // Jitter position
-        const jx = x + (Math.sin(x * 12.3 + z * 34.5) * 0.5) * 28.0;
-        const jz = z + (Math.cos(x * 45.6 + z * 78.9) * 0.5) * 28.0;
+        const subAngle = (t * 2.39996) + Math.sin(t * 1.5);
+        const subDist = Math.sqrt((t + 0.5) / treesPerGrove) * groveRadius;
+        const tx = gcx + Math.cos(subAngle) * subDist;
+        const tz = gcz + Math.sin(subAngle) * subDist;
 
-        const sample = this.heightfield.sampleTerrain(jx, jz);
+        const sample = this.heightfield.sampleTerrain(tx, tz);
 
-        // Filter: only in forest elevation zones, off groomed pistes, not on sheer rock
         if (
-          sample.height > 25 &&
-          sample.height < 340 &&
-          sample.pisteDist > 38 &&
-          sample.slopeDeg < 34 &&
-          sample.surfaceType !== 'ROCK'
+          sample.height > 1.5 &&
+          sample.height < 280.0 &&
+          sample.slopeDeg < 32.0 &&
+          sample.surfaceType !== 'ROCK' &&
+          sample.surfaceType !== 'ICE'
         ) {
-          // Scale tree height between 14m and 22m tall (roughly 10x player height!)
-          const scaleY = 0.9 + Math.abs(Math.sin(jx * 0.05 + jz * 0.05)) * 0.5;
-          const scaleXZ = 0.85 + Math.abs(Math.cos(jx * 0.05)) * 0.35;
+          const scaleY = 0.85 + Math.abs(Math.sin(tx * 0.05 + tz * 0.05)) * 0.45;
+          const scaleXZ = 0.80 + Math.abs(Math.cos(tx * 0.05)) * 0.35;
 
-          dummy.position.set(jx, sample.height - 0.5, jz);
-          dummy.rotation.y = Math.sin(jx + jz) * Math.PI;
+          dummy.position.set(tx, sample.height - 0.5, tz);
+          dummy.rotation.y = Math.sin(tx * 3.1 + tz * 5.7) * Math.PI;
           dummy.scale.set(scaleXZ, scaleY, scaleXZ);
           dummy.updateMatrix();
 
@@ -319,6 +364,13 @@ export class AlpineMassif {
       this.group.remove(mesh);
     }
     this.chunkMeshes = [];
+
+    if (this.iceMesh) {
+      this.iceMesh.geometry.dispose();
+      (this.iceMesh.material as THREE.Material).dispose();
+      this.group.remove(this.iceMesh);
+      this.iceMesh = null;
+    }
 
     if (this.treeInstancedMesh) {
       this.treeInstancedMesh.geometry.dispose();
