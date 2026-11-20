@@ -51,6 +51,8 @@ export class GmaPlayerPhysics {
   public isStakingDamped: boolean = false;
   public stakingPoleTimer: number = 0;
   public stakingPoleSide: number = 0; // -1 = Left pole plant, +1 = Right pole plant
+  public snowslidePumpTimer: number = 0; // Snowboard edge carve unweighting pump timer
+  public roughGroundTimer: number = 0; // Riding on rough terrain/rocks exceeding 3.0s triggers crash
   private lastSteerSign: number = 0;
 
   // Sub-step time accumulator for 333.3 Hz loop
@@ -102,6 +104,8 @@ export class GmaPlayerPhysics {
     this.isStakingDamped = false;
     this.stakingPoleTimer = 0;
     this.stakingPoleSide = 0;
+    this.snowslidePumpTimer = 0;
+    this.roughGroundTimer = 0;
     this.lastSteerSign = 0;
     this.subStepAccumulator = 0;
     this.snowDepthPos = 0;
@@ -119,6 +123,18 @@ export class GmaPlayerPhysics {
     this.crashRecoveryTimer = 0;
     this.ragdoll.active = false;
     this.trickScoring.reset();
+  }
+
+  public applyRocketJump(): void {
+    this.velocity.x *= this.config.speedboost_rocket_jump_dir;
+    this.velocity.z *= this.config.speedboost_rocket_jump_dir;
+    this.velocity.y *= this.config.speedboost_rocket_jump_vertical;
+  }
+
+  public handleObstacleCollision(impactVelocity: number): void {
+    if (impactVelocity > this.config.crash_magnitude_object) {
+      this.triggerCrash(`Obstacle collision exceeding crash magnitude (${impactVelocity.toFixed(1)} > 40.0 m/s)`);
+    }
   }
 
   public get speed(): number {
@@ -148,7 +164,8 @@ export class GmaPlayerPhysics {
     dt: number,
     rawInput: InputState,
     groundHeight: number,
-    groundNormal: THREE.Vector3
+    groundNormal: THREE.Vector3,
+    isRoughGround: boolean = false
   ): void {
     this.groundNormal.copy(groundNormal).normalize();
 
@@ -191,7 +208,8 @@ export class GmaPlayerPhysics {
         processed.slapTackle,
         rawInput.trickFlipY,
         rawInput.trickRoll,
-        groundHeight
+        groundHeight,
+        isRoughGround
       );
       this.subStepAccumulator -= subDt;
     }
@@ -209,11 +227,12 @@ export class GmaPlayerPhysics {
     slideTurn: boolean,
     jumpPressed: boolean,
     brakePressed: boolean,
-    _stakePressed: boolean,
+    stakePressed: boolean,
     tacklePressed: boolean,
     flipInput: number,
     rollInput: number,
-    groundHeight: number
+    groundHeight: number,
+    isRoughGround: boolean = false
   ): void {
     const groundedTolerance = (this.state === MovementState.Airborne) ? 0.12 : 0.40;
     const onGround = this.position.y <= groundHeight + groundedTolerance;
@@ -286,9 +305,10 @@ export class GmaPlayerPhysics {
         slideTurn,
         jumpPressed,
         brakePressed,
-        _stakePressed,
+        stakePressed,
         tacklePressed,
-        groundHeight
+        groundHeight,
+        isRoughGround
       );
     } else {
       this.state = MovementState.Airborne;
@@ -304,10 +324,22 @@ export class GmaPlayerPhysics {
     slideTurn: boolean,
     jumpPressed: boolean,
     brakePressed: boolean,
-    _stakePressed: boolean,
+    stakePressed: boolean,
     tacklePressed: boolean,
-    groundHeight: number
+    groundHeight: number,
+    isRoughGround: boolean = false
   ): void {
+    // 0. Rough Ground Crash Timer
+    if (isRoughGround) {
+      this.roughGroundTimer += dt;
+      if (this.roughGroundTimer >= this.config.time_on_rough_ground_before_crash) {
+        this.triggerCrash('Riding on rough terrain/rocks exceeded 3.0s limit');
+        return;
+      }
+    } else {
+      this.roughGroundTimer = 0.0;
+    }
+
     // 1. Snowdepth spring suspension model
     // Spring constant: k = 20.0, Spring pull: 1.0, Velocity damping: 0.99, Position damping: 0.95
     const targetElevation = groundHeight;
@@ -323,10 +355,24 @@ export class GmaPlayerPhysics {
     // Apply ground contact elevation with snowdepth absorption
     this.position.y = groundHeight + this.snowDepthPos;
 
-    // 2. Determine Turn Type
+    // 2. Standing to Skiing / Riding Kick-Push Transition:
+    // player.maxStandingVelocity: 1.0, player.standingToSkiingPushVelocity: 3.0
     const absSteer = Math.abs(steerInput);
     const curSpeed = this.velocity.length();
 
+    if (this.state === MovementState.Standing || curSpeed < this.config.maxStandingVelocity) {
+      if (absSteer > 0.05 || jumpPressed || stakePressed) {
+        this.state = MovementState.Skiing;
+        // Pushes player forward with standingToSkiingPushVelocity (3.0 m/s = 10.8 km/h)
+        this.velocity.addScaledVector(this.forwardDir, this.config.standingToSkiingPushVelocity);
+      } else {
+        this.state = MovementState.Standing;
+      }
+    } else if (curSpeed < 0.2 && absSteer <= 0.05 && !jumpPressed && !stakePressed) {
+      this.state = MovementState.Standing;
+    }
+
+    // 3. Determine Turn Type
     if (absSteer > 0.85 && curSpeed > 14.0) {
       this.currentTurnType = TurnType.OverTurn;
       this.sharpTurnTimer = 0.0;
@@ -386,9 +432,9 @@ export class GmaPlayerPhysics {
 
         // Slide turn boost at 0.5s mark (+2.0 m/s burst)
         this.slideTurnBoostTimer += dt;
-        if (!this.slideTurnBoostTriggered && this.slideTurnBoostTimer >= this.config.slideturn_boost_timepoint) {
+        if (this.slideTurnBoostTimer >= this.config.slideturn_boost_timepoint) {
           this.velocity.addScaledVector(this.forwardDir, this.config.slideturn_boost_velocity);
-          this.slideTurnBoostTriggered = true;
+          this.slideTurnBoostTimer = 0.0;
         }
 
         // Drift duration milestone bonuses
@@ -413,7 +459,6 @@ export class GmaPlayerPhysics {
       }
       default:
         this.slideTurnBoostTimer = 0.0;
-        this.slideTurnBoostTriggered = false;
         this.currentDriftTime = 0.0;
         this.driftMilestoneIndex = 0;
         break;
@@ -435,6 +480,13 @@ export class GmaPlayerPhysics {
       let headingDiff = (this.currentHeadingAngle - baseHeading) % (Math.PI * 2);
       if (headingDiff > Math.PI) headingDiff -= Math.PI * 2;
       if (headingDiff < -Math.PI) headingDiff += Math.PI * 2;
+
+      // Maximum Turn Angle Crash: Steering or deflecting beyond 120 causes a crash
+      const maxTurnAngleRad = this.config.max_turn_angle_deg * (Math.PI / 180.0);
+      if (Math.abs(headingDiff) > maxTurnAngleRad) {
+        this.triggerCrash('Turn deflection angle exceeded max limit (120°)');
+        return;
+      }
 
       if (Math.abs(headingDiff) > turnCapRad) {
         this.currentHeadingAngle = baseHeading + Math.sign(headingDiff) * turnCapRad;
@@ -486,37 +538,45 @@ export class GmaPlayerPhysics {
     const isSwitch = alignment < -0.1;
 
     // Traditional skis suffer 10x penalty when riding backward without twintips.
+    // Snowboards have built-in twin-tip symmetry and suffer no switch friction penalty
     if (isSwitch && this.sport === SportType.Skis && !this.hasTwintips) {
       effectiveFriction = this.config.ground_friction_switch_no_twintips; // 10.0
     }
 
-    // Calibrated snow glide drag and aerodynamic resistance
-    const baseFrictionCoeff = 0.016;
-    const totalLinearDrag = (effectiveFriction * baseFrictionCoeff) + (driftFriction * 3.0);
-    const speed = this.velocity.length();
-    const aeroCoeff = 0.0028; // Quadratic air resistance
-    const aeroDamping = Math.max(0.0, 1.0 - (aeroCoeff * speed * dt));
-    const damping = Math.exp(-totalLinearDrag * dt) * aeroDamping;
+    // Braking adds direct friction (player.breaking.power: 2.5)
+    if (brakePressed) {
+      effectiveFriction += this.config.breaking_power; // 2.5
+    }
+
+    // Backward Riding Cap: Maximum backward speed is capped at 12 m/s with a friction of 15.0
+    if (isSwitch) {
+      effectiveFriction += this.config.backward_friction; // 15.0
+    }
+
+    // 1. Exponential Velocity Damping
+    // Physical calibration: ground_friction.base (1.0) maps to slick groomed snow glide (0.018 s^-1).
+    // Braking, switch on non-twintips, and drift add physically calibrated drag.
+    const baseFrictionRate = 0.018; // Base snow glide drag
+    const brakeFriction = brakePressed ? this.config.breaking_power * 0.8 : 0.0;
+    const switchFriction = (isSwitch && this.sport === SportType.Skis && !this.hasTwintips) ? 0.35 : 0.0;
+    const backwardFriction = isSwitch ? 0.30 : 0.0;
+    const totalFriction = (effectiveFriction * baseFrictionRate) + (driftFriction * 3.0) + brakeFriction + switchFriction + backwardFriction;
+    const damping = Math.exp(-totalFriction * dt);
     this.velocity.multiplyScalar(damping);
 
-    // Active snowplow brake
-    if (brakePressed) {
-      const brakeDecel = this.config.breaking_power * 4.0; // ~10 m/s^2 deceleration
-      const speedDrop = brakeDecel * dt;
-      if (speed > speedDrop) {
-        this.velocity.multiplyScalar((speed - speedDrop) / speed);
-      } else {
-        this.velocity.set(0, 0, 0);
-      }
+    // Hard backward speed clamp
+    if (isSwitch && this.velocity.length() > this.config.backward_max_velocity) {
+      this.velocity.setLength(this.config.backward_max_velocity); // 12 m/s
     }
 
     // 7. Align Velocity with Forward Ski/Board Direction (Edge Bite / Carving Grip)
-    if (speed > 1e-4) {
-      const velDir = this.velocity.clone().divideScalar(speed);
+    const alignSpeed = this.velocity.length();
+    if (alignSpeed > 1e-4) {
+      const velDir = this.velocity.clone().divideScalar(alignSpeed);
       const grip = (this.currentTurnType === TurnType.SlideTurn) ? 0.85 : 0.98;
       const targetDir = isSwitch ? this.forwardDir.clone().negate() : this.forwardDir.clone();
       const newVelDir = velDir.multiplyScalar(1.0 - grip).add(targetDir.multiplyScalar(grip)).normalize();
-      this.velocity.copy(newVelDir).multiplyScalar(speed);
+      this.velocity.copy(newVelDir).multiplyScalar(alignSpeed);
     }
 
     // 8. Jump Execution
@@ -528,10 +588,8 @@ export class GmaPlayerPhysics {
       }
     }
 
-    // 9. Staking (Ski poles push - Skiing only, driven by left/right steering on flats)
-    if (this.sport === SportType.Skis) {
-      this.handleStaking(dt, steerInput);
-    }
+    // 9. Propulsion: Ski poles staking (Skis) & Snowslide carve-pump (Snowboard)
+    this.handlePropulsion(dt, stakePressed, steerInput);
 
     // 10. Shoulder Tackle / Pole Slap
     if (tacklePressed) {
@@ -557,10 +615,9 @@ export class GmaPlayerPhysics {
       this.velocity.y += this.config.trick_hover_zforce * dt;
     }
 
-    // Calibrated aerodynamic drag in air (preserves jump momentum)
-    const airSpeed = this.velocity.length();
-    const aeroDamping = Math.max(0.0, 1.0 - (0.0022 * airSpeed * dt));
-    this.velocity.multiplyScalar(aeroDamping);
+    // Air Drag: During airborne phases (mechanics/PlayerPhysics.cpp:259):
+    // velocity_ *= (1.0 - config_.air_friction); // air_friction: 0.006
+    this.velocity.multiplyScalar(1.0 - this.config.air_friction);
 
     // 2. Aerial Rotations (Spins, Flips, Rolls)
     if (Math.abs(steerInput) > 0.05) {
@@ -607,56 +664,81 @@ export class GmaPlayerPhysics {
     this.position.addScaledVector(this.velocity, dt);
   }
 
-  private handleStaking(dt: number, steerInput: number): void {
+  private handlePropulsion(dt: number, stakePressed: boolean, steerInput: number): void {
     const curSpeed = this.velocity.length();
-    // Terrain slope angle in degrees along forward travel direction
-    const slopeAngleDeg = Math.asin(THREE.MathUtils.clamp(this.forwardDir.y, -1.0, 1.0)) * RAD2DEG;
+    // Terrain pitch angle along forward travel direction
+    const slopePitchDeg = Math.asin(THREE.MathUtils.clamp(this.forwardDir.y, -1.0, 1.0)) * RAD2DEG;
 
     const canStakeRegular =
-      slopeAngleDeg >= this.config.staking_inclination_regular_from_deg &&
-      slopeAngleDeg <= this.config.staking_inclination_regular_to_deg;
+      slopePitchDeg >= this.config.staking_inclination_regular_from_deg &&
+      slopePitchDeg <= this.config.staking_inclination_regular_to_deg;
     const canStakeDamped =
-      slopeAngleDeg > this.config.staking_inclination_damped_from_deg &&
-      slopeAngleDeg <= this.config.staking_inclination_damped_to_deg;
+      slopePitchDeg > this.config.staking_inclination_damped_from_deg &&
+      slopePitchDeg <= this.config.staking_inclination_damped_to_deg;
 
-    const eligible = (canStakeRegular || canStakeDamped) && curSpeed < (this.config.staking_max_vel * 15.0);
+    const eligible = (canStakeRegular || canStakeDamped) && (curSpeed < this.config.staking_max_vel * 15.0);
 
     const absSteer = Math.abs(steerInput);
     const steerSign = absSteer > 0.08 ? Math.sign(steerInput) : 0;
 
-    // Detect left/right stick alternation or fresh steer nudge to plant the pole
-    if (eligible && steerSign !== 0 && steerSign !== this.lastSteerSign) {
+    // Detect left/right stick alternation (carving / slalom stride)
+    const isAlternating = steerSign !== 0 && steerSign !== this.lastSteerSign;
+    if (eligible && isAlternating) {
       this.lastSteerSign = steerSign;
       this.stakingPoleSide = steerSign;
       this.stakingPoleTimer = 0.5; // player.staking.pole_down: 0.5s from player.yaml
+      this.snowslidePumpTimer = 0.4; // player.snowslide_push duration
     } else if (steerSign === 0) {
       this.lastSteerSign = 0;
     }
 
-    if (this.stakingPoleTimer > 0 && eligible) {
-      this.stakingPoleTimer -= dt;
-      this.isStaking = true;
-      this.isStakingDamped = canStakeDamped;
+    if (this.sport === SportType.Skis) {
+      const shouldThrust = (stakePressed || this.stakingPoleTimer > 0) && eligible;
 
-      let power = this.config.staking_power;
-      if (curSpeed < 1.0) {
-        power += this.config.staking_initial_power; // Standstill kick
-      }
-      if (canStakeDamped) {
-        power *= this.config.staking_damped_mul; // 0.2
-      }
-      this.velocity.addScaledVector(this.forwardDir, power * dt);
+      if (shouldThrust) {
+        if (this.stakingPoleTimer > 0) {
+          this.stakingPoleTimer -= dt;
+        }
+        this.isStaking = true;
+        this.isStakingDamped = canStakeDamped;
 
-      // Curve gently around planted pole while pushing (GMA slalom skate stride)
-      if (curSpeed < 8.0) {
-        const carveCurveRate = 0.75 * this.stakingPoleSide;
-        this.currentHeadingAngle += carveCurveRate * dt;
+        let power = this.config.staking_power;
+        if (curSpeed < 1.0) {
+          power += this.config.staking_initial_power; // Standstill kick
+        }
+        if (canStakeDamped) {
+          power *= this.config.staking_damped_mul; // 0.2
+        }
+        this.velocity.addScaledVector(this.forwardDir, power * dt);
+
+        // Curve gently around planted pole while pushing (GMA slalom skate stride)
+        if (curSpeed < 8.0 && this.stakingPoleSide !== 0) {
+          const carveCurveRate = 0.75 * this.stakingPoleSide;
+          this.currentHeadingAngle += carveCurveRate * dt;
+        }
+      } else {
+        this.isStaking = false;
+        this.isStakingDamped = false;
+        if (!eligible) {
+          this.stakingPoleTimer = 0.0;
+        }
       }
     } else {
+      // Snowboard: Snowslide carve-pump on edge alternation (player.snowslide_push.push_mul: 3.0)
       this.isStaking = false;
       this.isStakingDamped = false;
-      if (!eligible) {
-        this.stakingPoleTimer = 0.0;
+      if (this.snowslidePumpTimer > 0 && eligible) {
+        this.snowslidePumpTimer -= dt;
+        let pumpPower = this.config.snowslide_push_mul * 4.0; // ~12 m/s^2 forward thrust
+        if (curSpeed < 1.0) {
+          pumpPower += 6.0; // Standstill carve kick
+        }
+        if (canStakeDamped) {
+          pumpPower *= 0.3;
+        }
+        this.velocity.addScaledVector(this.forwardDir, pumpPower * dt);
+      } else if (!eligible) {
+        this.snowslidePumpTimer = 0.0;
       }
     }
   }

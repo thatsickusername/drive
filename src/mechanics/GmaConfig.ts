@@ -116,7 +116,18 @@ export interface PlayerConfig {
   velocity_penalty_ground: number;
   crash_magnitude_object: number;
   max_turn_angle_deg: number;
+  backward_max_velocity: number;
+  backward_friction: number;
   time_on_rough_ground_before_crash: number;
+
+  // Inclination dampening filters
+  inclination_dampening_extra: number;
+  inclination_dampening_regular: number;
+  inclination_dampening_max_regular: number;
+  inclination_dampening_min_regular: number;
+
+  // Snowslide edge carving propulsion (snowboards)
+  snowslide_push_mul: number;
 
   // Snowdepth spring suspension model
   snowdepth_spring_constant: number;
@@ -222,7 +233,16 @@ export function createDefaultPlayerConfig(): PlayerConfig {
     velocity_penalty_ground: 0.3,
     crash_magnitude_object: 40.0,
     max_turn_angle_deg: 120.0,
+    backward_max_velocity: 12.0,
+    backward_friction: 15.0,
     time_on_rough_ground_before_crash: 3.0,
+
+    inclination_dampening_extra: 10000000,
+    inclination_dampening_regular: 50000,
+    inclination_dampening_max_regular: 0.2,
+    inclination_dampening_min_regular: 0.03,
+
+    snowslide_push_mul: 3.0,
 
     snowdepth_spring_constant: 20.0,
     snowdepth_spring_pull: 1.0,

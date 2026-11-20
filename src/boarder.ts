@@ -856,12 +856,13 @@ export class Skier {
       slideTurn: !!input.slideTurn,
       brake: input.brake,
       slapTackle: !!input.tackle,
-      stakePole: false,
+      stakePole: !!input.forward,
       reverseTurnEnabled: this.gmaPhysics.controls.reverseTurn
     };
 
     // 3. Step 333.3 Hz GMA Player Physics
-    this.gmaPhysics.update(dt, inputState, groundElevation, this.smoothNormal);
+    const isRoughGround = terrainSample ? terrainSample.surfaceType === 'ROCK' : false;
+    this.gmaPhysics.update(dt, inputState, groundElevation, this.smoothNormal, isRoughGround);
 
     // 4. Sync Rapier RigidBody
     this.rigidBody.setTranslation(

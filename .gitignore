@@ -4,3 +4,4 @@ dist/
 *.log
 slow_roads_extracted_core/
 /mechanics/
+/terrain_and_rendering
