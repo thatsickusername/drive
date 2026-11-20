@@ -39,6 +39,7 @@ drive/
 │   └── index.js             # WebSocket multiplayer relay server
 └── src/
     ├── main.ts              # Game bootstrap, main loop, HUD, hotkeys & spawn director
+    ├── boarder.ts           # Grand Mountain Adventure Snowboard Controller (GMA physics)
     ├── physics.ts           # Rapier3D world initialization & 60Hz accumulator
     ├── renderer.ts          # Three.js scene, camera, lighting (sun + hemi) & fog setup
     ├── camera.ts            # Dynamic follow camera director & free-flying Fly-Cam
@@ -47,7 +48,7 @@ drive/
     ├── map.ts               # Proving ground testing map and obstacle colliders
     ├── remote-car.ts        # Multiplayer kinematic interpolation visualization
     ├── player/
-    │   ├── SnowboardController.ts # Snowboard physics controller & edge carving
+    │   ├── SnowboardController.ts # Legacy snowboard prototype
     │   └── TrickEngine.ts         # Airborne trick, grab, spin, flip & score evaluator
     ├── world/               # Procedural Alpine & Terrain Pipelines
     │   ├── alpineHeightfield.ts   # 5-Layer Alvdalen Inclined Massif Procedural Engine
@@ -104,15 +105,20 @@ The mountain is modeled as a 2.4 km × 2.4 km single inclined massif ($x \in [-1
    - **Frozen River Ice:** Blue-grey ice (`#7da3b8`) for $y \le 0.5\text{m}$, coupled with a dedicated flat ice plane mesh at $y = 0$ for $z \in [800, 1220]$.
    - **Vegetation:** Instanced evergreen pine trees distributed via deterministic golden-angle copse clustering (groves) rather than uniform grid sampling to eliminate artificial tree rows.
 
-### 4.2 Snowboard Controller & Trick Engine (`src/player/`)
+### 4.2 Grand Mountain Adventure Snowboard Controller & Trick Engine (`src/boarder.ts` & `src/player/TrickEngine.ts`)
 
-* **Physics Controller (`SnowboardController.ts`):**
-  - Rigid body kinematics with dynamic surface friction: ultra-low on frozen river ice (0.01), slick on groomed snow (0.03), deep powder drag (0.06), and high drag on rock (0.15).
-  - Slope-aligned steering with progressive edge-bite carving, speed-dependent roll banking, and jump pop impulse.
-* **Trick Engine (`TrickEngine.ts`):**
+* **Grand Mountain Adventure (GMA) Physics Engine (`src/boarder.ts`):**
+  - **Sidecut Carving Kinematics ($R_{sc} = 8.2\text{m}$):** Turning radius is dictated by the physical sidecut radius and edge roll tilt: $R = \frac{R_{sc}}{\sin(\theta_{edge}) + 0.08}$. Implements speed-dependent blending between low-speed ground pivot turning ($< 3.8\text{ m/s}$) and high-speed carved arc centripetal rotation ($\omega = \frac{v}{R}$).
+  - **Edge Bite vs. Skidded Drift:** Evaluates centripetal G-demand ($a_c = v \cdot |\omega|$) against edge grip capacity ($a_{bite} = (12.5 + 9.5\sin(\theta_{edge})) \cdot \mu_{surface}$).
+    - *Clean Carve:* Lateral slip is eliminated ($32\text{ s}^{-1}$ damp), forward speed is preserved ($> 99.8\%$), and procedural audio emits crisp high-frequency slicing.
+    - *Skid / Hockey Stop:* Transverse Coulomb drag scrubs velocity, spraying wide snow plumes and triggering deep hollow snow plowing audio.
+  - **Fall-Line Gravity & Pumping Momentum:** Projected downhill gravity $\vec{g}_\parallel = \vec{g} - (\vec{g} \cdot \vec{n})\vec{n}$ accelerates riders naturally down the fall line. Deep carving accumulates centrifugal leg strain loads; zero-crossing edge switches convert this unweighting energy into forward acceleration impulses scaled by alignment with the downhill fall-line gradient.
+  - **Multi-Point Ground Sampling:** 3-point longitudinal probe array (Center, Nose $+0.65\text{m}$, Tail $-0.65\text{m}$) prevents clipping or snagging over convex crests, rollers, and kicker transitions.
+  - **Rigorous Landing Impact Decomposition:** Completely eliminates outward bounce and spurious speed additions. Downward normal impact velocity ($\vec{v} \cdot \vec{n}$) is absorbed by snow deformation and 2nd-order hip spring compression, retaining 100% of tangential downhill momentum on transitions. Evaluates dual-axis touchdown alignment (pitch to slope normal and yaw to horizontal velocity vector), triggering severe speed scrubbing and crash wipeouts on flat drops $> 18\text{ m/s}$ or sideways touchdowns $> 46^\circ$.
+* **Trick Engine (`src/player/TrickEngine.ts`):**
   - Monitors airborne state, tracking total airtime, rotation around all three Euler axes, and grab inputs.
   - Recognizes classic grabs (`Indie`, `Mute`, `Nosegrab`, `Tailgrab`), spins (180°, 360°, 540°, 720°), and front/back flips.
-  - Multiplies trick points based on combo variety and cleanly detects crash landings when the board angle deviates $> 45^\circ$ from ground normal at touchdown.
+  - Multiplies trick points based on combo variety and cleanly detects crash landings when alignment exceeds tolerance or impact is severe.
 
 ### 4.3 Camera Director & Fly-Cam (`src/camera.ts`)
 
