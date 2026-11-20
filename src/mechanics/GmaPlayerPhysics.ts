@@ -457,7 +457,16 @@ export class GmaPlayerPhysics {
     const normalComp = this._gVec.dot(this.groundNormal);
     this._gNormal.copy(this.groundNormal).multiplyScalar(normalComp);
     this._gParallel.subVectors(this._gVec, this._gNormal);
-    this.velocity.addScaledVector(this._gParallel, dt);
+
+    // Steep slope acceleration multiplier (player.speedboost.steep_slope: 2.0)
+    // On slopes > 20 deg, smoothly scale fall-line gravity acceleration up to 2.0x
+    const slopeAngleDeg = Math.acos(THREE.MathUtils.clamp(this.groundNormal.y, -1.0, 1.0)) * RAD2DEG;
+    let slopeMultiplier = 1.0;
+    if (slopeAngleDeg > 20.0) {
+      const t = Math.min((slopeAngleDeg - 20.0) / 25.0, 1.0); // 20 deg -> 1.0x, 45+ deg -> 2.0x
+      slopeMultiplier = 1.0 + (this.config.speedboost_steep_slope - 1.0) * t;
+    }
+    this.velocity.addScaledVector(this._gParallel, slopeMultiplier * dt);
 
     // Continuous adhesive normal pull: F_pull = -n * 5.0 m/s^2 (GMA contour adhesion)
     // Eliminates unnatural airborne bouncing when skiing over small crests, wind lips, and undulating rollers
@@ -637,6 +646,12 @@ export class GmaPlayerPhysics {
         power *= this.config.staking_damped_mul; // 0.2
       }
       this.velocity.addScaledVector(this.forwardDir, power * dt);
+
+      // Curve gently around planted pole while pushing (GMA slalom skate stride)
+      if (curSpeed < 8.0) {
+        const carveCurveRate = 0.75 * this.stakingPoleSide;
+        this.currentHeadingAngle += carveCurveRate * dt;
+      }
     } else {
       this.isStaking = false;
       this.isStakingDamped = false;
