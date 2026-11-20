@@ -19,6 +19,9 @@ export class DynamicCameraDirector {
   // Scratch objects to eliminate GC
   private scratchForward = new THREE.Vector3();
   private shakeTime: number = 0;
+  private pumpFovBoost: number = 0;
+  private smoothLeadInX: number = 0;
+  private smoothLeadInZ: number = 0;
 
   // Debug Fly-Cam Mode
   public isFlyCam: boolean = false;
@@ -112,7 +115,11 @@ export class DynamicCameraDirector {
     yawDelta: number = 0,
     pitchDelta: number = 0,
     lateralSlip: number = 0,
-    isAirborne: boolean = false
+    isAirborne: boolean = false,
+    leanAngle: number = 0,
+    airTime: number = 0,
+    groundDistance: number = 0,
+    pumpKick: number = 0
   ): void {
     const hasManualLook = Math.abs(yawDelta) > 0.0001 || Math.abs(pitchDelta) > 0.0001;
 
@@ -133,6 +140,13 @@ export class DynamicCameraDirector {
         : 1.0;
       this.camYaw += angleDiff * Math.min(1.0, trackSpeed * dt);
 
+      // Carve Lead-In Camera Yaw Bias: slightly bias camera yaw into turn apex so player sees exit line
+      if (Math.abs(leanAngle) > 0.15 && !isAirborne) {
+        const speedFactor = THREE.MathUtils.smoothstep(speedKmh, 10.0, 55.0);
+        const yawBias = -Math.sign(leanAngle) * Math.min(0.24, Math.abs(leanAngle) * 0.20 * speedFactor);
+        this.camYaw += yawBias * Math.min(1.0, dt * 2.8);
+      }
+
       // Return pitch to neutral downhill incline if untouched
       if (this.timeSinceManualLook > 0.8) {
         this.camPitch = THREE.MathUtils.damp(this.camPitch, 0.08, 2.5, dt);
@@ -147,8 +161,12 @@ export class DynamicCameraDirector {
     // Step 1: Normalize speed intensity factor (20 km/h to 58 km/h)
     const speedT = THREE.MathUtils.smoothstep(speedKmh, 20.0, 58.0);
 
-    // Step 2: Dynamic FOV (55° idle -> 80° at speed)
-    const targetFov = 55.0 + speedT * 25.0;
+    // Step 2: Dynamic FOV (55° idle -> 80° at speed) + Carve Unweighting Pump Kick Surge
+    if (pumpKick > 0) {
+      this.pumpFovBoost = Math.max(this.pumpFovBoost, 3.2 * pumpKick);
+    }
+    this.pumpFovBoost = THREE.MathUtils.damp(this.pumpFovBoost, 0, 8.5, dt);
+    const targetFov = 55.0 + speedT * 25.0 + this.pumpFovBoost;
     this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, Math.min(1.0, dt * 6.0));
     this.camera.updateProjectionMatrix();
 
@@ -165,13 +183,32 @@ export class DynamicCameraDirector {
       riderPos.z - forwardZ * dynamicFollowDist
     );
 
-    // Airborne Landing Pitch
-    const airLandingPitchDrop = isAirborne ? -0.55 : 0.0;
+    // Carve Lead-In: Offset look target toward the inside of the turn & down the fall line
+    // Inside of turn is opposite to lean direction (lean right = +leanAngle => look right +rightX)
+    let leadInsideX = 0;
+    let leadInsideZ = 0;
+    if (!isAirborne && Math.abs(leanAngle) > 0.12) {
+      const turnMag = Math.abs(leanAngle);
+      const turnSign = Math.sign(leanAngle);
+      const leadDist = THREE.MathUtils.smoothstep(speedKmh, 8.0, 50.0) * 2.4 * turnMag;
+      leadInsideX = rightX * turnSign * leadDist + forwardX * (turnMag * 0.6);
+      leadInsideZ = rightZ * turnSign * leadDist + forwardZ * (turnMag * 0.6);
+    }
+    this.smoothLeadInX = THREE.MathUtils.damp(this.smoothLeadInX, leadInsideX, 7.5, dt);
+    this.smoothLeadInZ = THREE.MathUtils.damp(this.smoothLeadInZ, leadInsideZ, 7.5, dt);
+
+    // Airborne Landing Pitch: smoothly pitch downward toward projected touchdown point
+    let airLandingPitchDrop = 0.0;
+    if (isAirborne) {
+      const airProgress = THREE.MathUtils.clamp(airTime / 0.7, 0, 1);
+      const proximityBoost = groundDistance < 4.5 ? (1.0 - groundDistance / 4.5) * 0.55 : 0.0;
+      airLandingPitchDrop = -(0.35 + airProgress * 0.40 + proximityBoost);
+    }
 
     this.targetLookAt.set(
-      riderPos.x + forwardX * 1.8,
+      riderPos.x + forwardX * 1.8 + this.smoothLeadInX,
       riderPos.y + 0.85 - this.camPitch * 0.5 + airLandingPitchDrop,
-      riderPos.z + forwardZ * 1.8
+      riderPos.z + forwardZ * 1.8 + this.smoothLeadInZ
     );
 
     // Step 2: Asymmetric Elastic Lag (Forward tight: 8.0 - 2.5*speedT; Lateral loose: 2.8)

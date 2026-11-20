@@ -204,8 +204,13 @@ class Game {
         lookInputs.yawDelta,
         lookInputs.pitchDelta,
         Math.abs(this.player.vLateral),
-        !this.player.isGrounded
+        !this.player.isGrounded,
+        this.player.leanAngle,
+        this.player.airTimer,
+        this.player.groundDistance,
+        this.player.pumpKick
       );
+      this.player.pumpKick = 0;
     }
 
     // 2. Update HUD (at 30Hz)
@@ -249,6 +254,8 @@ class Game {
     const altitude = pos.y.toFixed(1);
     const stateBadge = !this.player.isGrounded
       ? '<span style="color:#f59e0b;font-weight:bold;">▲ AIRBORNE</span>'
+      : this.player.isSlashing
+      ? `<span style="color:#fbbf24;font-weight:bold;">✦ SLASH TURN (${this.player.slipAngleDeg.toFixed(0)}°)</span>`
       : this.player.isDrifting
       ? `<span style="color:#f97316;font-weight:bold;">≋ DRIFTING (${this.player.slipAngleDeg.toFixed(0)}°)</span>`
       : '<span style="color:#38bdf8;font-weight:bold;">● CARVING</span>';

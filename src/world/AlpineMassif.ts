@@ -57,8 +57,10 @@ export class AlpineMassif {
 
     const colorPiste = new THREE.Color(0xf4f8ff);
     const colorPowder = new THREE.Color(0xeef3f8);
+    const colorSnowShadow = new THREE.Color(0xdce7f2); // Cooler leeward rim & wind-lip shadow tint
     const colorRock = new THREE.Color(0x6e5c52);
     const colorIce = new THREE.Color(0x7da3b8);
+    const sunDir = new THREE.Vector3(160, 120, 90).normalize();
 
     // 6x6 chunks: cx in [-3, -2, -1, 0, 1, 2], cz in [-3, -2, -1, 0, 1, 2]
     for (let cx = -3; cx <= 2; cx++) {
@@ -110,6 +112,17 @@ export class AlpineMassif {
               tempColor.copy(colorPowder).lerp(colorPiste, blend);
             } else {
               tempColor.copy(colorPowder);
+              // Rim/horizon contrast on convex crests & leeward shadow tinting on wind lips
+              const nDotSun = sample.normal.x * sunDir.x + sample.normal.y * sunDir.y + sample.normal.z * sunDir.z;
+              if (nDotSun < 0.35) {
+                const leewardFactor = Math.max(0, (0.35 - nDotSun) / 0.65);
+                tempColor.lerp(colorSnowShadow, leewardFactor * 0.45);
+              }
+              // Fall-line subtle wind-scoured normal micro-contrast
+              const windScour = Math.sin(wx * 0.45 + wz * 0.18) * 0.012;
+              tempColor.r = Math.min(1.0, Math.max(0.0, tempColor.r + windScour));
+              tempColor.g = Math.min(1.0, Math.max(0.0, tempColor.g + windScour));
+              tempColor.b = Math.min(1.0, Math.max(0.0, tempColor.b + windScour * 1.25));
             }
 
             colors[pIdx + 0] = tempColor.r;

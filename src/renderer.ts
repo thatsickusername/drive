@@ -46,8 +46,13 @@ export class Renderer {
     this.scene.add(this.dirLight);
 
     // Cool blue hemisphere light (#6ea8e5) for crisp alpine blue shadow fill
-    const hemiLight = new THREE.HemisphereLight(0x6ea8e5, 0x8aa8cf, 0.65);
+    const hemiLight = new THREE.HemisphereLight(0x6ea8e5, 0x7a94ab, 0.70);
     this.scene.add(hemiLight);
+
+    // Subtle leeward rim fill light to pop kickers, wind lips and convex crests from 40-60m
+    const fillLight = new THREE.DirectionalLight(0xb8cce0, 0.28);
+    fillLight.position.set(-140, 90, -80);
+    this.scene.add(fillLight);
 
     window.addEventListener('resize', this.onWindowResize.bind(this));
   }

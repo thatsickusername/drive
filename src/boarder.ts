@@ -49,7 +49,35 @@ class SnowAudio {
     }
   }
 
-  public update(speed: number, vLateral: number, isGrounded: boolean, isDrifting: boolean = false): void {
+  public playLandThump(isClean: boolean): void {
+    if (!this.initialized || !this.ctx) return;
+    try {
+      const osc = this.ctx.createOscillator();
+      const thumpGain = this.ctx.createGain();
+      const thumpFilter = this.ctx.createBiquadFilter();
+
+      thumpFilter.type = 'lowpass';
+      thumpFilter.frequency.value = isClean ? 180 : 120;
+
+      osc.type = isClean ? 'sine' : 'triangle';
+      osc.frequency.setValueAtTime(isClean ? 90 : 65, this.ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(30, this.ctx.currentTime + 0.14);
+
+      thumpGain.gain.setValueAtTime(isClean ? 0.35 : 0.50, this.ctx.currentTime);
+      thumpGain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.16);
+
+      osc.connect(thumpFilter);
+      thumpFilter.connect(thumpGain);
+      thumpGain.connect(this.ctx.destination);
+
+      osc.start();
+      osc.stop(this.ctx.currentTime + 0.18);
+    } catch {
+      // Headless / restricted
+    }
+  }
+
+  public update(speed: number, vLateral: number, isGrounded: boolean, isDrifting: boolean = false, gripUtilization: number = 0): void {
     if (!this.initialized || !this.ctx || !this.gain || !this.filter) return;
     if (this.ctx.state === 'suspended') {
       this.ctx.resume().catch(() => {});
@@ -67,10 +95,143 @@ class SnowAudio {
       this.filter.frequency.setTargetAtTime(targetFreq, this.ctx.currentTime, 0.03);
     } else {
       // Crisp high-frequency slicing sound of a steel edge carving through groomed snow
-      const targetGain = Math.min(0.20, (speed / 35) * 0.14);
-      const targetFreq = 950 + Math.min(2200, speed * 60);
+      let targetGain = Math.min(0.20, (speed / 35) * 0.14);
+      let targetFreq = 950 + Math.min(2200, speed * 60);
+
+      // Edge-Bite Limit Audio Cue: subtle high-frequency board chatter between 80% and 100% grip limit
+      if (gripUtilization > 0.80) {
+        const chatterT = THREE.MathUtils.clamp((gripUtilization - 0.80) / 0.20, 0, 1);
+        targetFreq = THREE.MathUtils.lerp(targetFreq, 3400, chatterT * 0.65);
+        targetGain += chatterT * 0.07;
+      }
+
       this.gain.gain.setTargetAtTime(targetGain, this.ctx.currentTime, 0.05);
       this.filter.frequency.setTargetAtTime(targetFreq, this.ctx.currentTime, 0.05);
+    }
+  }
+}
+
+export class SnowTrailRibbon {
+  private readonly maxSegments = 360;
+  private readonly positions: Float32Array;
+  private readonly colors: Float32Array;
+  private readonly mesh: THREE.Mesh;
+  private head = 0;
+  private count = 0;
+  private lastEmitPos = new THREE.Vector3(9999, 9999, 9999);
+  private readonly emitDist = 0.35;
+
+  constructor(scene: THREE.Scene) {
+    this.positions = new Float32Array(this.maxSegments * 2 * 3);
+    this.colors = new Float32Array(this.maxSegments * 2 * 3);
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
+
+    const indices = new Uint32Array((this.maxSegments - 1) * 6);
+    let idx = 0;
+    for (let i = 0; i < this.maxSegments - 1; i++) {
+      const a = i * 2;
+      const b = i * 2 + 1;
+      const c = (i + 1) * 2;
+      const d = (i + 1) * 2 + 1;
+      indices[idx++] = a;
+      indices[idx++] = c;
+      indices[idx++] = b;
+      indices[idx++] = b;
+      indices[idx++] = c;
+      indices[idx++] = d;
+    }
+    geo.setIndex(new THREE.BufferAttribute(indices, 1));
+
+    const mat = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.60,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    });
+
+    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh.frustumCulled = false;
+    scene.add(this.mesh);
+  }
+
+  public reset(): void {
+    this.head = 0;
+    this.count = 0;
+    this.lastEmitPos.set(9999, 9999, 9999);
+    for (let i = 0; i < this.positions.length; i++) {
+      this.positions[i] = 0;
+      this.colors[i] = 0;
+    }
+    (this.mesh.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    (this.mesh.geometry.attributes.color as THREE.BufferAttribute).needsUpdate = true;
+  }
+
+  public update(
+    pos: THREE.Vector3,
+    right: THREE.Vector3,
+    normal: THREE.Vector3,
+    isGrounded: boolean,
+    slipAngleDeg: number,
+    speed: number,
+    isDrifting: boolean
+  ): void {
+    if (!isGrounded || speed < 0.8) return;
+
+    const dist = pos.distanceTo(this.lastEmitPos);
+    if (dist >= this.emitDist) {
+      this.lastEmitPos.copy(pos);
+
+      // Width: razor-thin for pure carve (0.04m), wide smeared tracks for skid/slash (0.30m)
+      const slipT = THREE.MathUtils.clamp(slipAngleDeg / 48.0, 0, 1);
+      const halfWidth = isDrifting ? THREE.MathUtils.lerp(0.10, 0.30, slipT) : 0.045;
+
+      // Color/Opacity: subtle blue-grey ice trench for carve (#b2c8dc), softer bright white for smeared powder
+      const baseR = isDrifting ? 0.82 : 0.68;
+      const baseG = isDrifting ? 0.88 : 0.76;
+      const baseB = isDrifting ? 0.94 : 0.86;
+
+      const idx = this.head;
+      const v0 = idx * 2 * 3;
+      const v1 = v0 + 3;
+
+      const liftX = normal.x * 0.04;
+      const liftY = normal.y * 0.04;
+      const liftZ = normal.z * 0.04;
+      const groundContactY = pos.y - 0.44;
+
+      this.positions[v0 + 0] = pos.x + right.x * halfWidth + liftX;
+      this.positions[v0 + 1] = groundContactY + liftY;
+      this.positions[v0 + 2] = pos.z + right.z * halfWidth + liftZ;
+
+      this.positions[v1 + 0] = pos.x - right.x * halfWidth + liftX;
+      this.positions[v1 + 1] = groundContactY + liftY;
+      this.positions[v1 + 2] = pos.z - right.z * halfWidth + liftZ;
+
+      this.colors[v0 + 0] = baseR;
+      this.colors[v0 + 1] = baseG;
+      this.colors[v0 + 2] = baseB;
+
+      this.colors[v1 + 0] = baseR;
+      this.colors[v1 + 1] = baseG;
+      this.colors[v1 + 2] = baseB;
+
+      this.head = (this.head + 1) % this.maxSegments;
+      this.count = Math.min(this.count + 1, this.maxSegments);
+
+      (this.mesh.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      (this.mesh.geometry.attributes.color as THREE.BufferAttribute).needsUpdate = true;
+    }
+
+    // Gradual decay of trailing vertex colors
+    if (this.count > 0) {
+      for (let i = 0; i < this.colors.length; i++) {
+        this.colors[i] *= 0.9985;
+      }
+      (this.mesh.geometry.attributes.color as THREE.BufferAttribute).needsUpdate = true;
     }
   }
 }
@@ -158,11 +319,19 @@ export class SnowBoarder {
   public pumpChain = 0;        // Multi-turn cadence chain (0 to 4)
   public pumpFlow = 1.0;       // Rhythm flow multiplier (starts at 1.0, caps at 2.2)
   public isDrifting = false;   // True when slip angle > 35 degrees or braking
+  public isSlashing = false;   // True during controlled carve-slash spray turn
   public slipAngleDeg = 0;     // Current slip angle between heading and velocity
   public vForward = 0;
   public vLateral = 0;
   public groundDistance = 0;
   public stumbleTimer = 0;     // Reduced steering after bad landing (> 45 deg)
+  public gripUtilization = 0;  // Centripetal acceleration / edge bite limit
+  public pumpKick = 0;         // FOV kick surge trigger for camera director
+  public preWindCoil = 0;      // -1 (left) to +1 (right) pre-wind coil for spins
+  public prevSlopeGrade = 0;   // Downslope tracking for roller terrain pump
+  public wiggleTimer = 0;      // Flat ground wiggle skate timer
+  public lastWiggleSign = 0;   // Flat ground wiggle alternation sign
+  public airTimer = 0;         // Airborne duration in seconds
 
   private smoothNormal = new THREE.Vector3(0, 1, 0);
   private coyoteTimer = 0;
@@ -173,7 +342,6 @@ export class SnowBoarder {
   private airRoll = 0;
   private airYawVel = 0;
   private airPitchVel = 0;
-  private airTimer = 0;
 
   // Procedural animation springs
   private hipOffsetY = 0;
@@ -186,8 +354,9 @@ export class SnowBoarder {
   private carveHoldTime = 0;   // Duration held at deep lean (> 0.55)
   private straightTime = 0;    // Duration ridden straight (< 0.25)
 
-  // Audio and Particles
+  // Audio, Trail Ribbon and Particles
   private readonly audio = new SnowAudio();
+  private trailRibbon!: SnowTrailRibbon;
   private sprayParticles!: THREE.Points;
   private sprayGeo!: THREE.BufferGeometry;
   private sprayPositions!: Float32Array;
@@ -243,8 +412,9 @@ export class SnowBoarder {
     this.buildCharacterMesh();
     scene.add(this.root);
 
-    // 3. Build Snow Spray Particle System
+    // 3. Build Snow Spray Particle System & Trail Ribbon
     this.initSnowSpray(scene);
+    this.trailRibbon = new SnowTrailRibbon(scene);
 
     // 4. Setup Audio gesture trigger
     const initAudio = () => {
@@ -414,9 +584,16 @@ export class SnowBoarder {
     this.lastLeanSign = 0;
     this.edgeCooldown = 0;
     this.isDrifting = false;
+    this.isSlashing = false;
     this.slipAngleDeg = 0;
     this.vForward = 0;
     this.vLateral = 0;
+    this.gripUtilization = 0;
+    this.pumpKick = 0;
+    this.preWindCoil = 0;
+    this.prevSlopeGrade = 0;
+    this.wiggleTimer = 0;
+    this.lastWiggleSign = 0;
     this.isGrounded = false;
     this.coyoteTimer = 0;
     this.jumpCharge = 0;
@@ -425,6 +602,7 @@ export class SnowBoarder {
     this.airRoll = 0;
     this.hipOffsetY = 0;
     this.hipVelY = 0;
+    if (this.trailRibbon) this.trailRibbon.reset();
     this.root.position.set(x, y, z);
     this.visualRoot.quaternion.setFromAxisAngle(this._up, yaw);
     this.trickEngine.startAir();
@@ -543,23 +721,27 @@ export class SnowBoarder {
           this.stumbleTimer = 0.50;
           this.hipVelY = -4.5;
           this.triggerCrashSpray();
-          this.trickEngine.land(false);
-        } else if (impactSpeed > 11.5 || yawErrorDeg > 22.0 || pitchErrorDeg > 30.0) {
-          // Tier 2: Sketchy / Revert (recoverable pivot out of landing, 25% speed scrub, no wipeout)
-          this._vel.multiplyScalar(0.75);
-          this.stumbleTimer = 0.20;
+          this.trickEngine.land('CRASH');
+          this.audio.playLandThump(false);
+        } else if (impactSpeed > 11.5 || yawErrorDeg > 20.0 || pitchErrorDeg > 30.0) {
+          // Tier 2: Sketchy / Revert (recoverable pivot out of landing, heavy snow spray, 25-35% speed scrub, recoverable)
+          this._vel.multiplyScalar(0.72);
+          this.stumbleTimer = 0.25;
           this.hipVelY = -Math.min(4.5, impactSpeed * 0.35);
           if (horizSpeed > 2.0) {
             const travelYaw = Math.atan2(-this._vel.x, -this._vel.z);
-            this.yaw = travelYaw;
+            this.yaw = travelYaw; // Rider reverts & pivots out of landing in travel direction
           }
-          this.trickEngine.land(true);
+          this.triggerCrashSpray(); // Heavy snow spray on revert
+          this.trickEngine.land('SKETCHY');
+          this.audio.playLandThump(true);
         } else {
-          // Tier 1: Stomped Clean Landing (<20 deg yaw error): 100% momentum retained + subtle landing boost
+          // Tier 1: Stomped Clean Landing (<20 deg yaw error): 100% momentum retained + subtle landing boost + crisp audio thump
           this._vel.multiplyScalar(1.03);
           this.stumbleTimer = 0;
           this.hipVelY = -Math.min(4.0, impactSpeed * 0.25);
-          this.trickEngine.land(true);
+          this.trickEngine.land('STOMPED');
+          this.audio.playLandThump(true);
         }
 
         // Fire pre-buffered jump pop immediately on touchdown if primed deliberately
@@ -589,10 +771,17 @@ export class SnowBoarder {
       this.rigidBody.setGravityScale(1.0, true);
     }
 
-    // 2. Input Inertia (Lean-Driven Steering)
+    // 2. Input Inertia (Lean-Driven Steering with Asymmetric Slewing)
     // Left input = -1 (lean left), Right input = +1 (lean right)
+    // Engaging edge is fast & biting (1.35x); releasing edge is deliberate & controlled (0.75x)
     const targetLean = (input.right ? 1.0 : 0.0) - (input.left ? 1.0 : 0.0);
-    const leanSpring = targetLean === 0 ? 8.0 : 5.8;
+    const curHorizSpeedForLean = Math.hypot(this._vel.x, this._vel.z);
+    const speedLeanT = THREE.MathUtils.clamp(curHorizSpeedForLean / 18.0, 0, 1);
+    const baseLeanSpring = THREE.MathUtils.lerp(12.0, 4.5, speedLeanT);
+
+    const isEngaging = Math.abs(targetLean) > Math.abs(this.leanAngle);
+    const slewMultiplier = isEngaging ? 1.35 : 0.75;
+    const leanSpring = (targetLean === 0 ? Math.max(baseLeanSpring, 8.0) : baseLeanSpring) * slewMultiplier;
     this.leanAngle = THREE.MathUtils.damp(this.leanAngle, targetLean, leanSpring, dt);
 
     // 3. Apply Grounded vs Airborne Physics
@@ -602,12 +791,20 @@ export class SnowBoarder {
       this.updateAirPhysics(dt, input);
     }
 
-    // 4. Ollie / Jump Handling (Charge on hold, pop on release, coyote time, and 140ms pre-buffering)
+    // 4. Ollie / Jump Handling + Ground Pre-Wind for Spins
     this.jumpBufferTimer = Math.max(0, this.jumpBufferTimer - dt);
 
     const canCharge = this.isGrounded || this.coyoteTimer > 0 || this.groundDistance < 1.6;
     if (input.jump && canCharge) {
       this.jumpCharge = Math.min(1, this.jumpCharge + dt * 2.2);
+
+      // Ground Pre-Wind: coiling upper body while crouched/charging Ollie
+      const spinDir = (input.left ? 1.0 : 0.0) - (input.right ? 1.0 : 0.0);
+      if (Math.abs(spinDir) > 0.1) {
+        this.preWindCoil = THREE.MathUtils.clamp(this.preWindCoil + spinDir * 3.8 * dt, -1.0, 1.0);
+      } else {
+        this.preWindCoil = THREE.MathUtils.damp(this.preWindCoil, 0, 3.5, dt);
+      }
     } else if (!input.jump && this.wasJumpHeld) {
       if (this.isGrounded || this.coyoteTimer > 0) {
         this.triggerJumpPop(this.jumpCharge);
@@ -617,6 +814,7 @@ export class SnowBoarder {
       }
     } else if (!input.jump && this.jumpBufferTimer <= 0) {
       this.jumpCharge = THREE.MathUtils.damp(this.jumpCharge, 0, 10, dt);
+      this.preWindCoil = THREE.MathUtils.damp(this.preWindCoil, 0, 8, dt);
     }
     this.wasJumpHeld = input.jump;
   }
@@ -641,6 +839,13 @@ export class SnowBoarder {
     this.coyoteTimer = 0;
     this.jumpCharge = 0;
     this.jumpBufferTimer = 0;
+
+    // Convert ground pre-wind coil to immediate initial angular impulse off lip
+    if (Math.abs(this.preWindCoil) > 0.05) {
+      this.airYawVel = this.preWindCoil * 9.2;
+    }
+    this.preWindCoil = 0;
+
     this.hipVelY += 3.5; // Visual pop extension
     this.trickEngine.startAir();
   }
@@ -666,7 +871,8 @@ export class SnowBoarder {
 
     // Step 1: Sidecut Carving Kinematics
     const absLean = Math.abs(this.leanAngle);
-    const edgeRollRad = absLean * 0.72; // Board roll tilt (radians, max ~41 deg)
+    // Non-linear edge roll: responsive center, deeper max tilt at full lean (~62 deg)
+    const edgeRollRad = absLean * (0.55 + 0.53 * absLean);
     const curHorizSpeed = Math.hypot(this._vel.x, this._vel.z);
 
     // Effective sidecut carve radius: R = R_sc / (sin(theta_edge) + epsilon)
@@ -674,11 +880,16 @@ export class SnowBoarder {
 
     // Carve turn rate: omega = v / R
     const carveTurnRate = -Math.sign(this.leanAngle) * (Math.max(1.8, curHorizSpeed) / sidecutR);
-    // Low-speed pivot turn rate for nimble maneuvering
-    const pivotTurnRate = -this.leanAngle * 2.8;
+    // Snappy low-speed pivot turn rate for nimble maneuvering at idle
+    const pivotTurnRate = -this.leanAngle * 3.6;
 
-    const speedBlend = THREE.MathUtils.clamp(curHorizSpeed / 3.8, 0, 1);
+    // Higher blend threshold (6 m/s): keeps nimble pivot handling active at slow speeds
+    const speedBlend = THREE.MathUtils.clamp(curHorizSpeed / 6.0, 0, 1);
     let turnRate = THREE.MathUtils.lerp(pivotTurnRate, carveTurnRate, speedBlend);
+
+    // High-speed turn authority damping: G-load and inertia resist quick direction changes
+    const highSpeedDamping = THREE.MathUtils.lerp(1.0, 0.70, THREE.MathUtils.clamp((curHorizSpeed - 15.0) / 20.0, 0, 1));
+    turnRate *= highSpeedDamping;
 
     if (this.stumbleTimer > 0) {
       this.stumbleTimer = Math.max(0, this.stumbleTimer - dt);
@@ -688,12 +899,17 @@ export class SnowBoarder {
     this.yaw += turnRate * dt;
 
     // Natural momentum & fall-line self-alignment when rider is riding straight
+    // Dead-zone prevents micro-oscillation snapping; speed-scaled rate for gentle drift
     if (curHorizSpeed > 1.5 && absLean < 0.12 && !input.brake) {
       const currentVelYaw = Math.atan2(-this._vel.x, -this._vel.z);
       let alignDiff = (currentVelYaw - this.yaw) % (Math.PI * 2);
       if (alignDiff > Math.PI) alignDiff -= Math.PI * 2;
       if (alignDiff < -Math.PI) alignDiff += Math.PI * 2;
-      this.yaw += THREE.MathUtils.clamp(alignDiff, -2.5 * dt, 2.5 * dt);
+      // Dead-zone: ignore alignment when heading is within ~1.7 deg of velocity
+      if (Math.abs(alignDiff) > 0.03) {
+        const alignRate = THREE.MathUtils.lerp(0.6, 1.2, THREE.MathUtils.clamp(curHorizSpeed / 12.0, 0, 1));
+        this.yaw += THREE.MathUtils.clamp(alignDiff, -alignRate * dt, alignRate * dt);
+      }
     }
 
     // Step 2: Slope-aligned orthonormal basis
@@ -732,17 +948,40 @@ export class SnowBoarder {
     // Dynamic Edge Bite vs Skid evaluation
     const centripetalAcc = planarSpeed * Math.abs(turnRate);
     const edgeBiteLimit = (12.5 + Math.sin(edgeRollRad) * 9.5) * surfaceGripMult;
+    this.gripUtilization = THREE.MathUtils.clamp(centripetalAcc / Math.max(0.1, edgeBiteLimit), 0, 1.5);
     const highGDrift = centripetalAcc > edgeBiteLimit && planarSpeed > 6.0;
     this.isDrifting = highGDrift || input.brake || slipAngle > this.cfg.driftAngleThreshold;
+
+    // Progressive grip ratio: 1.0 = full grip, 0.0 = fully broken loose
+    const gripRatio = highGDrift ? THREE.MathUtils.clamp(1.0 - (centripetalAcc - edgeBiteLimit) / 8.0, 0, 1) : (this.isDrifting ? 0.0 : 1.0);
+
+    // Carve vs. Slash Turn Split:
+    // Moderate slip angle (<65 deg) with active lean input = controlled spray slash turn instead of full hockey stop
+    this.isSlashing = this.isDrifting && !input.brake && slipAngle < 1.13 && absLean > 0.30;
 
     let newVFwd = this.vForward;
     let newVLat = this.vLateral;
 
     if (!this.isDrifting) {
       // CLEAN CARVING:
-      // In a clean carve, edge tracks strictly along the arc; lateral slip is completely eliminated
+      // Edge tracks along the arc; lateral slip eliminated with progressive grip falloff near limit
+      const latDampRate = THREE.MathUtils.lerp(12.0, 32.0, gripRatio);
       newVFwd = Math.max(newVFwd, planarSpeed * 0.998);
-      newVLat = THREE.MathUtils.damp(newVLat, 0, 32.0, dt);
+      newVLat = THREE.MathUtils.damp(newVLat, 0, latDampRate, dt);
+    } else if (this.isSlashing) {
+      // CONTROLLED SLASH / SPRAY TURN:
+      // Softened lateral drag and reduced speed scrub keeps momentum through the plume
+      const latDamp = Math.min(1.0, this.cfg.edgeGrip * surfaceGripMult * 0.70 * dt);
+      const latDelta = this.vLateral * latDamp;
+      newVLat -= latDelta;
+
+      if (Math.abs(latDelta) > 0.001 && planarSpeed > 0.1) {
+        const sign = newVFwd >= 0 ? 1 : -1;
+        newVFwd = sign * Math.min(planarSpeed, Math.sqrt(newVFwd * newVFwd + this.cfg.gripTransfer * 1.10 * latDelta * latDelta));
+      }
+
+      const skidDecel = THREE.MathUtils.clamp(this.cfg.carveSpeedBleed * dt * 1.8, 0, 0.25);
+      newVFwd *= (1.0 - skidDecel);
     } else {
       // SKIDDING / DRIFTING / HOCKEY STOP:
       // Edge breaks loose: transverse friction slows both lateral slide and forward travel
@@ -764,12 +1003,16 @@ export class SnowBoarder {
     }
 
     // Forward glide friction (slick on snow: 0.018 to 0.040)
+    // Clean carve rail bonus: sustained carved arc reduces friction by up to 25%
+    const cleanCarveBonus = (!this.isDrifting && this.carveHoldTime > 0.3 && absLean > 0.25)
+      ? THREE.MathUtils.lerp(1.0, 0.75, THREE.MathUtils.clamp((this.carveHoldTime - 0.3) / 0.5, 0, 1))
+      : 1.0;
     const speedFactor = THREE.MathUtils.clamp((planarSpeed - 2.5) / 3.5, 0.0, 1.0);
     const speedFriction = THREE.MathUtils.lerp(0.045, this.cfg.baseFriction, speedFactor);
     const baseFwdFriction = input.brake
       ? speedFriction + this.cfg.brakeDrag * 0.18
       : speedFriction;
-    const activeFwdFriction = baseFwdFriction * surfaceFrictionMult;
+    const activeFwdFriction = baseFwdFriction * surfaceFrictionMult * cleanCarveBonus;
     const fwdDamp = Math.max(0, 1.0 - activeFwdFriction * dt);
     newVFwd *= fwdDamp;
 
@@ -815,6 +1058,7 @@ export class SnowBoarder {
         newVFwd += boostImpulse;
         this.hipVelY += 2.4 * boostCurve; // Visual athletic knee extension
         this.edgeCooldown = 0.14;
+        this.pumpKick = 1.0; // Trigger camera micro-surge
       } else if (this.carveHoldTime < 0.10) {
         this.pumpFlow = Math.max(1.0, this.pumpFlow - 0.15);
       }
@@ -823,7 +1067,38 @@ export class SnowBoarder {
       this.lastLeanSign = this.leanAngle > 0 ? 1 : -1;
     }
 
-    // 3. Straight-line decay
+    // 3. Downslope Roller Terrain Pumping
+    // Pumping/tucking on the downslope of rollers converts slope curvature into tangential acceleration
+    const currentSlopeGrade = -this.smoothNormal.dot(this._forward);
+    const slopeCurvature = (currentSlopeGrade - this.prevSlopeGrade) / Math.max(0.001, dt);
+    this.prevSlopeGrade = currentSlopeGrade;
+
+    if (slopeCurvature > 0.22 && (input.forward || this.jumpCharge > 0.12) && currentSlopeGrade > 0.04) {
+      const pumpImpulse = THREE.MathUtils.clamp(slopeCurvature * 0.45, 0, 1.8);
+      newVFwd += pumpImpulse * dt * 42.0;
+      this.pumpKick = Math.max(this.pumpKick, 0.6);
+      this.hipVelY += 1.4 * dt * 60;
+    }
+
+    // 4. Flat-Ground Butter / Skate Recovery
+    // Below 4 m/s on slopes < 5 deg, rapid left-right wiggling generates reliable forward momentum
+    if (planarSpeed < 4.0 && this.smoothNormal.y > 0.996) {
+      const currentWiggleSign = this.leanAngle > 0.16 ? 1 : (this.leanAngle < -0.16 ? -1 : 0);
+      if (currentWiggleSign !== 0 && currentWiggleSign !== this.lastWiggleSign) {
+        if (this.wiggleTimer < 0.42 && this.wiggleTimer > 0.04) {
+          newVFwd = Math.min(4.5, newVFwd + 1.20);
+          this.hipVelY += 1.2;
+        }
+        this.wiggleTimer = 0;
+        this.lastWiggleSign = currentWiggleSign;
+      }
+      this.wiggleTimer += dt;
+    } else {
+      this.wiggleTimer = 0;
+      this.lastWiggleSign = 0;
+    }
+
+    // 5. Straight-line decay
     if (absLean < 0.18) {
       this.straightTime += dt;
       if (this.straightTime > 1.0) {
@@ -960,9 +1235,15 @@ export class SnowBoarder {
     this.hipOffsetY += this.hipVelY * dt;
     this.hipsGroup.position.y = THREE.MathUtils.clamp(0.55 + this.hipOffsetY, 0.26, 0.70);
 
-    // 4. Torso Counter-Rotation & Tuck
+    // 4. Torso Counter-Rotation, Tuck & Pre-Wind Twist
     const targetTuckPitch = input.forward && this.speed > 8 ? 0.45 : 0.12;
     this.torsoGroup.rotation.x = THREE.MathUtils.damp(this.torsoGroup.rotation.x, targetTuckPitch, 8, dt);
+    this.torsoGroup.rotation.y = THREE.MathUtils.damp(
+      this.torsoGroup.rotation.y,
+      Math.PI * 0.42 + this.preWindCoil * 0.45,
+      10,
+      dt
+    );
     this.torsoGroup.rotation.z = THREE.MathUtils.damp(
       this.torsoGroup.rotation.z,
       -this.leanAngle * 0.36 * speedRollScale,
@@ -975,9 +1256,20 @@ export class SnowBoarder {
     this.armL.rotation.z = THREE.MathUtils.damp(this.armL.rotation.z, -armSpread, 8, dt);
     this.armR.rotation.z = THREE.MathUtils.damp(this.armR.rotation.z, armSpread, 8, dt);
 
-    // 6. Snow Spray Particles & Audio
+    // 6. Snow Spray Particles, Persistent Trail Ribbon & Audio
     this.updateSnowSpray(dt);
-    this.audio.update(this.speed, this.vLateral, this.isGrounded, this.isDrifting);
+    if (this.trailRibbon) {
+      this.trailRibbon.update(
+        this.root.position,
+        this._right,
+        this.smoothNormal,
+        this.isGrounded,
+        this.slipAngleDeg,
+        this.speed,
+        this.isDrifting
+      );
+    }
+    this.audio.update(this.speed, this.vLateral, this.isGrounded, this.isDrifting, this.gripUtilization);
 
     this.trickEngine.updateDisplayTimer(dt);
   }

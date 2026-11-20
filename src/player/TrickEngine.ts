@@ -38,7 +38,25 @@ export class TrickEngine {
     }
   }
 
-  public land(cleanLanding: boolean): TrickReport | null {
+  public crash(): void {
+    if (this.currentAirTime >= 0.25) {
+      this.lastTrickName = 'CRASH / WIPEOUT';
+      this.lastTrickPoints = 0;
+      this.displayTimer = 2.5;
+    }
+    this.currentAirTime = 0;
+    this.accumulatedYaw = 0;
+    this.accumulatedPitch = 0;
+    this.isGrabbing = false;
+    this.grabTime = 0;
+  }
+
+  public land(landingState: boolean | 'STOMPED' | 'SKETCHY' | 'CRASH'): TrickReport | null {
+    if (landingState === 'CRASH') {
+      this.crash();
+      return null;
+    }
+
     if (this.currentAirTime < 0.25) {
       return null;
     }
@@ -79,9 +97,12 @@ export class TrickEngine {
       return null;
     }
 
-    if (!cleanLanding) {
-      basePoints = Math.floor(basePoints * 0.3);
+    const isClean = landingState === true || landingState === 'STOMPED';
+    if (!isClean) {
+      basePoints = Math.floor(basePoints * 0.35);
       trickParts.push('(Sketchy)');
+    } else if (trickParts.length > 0) {
+      basePoints = Math.floor(basePoints * 1.15); // Stomped landing bonus
     }
 
     const name = trickParts.join(' + ');
