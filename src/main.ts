@@ -280,6 +280,8 @@ class Game {
       stateBadge = `<span style="color:#ec4899;font-weight:bold;">⚡ OVERTURN (10x Drag)</span>`;
     } else if (this.player.turnType === 'StandardTurn') {
       stateBadge = `<span style="color:#38bdf8;font-weight:bold;">● STANDARD CARVE (30° Cap)</span>`;
+    } else if (this.player.gmaPhysics.isStaking) {
+      stateBadge = `<span style="color:#10b981;font-weight:bold;">⚡ POLE STAKING (${this.player.gmaPhysics.isStakingDamped ? 'Damped Uphill 3m/s²' : 'Regular 15m/s²'})</span>`;
     } else {
       stateBadge = '<span style="color:#94a3b8;font-weight:bold;">● GLIDING</span>';
     }
@@ -316,8 +318,8 @@ class Game {
       <div>Score: <strong style="color:#4ade80;">${trickEng.totalScore} pts</strong> ${trickEng.currentMultiplier > 1 ? `<span style="color:#facc15;font-weight:bold;">[${trickEng.currentMultiplier}x Combo]</span>` : ''}</div>
       <div style="margin-top:6px;border-top:1px dashed rgba(255,255,255,0.15);padding-top:4px;font-size:11px;color:#cbd5e1;">
         <strong>GRAND MOUNTAIN ADVENTURE SKI CONTROLS:</strong><br />
-        • <strong>A/D / Stick</strong>: Steer (GMA Quadratic Curve) | <strong>W / Double-Tap</strong>: Pole Staking | <strong>Q / Shift</strong>: Sharp Carve (50°)<br />
-        • <strong>E</strong>: Slide Turn (+2m/s boost) | <strong>S</strong>: Snowplow Brake | <strong>Space</strong>: Jump (4m/s pop) | <strong>J</strong>: Ski Safety Grab<br />
+        • <strong>A/D / Stick</strong>: Steer & Skate Wiggle (Poles plant L/R to gain momentum) | <strong>S / LT</strong>: Snowplow Brake<br />
+        • <strong>Q / Shift / X</strong>: Sharp Carve (50°) | <strong>E / B / RT</strong>: Slide Turn Drift (+2m/s) | <strong>Space / A</strong>: Jump (4m/s pop)<br />
         • <strong>T / G</strong>: Twintip Ski Toggle | <strong>Z</strong>: Switch Invert | <strong>F</strong>: Pole Slap / Tackle<br />
         • <strong>1-6</strong>: Peaks Teleport | <strong>C</strong>: Fly-Cam | <strong>R</strong>: Reset at Summit
       </div>

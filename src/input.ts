@@ -149,7 +149,6 @@ export class UnifiedInputController {
   }
 
   public getBoarderInputs(): BoarderInput {
-    const kW = !!(this.keyState['KeyW'] || this.keyState['ArrowUp']);
     const kS = !!(this.keyState['KeyS'] || this.keyState['ArrowDown']);
     const kA = !!(this.keyState['KeyA'] || this.keyState['ArrowLeft']);
     const kD = !!(this.keyState['KeyD'] || this.keyState['ArrowRight']);
@@ -159,7 +158,7 @@ export class UnifiedInputController {
     const kSlide = !!this.keyState['KeyE'];
     const kTackle = !!this.keyState['KeyF'];
 
-    let forward = kW;
+    let forward = false; // Pure Grand Mountain Adventure: no forward driving throttle
     let brake = kS;
     let left = kA;
     let right = kD;
@@ -191,8 +190,8 @@ export class UnifiedInputController {
       const triggerR = (gp.buttons[7]?.value ?? 0) > 0.2;
       const triggerL = (gp.buttons[6]?.value ?? 0) > 0.2;
 
-      if (triggerR || stickY < -0.3) forward = true;
-      if (triggerL || (gp.buttons[1]?.pressed ?? false) || stickY > 0.3) brake = true;
+      if (triggerR) slideTurn = true; // Right trigger for slide turn drift
+      if (triggerL || (gp.buttons[1]?.pressed ?? false) || stickY > 0.3) brake = true; // Left trigger / down for snowplow brake
       if (gp.buttons[0]?.pressed) jump = true;
       if (gp.buttons[1]?.pressed) slideTurn = true; // B button: Slide turn
       if (gp.buttons[2]?.pressed) sharpTurn = true; // X button: Sharp turn

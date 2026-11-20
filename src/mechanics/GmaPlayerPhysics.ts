@@ -47,6 +47,11 @@ export class GmaPlayerPhysics {
   public slideTurnBoostTriggered: boolean = false;
   public driftMilestoneIndex: number = 0;
   public sharpTurnSpinBoostActive: boolean = false;
+  public isStaking: boolean = false;
+  public isStakingDamped: boolean = false;
+  public stakingPoleTimer: number = 0;
+  public stakingPoleSide: number = 0; // -1 = Left pole plant, +1 = Right pole plant
+  private lastSteerSign: number = 0;
 
   // Sub-step time accumulator for 333.3 Hz loop
   private subStepAccumulator: number = 0;
@@ -93,6 +98,11 @@ export class GmaPlayerPhysics {
     this.slideTurnBoostTriggered = false;
     this.driftMilestoneIndex = 0;
     this.sharpTurnSpinBoostActive = false;
+    this.isStaking = false;
+    this.isStakingDamped = false;
+    this.stakingPoleTimer = 0;
+    this.stakingPoleSide = 0;
+    this.lastSteerSign = 0;
     this.subStepAccumulator = 0;
     this.snowDepthPos = 0;
     this.snowDepthVel = 0;
@@ -199,7 +209,7 @@ export class GmaPlayerPhysics {
     slideTurn: boolean,
     jumpPressed: boolean,
     brakePressed: boolean,
-    stakePressed: boolean,
+    _stakePressed: boolean,
     tacklePressed: boolean,
     flipInput: number,
     rollInput: number,
@@ -276,7 +286,7 @@ export class GmaPlayerPhysics {
         slideTurn,
         jumpPressed,
         brakePressed,
-        stakePressed,
+        _stakePressed,
         tacklePressed,
         groundHeight
       );
@@ -294,7 +304,7 @@ export class GmaPlayerPhysics {
     slideTurn: boolean,
     jumpPressed: boolean,
     brakePressed: boolean,
-    stakePressed: boolean,
+    _stakePressed: boolean,
     tacklePressed: boolean,
     groundHeight: number
   ): void {
@@ -454,29 +464,44 @@ export class GmaPlayerPhysics {
     this._fPull.copy(this.groundNormal).multiplyScalar(-this.config.ground_pull_force);
     this.velocity.addScaledVector(this._fPull, dt);
 
+    // Cancel downward velocity into ground so normal force doesn't pollute tangential speed
+    const vDotNormal = this.velocity.dot(this.groundNormal);
+    if (vDotNormal < 0) {
+      this.velocity.addScaledVector(this.groundNormal, -vDotNormal);
+    }
+
     // 6. Ground Friction & Twintip Switch Handling
     let effectiveFriction = this.config.ground_friction_base;
 
     const alignment = this.velocity.dot(this.forwardDir);
     const isSwitch = alignment < -0.1;
 
-    // Snowboards are symmetrical twin decks: 0x switch penalty.
     // Traditional skis suffer 10x penalty when riding backward without twintips.
     if (isSwitch && this.sport === SportType.Skis && !this.hasTwintips) {
       effectiveFriction = this.config.ground_friction_switch_no_twintips; // 10.0
     }
 
-    if (brakePressed) {
-      effectiveFriction += this.config.breaking_power; // 2.5
-    }
-
-    // Exponential drag damping
-    const totalFriction = effectiveFriction + driftFriction * 100.0;
-    const damping = Math.exp(-totalFriction * dt);
+    // Calibrated snow glide drag and aerodynamic resistance
+    const baseFrictionCoeff = 0.016;
+    const totalLinearDrag = (effectiveFriction * baseFrictionCoeff) + (driftFriction * 3.0);
+    const speed = this.velocity.length();
+    const aeroCoeff = 0.0028; // Quadratic air resistance
+    const aeroDamping = Math.max(0.0, 1.0 - (aeroCoeff * speed * dt));
+    const damping = Math.exp(-totalLinearDrag * dt) * aeroDamping;
     this.velocity.multiplyScalar(damping);
 
+    // Active snowplow brake
+    if (brakePressed) {
+      const brakeDecel = this.config.breaking_power * 4.0; // ~10 m/s^2 deceleration
+      const speedDrop = brakeDecel * dt;
+      if (speed > speedDrop) {
+        this.velocity.multiplyScalar((speed - speedDrop) / speed);
+      } else {
+        this.velocity.set(0, 0, 0);
+      }
+    }
+
     // 7. Align Velocity with Forward Ski/Board Direction (Edge Bite / Carving Grip)
-    const speed = this.velocity.length();
     if (speed > 1e-4) {
       const velDir = this.velocity.clone().divideScalar(speed);
       const grip = (this.currentTurnType === TurnType.SlideTurn) ? 0.85 : 0.98;
@@ -494,9 +519,9 @@ export class GmaPlayerPhysics {
       }
     }
 
-    // 9. Staking (Ski poles push - Skiing only)
+    // 9. Staking (Ski poles push - Skiing only, driven by left/right steering on flats)
     if (this.sport === SportType.Skis) {
-      this.handleStaking(dt, stakePressed);
+      this.handleStaking(dt, steerInput);
     }
 
     // 10. Shoulder Tackle / Pole Slap
@@ -523,8 +548,10 @@ export class GmaPlayerPhysics {
       this.velocity.y += this.config.trick_hover_zforce * dt;
     }
 
-    // Exponential air drag
-    this.velocity.multiplyScalar(1.0 - this.config.air_friction);
+    // Calibrated aerodynamic drag in air (preserves jump momentum)
+    const airSpeed = this.velocity.length();
+    const aeroDamping = Math.max(0.0, 1.0 - (0.0022 * airSpeed * dt));
+    this.velocity.multiplyScalar(aeroDamping);
 
     // 2. Aerial Rotations (Spins, Flips, Rolls)
     if (Math.abs(steerInput) > 0.05) {
@@ -571,9 +598,10 @@ export class GmaPlayerPhysics {
     this.position.addScaledVector(this.velocity, dt);
   }
 
-  private handleStaking(dt: number, stakePressed: boolean): void {
-    // Terrain slope angle in degrees
-    const slopeAngleDeg = Math.asin(THREE.MathUtils.clamp(this.groundNormal.y - 1.0, -1.0, 1.0)) * RAD2DEG;
+  private handleStaking(dt: number, steerInput: number): void {
+    const curSpeed = this.velocity.length();
+    // Terrain slope angle in degrees along forward travel direction
+    const slopeAngleDeg = Math.asin(THREE.MathUtils.clamp(this.forwardDir.y, -1.0, 1.0)) * RAD2DEG;
 
     const canStakeRegular =
       slopeAngleDeg >= this.config.staking_inclination_regular_from_deg &&
@@ -582,17 +610,38 @@ export class GmaPlayerPhysics {
       slopeAngleDeg > this.config.staking_inclination_damped_from_deg &&
       slopeAngleDeg <= this.config.staking_inclination_damped_to_deg;
 
-    if (stakePressed && (canStakeRegular || canStakeDamped)) {
-      const curSpeed = this.velocity.length();
-      if (curSpeed < this.config.staking_max_vel * 15.0) {
-        let power = this.config.staking_power;
-        if (curSpeed < 1.0) {
-          power += this.config.staking_initial_power;
-        }
-        if (canStakeDamped) {
-          power *= this.config.staking_damped_mul; // 0.2
-        }
-        this.velocity.addScaledVector(this.forwardDir, power * dt);
+    const eligible = (canStakeRegular || canStakeDamped) && curSpeed < (this.config.staking_max_vel * 15.0);
+
+    const absSteer = Math.abs(steerInput);
+    const steerSign = absSteer > 0.08 ? Math.sign(steerInput) : 0;
+
+    // Detect left/right stick alternation or fresh steer nudge to plant the pole
+    if (eligible && steerSign !== 0 && steerSign !== this.lastSteerSign) {
+      this.lastSteerSign = steerSign;
+      this.stakingPoleSide = steerSign;
+      this.stakingPoleTimer = 0.5; // player.staking.pole_down: 0.5s from player.yaml
+    } else if (steerSign === 0) {
+      this.lastSteerSign = 0;
+    }
+
+    if (this.stakingPoleTimer > 0 && eligible) {
+      this.stakingPoleTimer -= dt;
+      this.isStaking = true;
+      this.isStakingDamped = canStakeDamped;
+
+      let power = this.config.staking_power;
+      if (curSpeed < 1.0) {
+        power += this.config.staking_initial_power; // Standstill kick
+      }
+      if (canStakeDamped) {
+        power *= this.config.staking_damped_mul; // 0.2
+      }
+      this.velocity.addScaledVector(this.forwardDir, power * dt);
+    } else {
+      this.isStaking = false;
+      this.isStakingDamped = false;
+      if (!eligible) {
+        this.stakingPoleTimer = 0.0;
       }
     }
   }

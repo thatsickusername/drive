@@ -739,16 +739,16 @@ export class Skier {
 
     const inputState: InputState = {
       steerX: steerVal,
-      steerY: input.forward ? 1.0 : (input.brake ? -1.0 : 0.0),
+      steerY: input.brake ? -1.0 : 0.0,
       trickSpinX: input.trickSpinX !== undefined ? input.trickSpinX : (input.left ? 1.0 : (input.right ? -1.0 : 0.0)),
-      trickFlipY: input.trickFlipY !== undefined ? input.trickFlipY : (input.forward ? 1.0 : (input.brake ? -1.0 : 0.0)),
+      trickFlipY: input.trickFlipY !== undefined ? input.trickFlipY : 0.0,
       trickRoll: input.trickRoll !== undefined ? input.trickRoll : 0.0,
       jump: input.jump,
       sharpTurn: !!input.sharpTurn,
       slideTurn: !!input.slideTurn,
       brake: input.brake,
       slapTackle: !!input.tackle,
-      stakePole: input.forward,
+      stakePole: false,
       reverseTurnEnabled: this.gmaPhysics.controls.reverseTurn
     };
 
@@ -868,10 +868,24 @@ export class Skier {
         dt
       );
 
-      // 5. Arms spread wider when airborne
+      // 5. Procedural Dual-Pole Plant Animation & Airborne Arm Spread
       const armSpread = this.isGrounded ? 0.0 : 0.45;
       this.armL.rotation.z = THREE.MathUtils.damp(this.armL.rotation.z, -armSpread, 8, dt);
       this.armR.rotation.z = THREE.MathUtils.damp(this.armR.rotation.z, armSpread, 8, dt);
+
+      if (this.isGrounded && this.gmaPhysics.isStaking) {
+        // Drive specific pole into snow based on left/right steering side
+        const isLeftPlant = this.gmaPhysics.stakingPoleSide < 0;
+        const armSwingL = isLeftPlant ? 0.55 : -0.15;
+        const armSwingR = isLeftPlant ? -0.15 : 0.55;
+        this.armL.rotation.x = THREE.MathUtils.damp(this.armL.rotation.x, armSwingL, 16, dt);
+        this.armR.rotation.x = THREE.MathUtils.damp(this.armR.rotation.x, armSwingR, 16, dt);
+        this.torsoGroup.rotation.x = THREE.MathUtils.damp(this.torsoGroup.rotation.x, 0.14, 12, dt);
+      } else {
+        this.armL.rotation.x = THREE.MathUtils.damp(this.armL.rotation.x, 0.0, 8, dt);
+        this.armR.rotation.x = THREE.MathUtils.damp(this.armR.rotation.x, 0.0, 8, dt);
+        this.torsoGroup.rotation.x = THREE.MathUtils.damp(this.torsoGroup.rotation.x, 0.0, 8, dt);
+      }
     }
 
     // 6. Snow Spray Particles, Persistent Trail Ribbon & Audio

@@ -169,30 +169,32 @@ Implement the exact four turning regimes and piecewise curve evaluators from `Pl
 
 ## Phase 5: Ski Poles Staking & Propulsion Engine
 
-Implement GMA's dedicated ski pole propulsion mechanics on flat terrain and uphills (`PlayerPhysics.cpp:305-328`).
+Implement GMA's dedicated ski pole propulsion mechanics on flat terrain and gentle uphills (`PlayerPhysics.cpp:305-328`). Movement has zero forward driving throttle; momentum is generated purely by alternating left/right stick steering (planting poles and carving curves around each plant).
 
-- [ ] **5.1 Terrain Slope Inclination Gating**
-  - [ ] Calculate terrain slope angle from ground normal:
-    $$\theta_{\text{slope}} = \arcsin(\operatorname{clamp}(-\vec{n}_y, -1.0, 1.0)) \cdot \frac{180^\circ}{\pi}$$
-  - [ ] Regular Staking Gate:
+- [x] **5.1 Terrain Slope Inclination Gating**
+  - [x] Calculate terrain slope angle from ground normal and forward tangent:
+    $$\theta_{\text{slope}} = \arcsin(\operatorname{clamp}(\vec{f}_{\text{ski}} \cdot \hat{y}, -1.0, 1.0)) \cdot \frac{180^\circ}{\pi}$$
+  - [x] Regular Staking Gate:
     $$\theta_{\text{slope}} \in [-20.0^\circ, 0.0^\circ]$$
-  - [ ] Damped Staking Gate:
+  - [x] Damped Staking Gate:
     $$\theta_{\text{slope}} \in (0.0^\circ, 20.0^\circ]$$
-  - [ ] If $\theta_{\text{slope}} > 20.0^\circ$ (steep downhill), staking is disabled.
-- [ ] **5.2 Velocity Gate & Staking Propulsion Calculation**
-  - [ ] Velocity threshold:
+  - [x] If $\theta_{\text{slope}} > 20.0^\circ$ (steep downhill or cliff), staking is disabled.
+- [x] **5.2 Left/Right Stick Alternation Staking & Propulsion Calculation**
+  - [x] Purge all forward throttle concepts: pole plants are triggered when steering left or right on eligible terrain.
+  - [x] Velocity threshold:
     $$v_{\text{current}} < \text{staking.max\_vel} \times 15.0 = 0.7 \times 15.0 = 10.5\text{ m/s}$$
-  - [ ] Base Staking Power:
+  - [x] Pole down timer: $0.5\text{s}$ per plant (`player.staking.pole_down: 0.5`).
+  - [x] Base Staking Power:
     $$P_{\text{stake}} = 15.0\text{ m/s}^2$$
-  - [ ] Standstill Push Kick: if $v_{\text{current}} < 1.0\text{ m/s}$, add initial kick:
+  - [x] Standstill Push Kick: if $v_{\text{current}} < 1.0\text{ m/s}$, add initial kick:
     $$P_{\text{stake}} \mathrel{+}= 5.0\text{ m/s}^2 \quad (\text{Total } 20.0\text{ m/s}^2)$$
-  - [ ] Damped multiplier: if on damped slope ($0^\circ\text{–}20^\circ$), scale power:
+  - [x] Damped multiplier: if on damped slope ($0^\circ\text{–}20^\circ$), scale power:
     $$P_{\text{stake}} \mathrel{*}= 0.20 \quad (\text{Reduced to } 3.0\text{–}4.0\text{ m/s}^2)$$
-  - [ ] Apply forward impulse: $\vec{v} \mathrel{+}= \vec{f}_{\text{ski}} \cdot (P_{\text{stake}} \cdot dt)$.
-- [ ] **5.3 Procedural Dual-Pole Plant Animation**
-  - [ ] Synchronize Left and Right pole plant cadence at `staking_animation_speed: 9.0`.
-  - [ ] Alternate arms: left arm plants forward, driving torso push, followed by right arm plant.
-  - [ ] Pole tips touch ground at $-0.42\text{m}$ relative to hips, angling backward at $+25^\circ$ to deliver thrust.
+  - [x] Apply forward impulse: $\vec{v} \mathrel{+}= \vec{f}_{\text{ski}} \cdot (P_{\text{stake}} \cdot dt)$ while carving gently around the planted pole.
+- [x] **5.3 Procedural Dual-Pole Plant Animation**
+  - [x] Drive pole plants based on steering side: left pole plants on left steer, right pole plants on right steer.
+  - [x] Alternating left/right stick wiggling skates forward with responsive pole plants and torso push.
+  - [x] Pole tips touch ground at $-0.42\text{m}$ relative to hips, angling backward at $+25^\circ$ to deliver thrust.
 
 ---
 
