@@ -118,52 +118,52 @@ Decouple kinematic integration from Rapier velocity fighting. The 333.3 Hz GMA s
 
 Implement the exact four turning regimes and piecewise curve evaluators from `PlayerPhysics.cpp` and `player.yaml`.
 
-- [ ] **4.1 Standard Turn Regime**
-  - [ ] Maximum heading cap: $30.0^\circ$ (`player.turn_cap_deg.standardturn: 30`).
-  - [ ] Turn velocity curve evaluation based on normalized speed $v_{\text{norm}} = \operatorname{clamp}(v / 30.0, 0, 1)$:
+- [x] **4.1 Standard Turn Regime**
+  - [x] Maximum heading cap: $30.0^\circ$ (`player.turn_cap_deg.standardturn: 30`).
+  - [x] Turn velocity curve evaluation based on normalized speed $v_{\text{norm}} = \operatorname{clamp}(v / 30.0, 0, 1)$:
     - Points: `[0.0, 0.4, 1.0]`
     - Values: `[5.0, 1.8, 1.2] rad/s`
-  - [ ] Turn duration factor:
+  - [x] Turn duration factor:
     - Points: `[0.0, 0.3, 1.0]`
     - Values: `[0.0, 0.0, 1.0]`
     - Turn rate formula: $\omega = v_{\text{factor}} \cdot (1.0 + t_{\text{factor}} \cdot 0.5)$.
-  - [ ] Drift velocity penalty curve:
+  - [x] Drift velocity penalty curve:
     - Points: `[0.0, 0.2, 1.0]`, values: `[0.018, 0.006, 0.006]`.
     - Penalty multiplier: `1.0`.
-  - [ ] Edge bite velocity alignment: blend velocity vector toward forward ski heading with $98\%$ grip factor.
-- [ ] **4.2 Sharp Turn Regime (Active Carving Bite)**
-  - [ ] Activated when `sharpTurn` trigger is held and steering input $|x| > 0.05$.
-  - [ ] Duration gate: $0.3\text{s}$ (`player.duration.sharpturn: 0.3`).
-  - [ ] Heading cap: $50.0^\circ$ (`player.turn_cap_deg.sharpturn: 50`).
-  - [ ] Turn velocity curve:
+  - [x] Edge bite velocity alignment: blend velocity vector toward forward ski heading with $98\%$ grip factor.
+- [x] **4.2 Sharp Turn Regime (Active Carving Bite)**
+  - [x] Activated when `sharpTurn` trigger is held and steering input $|x| > 0.05$.
+  - [x] Duration gate: $0.3\text{s}$ (`player.duration.sharpturn: 0.3`).
+  - [x] Heading cap: $50.0^\circ$ (`player.turn_cap_deg.sharpturn: 50`).
+  - [x] Turn velocity curve:
     - Points: `[0.0, 0.3, 1.0]`
     - Values: `[10.0, 10.0, 4.0] rad/s`
-  - [ ] Drift velocity curve:
+  - [x] Drift velocity curve:
     - Points: `[0.0, 0.3, 1.0]`, values: `[0.001, 0.005, 0.007]`.
-  - [ ] Sharp Turn Rotation Boost: if the player jumps during a sharp turn, apply extra spin acceleration multiplier of $2.0\times$ (`player.rotationboost.sharp_turn_boost: 2.0`).
-- [ ] **4.3 Slide Turn Regime (Hockey Stop & Power Drift)**
-  - [ ] Activated when `slideTurn` trigger is held and steering input $|x| > 0.05$.
-  - [ ] Heading cap: $30.0^\circ$. Drift penalty: $0.0$.
-  - [ ] Turn velocity curve: points `[0.0, 0.4, 1.0]`, values `[5.0, 5.0, 5.0] rad/s`.
-  - [ ] Drift velocity curve: points `[0.0, 0.99, 1.0]`, values `[0.001, 0.001, 0.001]`.
-  - [ ] Drift duration curve: points `[0.0, 0.7, 1.0]`, values `[0.0, 0.0005, 0.001]`.
-  - [ ] Grip relaxation: drop forward velocity alignment grip to $85\%$ to permit transverse snow sliding.
-  - [ ] **Slide Turn Speed Boost**:
+  - [x] Sharp Turn Rotation Boost: if the player jumps during a sharp turn, apply extra spin acceleration multiplier of $2.0\times$ (`player.rotationboost.sharp_turn_boost: 2.0`).
+- [x] **4.3 Slide Turn Regime (Hockey Stop & Power Drift)**
+  - [x] Activated when `slideTurn` trigger is held and steering input $|x| > 0.05$.
+  - [x] Heading cap: $30.0^\circ$. Drift penalty: $0.0$.
+  - [x] Turn velocity curve: points `[0.0, 0.4, 1.0]`, values `[5.0, 5.0, 5.0] rad/s`.
+  - [x] Drift velocity curve: points `[0.0, 0.99, 1.0]`, values `[0.001, 0.001, 0.001]`.
+  - [x] Drift duration curve: points `[0.0, 0.7, 1.0]`, values `[0.0, 0.0005, 0.001]`.
+  - [x] Grip relaxation: drop forward velocity alignment grip to $85\%$ to permit transverse snow sliding.
+  - [x] **Slide Turn Speed Boost**:
     - Accumulate slide turn time: `slideTurnBoostTimer += dt`.
     - At `slideturn_boost_timepoint = 0.5s`, inject impulse: $\vec{v} \mathrel{+}= \vec{f}_{\text{ski}} \cdot 2.0\text{ m/s}$.
-  - [ ] **Drift Duration Milestone Boosts**:
+  - [x] **Drift Duration Milestone Boosts**:
     - Milestone 1 ($0.7\text{s}$): $+0.5$ speed boost factor ($1.125\times$).
     - Milestone 2 ($1.4\text{s}$): $+1.2$ speed boost factor ($1.30\times$).
     - Milestone 3 ($2.1\text{s}$): $+1.8$ speed boost factor ($1.45\times$).
-- [ ] **4.4 OverTurn Regime & Twintip Constraints**
-  - [ ] Activated when steering exceeds $0.85$ and speed $> 14.0\text{ m/s}$.
-  - [ ] Non-twintip traditional skis: strictly capped at $30.0^\circ$ (`turn_cap_deg.overturn_no_twintip: 30`).
-  - [ ] Twintip skis: capped at $60.0^\circ$ (`turn_cap_deg.overturn: 60`).
-  - [ ] Drift penalty: massive $10.0\times$ friction drag (`drift_penalty.overturn: 10`).
-- [ ] **4.5 Switch Skiing (Riding Backward) Penalty**
-  - [ ] Alignment check: $\vec{v} \cdot \vec{f}_{\text{ski}} < -0.1$.
-  - [ ] Traditional non-twintip skis: apply severe $10.0\times$ base friction penalty (`ground_friction.switch_and_no_twintips: 10.0`), immediately scrubbing speed if skied backward.
-  - [ ] Twintip skis: regular $1.0\times$ base friction (`ground_friction.base: 1.0`).
+- [x] **4.4 OverTurn Regime & Twintip Constraints**
+  - [x] Activated when steering exceeds $0.85$ and speed $> 14.0\text{ m/s}$.
+  - [x] Non-twintip traditional skis: strictly capped at $30.0^\circ$ (`turn_cap_deg.overturn_no_twintip: 30`).
+  - [x] Twintip skis: capped at $60.0^\circ$ (`turn_cap_deg.overturn: 60`).
+  - [x] Drift penalty: massive $10.0\times$ friction drag (`drift_penalty.overturn: 10`).
+- [x] **4.5 Switch Skiing (Riding Backward) Penalty**
+  - [x] Alignment check: $\vec{v} \cdot \vec{f}_{\text{ski}} < -0.1$.
+  - [x] Traditional non-twintip skis: apply severe $10.0\times$ base friction penalty (`ground_friction.switch_and_no_twintips: 10.0`), immediately scrubbing speed if skied backward.
+  - [x] Twintip skis: regular $1.0\times$ base friction (`ground_friction.base: 1.0`).
 
 ---
 

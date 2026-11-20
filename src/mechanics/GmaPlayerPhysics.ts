@@ -40,10 +40,13 @@ export class GmaPlayerPhysics {
   public state: MovementState = MovementState.Standing;
   public currentTurnType: TurnType = TurnType.None;
   public turnTimer: number = 0;
+  public sharpTurnTimer: number = 0;
   public currentDriftTime: number = 0;
   public airTime: number = 0;
   public slideTurnBoostTimer: number = 0;
+  public slideTurnBoostTriggered: boolean = false;
   public driftMilestoneIndex: number = 0;
+  public sharpTurnSpinBoostActive: boolean = false;
 
   // Sub-step time accumulator for 333.3 Hz loop
   private subStepAccumulator: number = 0;
@@ -83,10 +86,13 @@ export class GmaPlayerPhysics {
     this.state = MovementState.Standing;
     this.currentTurnType = TurnType.None;
     this.turnTimer = 0;
+    this.sharpTurnTimer = 0;
     this.currentDriftTime = 0;
     this.airTime = 0;
     this.slideTurnBoostTimer = 0;
+    this.slideTurnBoostTriggered = false;
     this.driftMilestoneIndex = 0;
+    this.sharpTurnSpinBoostActive = false;
     this.subStepAccumulator = 0;
     this.snowDepthPos = 0;
     this.snowDepthVel = 0;
@@ -260,6 +266,7 @@ export class GmaPlayerPhysics {
         this.accumulatedAirRollDeg = 0;
         this.airPitch = 0;
         this.airRoll = 0;
+        this.sharpTurnSpinBoostActive = false;
       }
 
       this.updateGroundPhysics(
@@ -308,17 +315,29 @@ export class GmaPlayerPhysics {
 
     // 2. Determine Turn Type
     const absSteer = Math.abs(steerInput);
-    if (absSteer > 0.85 && this.velocity.length() > 14.0) {
+    const curSpeed = this.velocity.length();
+
+    if (absSteer > 0.85 && curSpeed > 14.0) {
       this.currentTurnType = TurnType.OverTurn;
+      this.sharpTurnTimer = 0.0;
     } else if (slideTurn && absSteer > 0.05) {
       this.currentTurnType = TurnType.SlideTurn;
+      this.sharpTurnTimer = 0.0;
     } else if (sharpTurn && absSteer > 0.05) {
-      this.currentTurnType = TurnType.SharpTurn;
+      if (this.sharpTurnTimer < this.config.duration_sharpturn) {
+        this.currentTurnType = TurnType.SharpTurn;
+        this.sharpTurnTimer += dt;
+      } else {
+        // Duration gate (0.3s) exceeded: downgrade to standard turn
+        this.currentTurnType = TurnType.StandardTurn;
+      }
     } else if (absSteer > 0.05) {
       this.currentTurnType = TurnType.StandardTurn;
+      this.sharpTurnTimer = 0.0;
     } else {
       this.currentTurnType = TurnType.None;
       this.turnTimer = 0.0;
+      this.sharpTurnTimer = 0.0;
     }
 
     if (this.currentTurnType !== TurnType.None) {
@@ -328,11 +347,12 @@ export class GmaPlayerPhysics {
     // 3. Evaluate Turning Parameters from Piecewise Curves
     let turnRate = 0.0;
     let driftFriction = 0.0;
-    const curSpeed = this.velocity.length();
+    let turnCapRad = this.config.turn_cap_deg_standard * (Math.PI / 180.0);
     const normalizedSpeed = THREE.MathUtils.clamp(curSpeed / 30.0, 0.0, 1.0);
 
     switch (this.currentTurnType) {
       case TurnType.StandardTurn: {
+        turnCapRad = this.config.turn_cap_deg_standard * (Math.PI / 180.0);
         const vFactor = this.config.turn_velocity_standard.evaluate(normalizedSpeed);
         const tFactor = this.config.turn_turntime_standard.evaluate(Math.min(this.turnTimer, 1.0));
         turnRate = vFactor * (1.0 + tFactor * 0.5);
@@ -340,23 +360,25 @@ export class GmaPlayerPhysics {
         break;
       }
       case TurnType.SharpTurn: {
+        turnCapRad = this.config.turn_cap_deg_sharpturn * (Math.PI / 180.0);
         const vFactor = this.config.turn_velocity_sharpturn.evaluate(normalizedSpeed);
         turnRate = vFactor;
         driftFriction = this.config.drift_velocity_sharpturn.evaluate(normalizedSpeed) * this.config.drift_penalty_sharpturn;
         break;
       }
       case TurnType.SlideTurn: {
+        turnCapRad = this.config.turn_cap_deg_slideturn * (Math.PI / 180.0);
         const vFactor = this.config.turn_velocity_slideturn.evaluate(normalizedSpeed);
         const tFactor = this.config.turn_turntime_slideturn.evaluate(Math.min(this.turnTimer, 1.0));
         turnRate = vFactor * (1.0 + tFactor);
-        driftFriction = this.config.drift_velocity_slideturn.evaluate(normalizedSpeed);
+        driftFriction = this.config.drift_velocity_slideturn.evaluate(normalizedSpeed) * this.config.drift_penalty_slideturn;
         this.currentDriftTime += dt;
 
         // Slide turn boost at 0.5s mark (+2.0 m/s burst)
         this.slideTurnBoostTimer += dt;
-        if (this.slideTurnBoostTimer >= this.config.slideturn_boost_timepoint) {
+        if (!this.slideTurnBoostTriggered && this.slideTurnBoostTimer >= this.config.slideturn_boost_timepoint) {
           this.velocity.addScaledVector(this.forwardDir, this.config.slideturn_boost_velocity);
-          this.slideTurnBoostTimer = 0.0;
+          this.slideTurnBoostTriggered = true;
         }
 
         // Drift duration milestone bonuses
@@ -372,6 +394,8 @@ export class GmaPlayerPhysics {
         break;
       }
       case TurnType.OverTurn: {
+        // Non-twintip traditional skis capped at 30 deg; twintip skis capped at 60 deg
+        turnCapRad = (this.hasTwintips ? this.config.turn_cap_deg_overturn : this.config.turn_cap_deg_overturn_no_twintip) * (Math.PI / 180.0);
         const vFactor = this.config.turn_velocity_overturn.evaluate(normalizedSpeed);
         turnRate = vFactor;
         driftFriction = this.config.drift_velocity_overturn.evaluate(normalizedSpeed) * this.config.drift_penalty_overturn;
@@ -379,15 +403,32 @@ export class GmaPlayerPhysics {
       }
       default:
         this.slideTurnBoostTimer = 0.0;
+        this.slideTurnBoostTriggered = false;
         this.currentDriftTime = 0.0;
         this.driftMilestoneIndex = 0;
         break;
     }
 
-    // 4. Update Heading
+    // 4. Update Heading with Heading Cap
     if (absSteer > 0.01) {
       const deltaAngle = -steerInput * turnRate * dt;
       this.currentHeadingAngle += deltaAngle;
+    }
+
+    // Heading Cap enforcement relative to trajectory heading
+    const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+    if (horizSpeed > 1.0) {
+      const travelHeading = Math.atan2(-this.velocity.x, -this.velocity.z);
+      const isSwitchHeading = this.velocity.dot(this.forwardDir) < -0.1;
+      const baseHeading = isSwitchHeading ? travelHeading + Math.PI : travelHeading;
+
+      let headingDiff = (this.currentHeadingAngle - baseHeading) % (Math.PI * 2);
+      if (headingDiff > Math.PI) headingDiff -= Math.PI * 2;
+      if (headingDiff < -Math.PI) headingDiff += Math.PI * 2;
+
+      if (Math.abs(headingDiff) > turnCapRad) {
+        this.currentHeadingAngle = baseHeading + Math.sign(headingDiff) * turnCapRad;
+      }
     }
 
     this.forwardDir.set(
@@ -439,7 +480,8 @@ export class GmaPlayerPhysics {
     if (speed > 1e-4) {
       const velDir = this.velocity.clone().divideScalar(speed);
       const grip = (this.currentTurnType === TurnType.SlideTurn) ? 0.85 : 0.98;
-      const newVelDir = velDir.multiplyScalar(1.0 - grip).add(this.forwardDir.clone().multiplyScalar(grip)).normalize();
+      const targetDir = isSwitch ? this.forwardDir.clone().negate() : this.forwardDir.clone();
+      const newVelDir = velDir.multiplyScalar(1.0 - grip).add(targetDir.multiplyScalar(grip)).normalize();
       this.velocity.copy(newVelDir).multiplyScalar(speed);
     }
 
@@ -447,6 +489,9 @@ export class GmaPlayerPhysics {
     if (jumpPressed) {
       this.velocity.y += this.config.jump_strength; // 4.0 m/s
       this.state = MovementState.Airborne;
+      if (this.currentTurnType === TurnType.SharpTurn) {
+        this.sharpTurnSpinBoostActive = true;
+      }
     }
 
     // 9. Staking (Ski poles push - Skiing only)
@@ -483,7 +528,8 @@ export class GmaPlayerPhysics {
 
     // 2. Aerial Rotations (Spins, Flips, Rolls)
     if (Math.abs(steerInput) > 0.05) {
-      this.angularVelocitySpin += steerInput * this.config.spin_acceleration * dt;
+      const spinMultiplier = this.sharpTurnSpinBoostActive ? this.config.rotationboost_sharp_turn_boost : 1.0;
+      this.angularVelocitySpin += steerInput * this.config.spin_acceleration * spinMultiplier * dt;
     } else {
       this.angularVelocitySpin *= Math.exp(-this.config.spin_deceleration * dt);
     }
