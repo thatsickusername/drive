@@ -15,8 +15,8 @@ const GRAVITY = 9.81;
 
 export class GmaPlayerPhysics {
   public config: PlayerConfig;
-  public sport: SportType = SportType.Snowboard;
-  public hasTwintips: boolean = true; // Snowboards are symmetrical twin decks
+  public sport: SportType = SportType.Skis;
+  public hasTwintips: boolean = true; // Default to Twin-tip Skis
 
   // Spatial State
   public position = new THREE.Vector3();
@@ -56,9 +56,9 @@ export class GmaPlayerPhysics {
   // Ragdoll recovery timer
   public crashRecoveryTimer: number = 0;
 
-  constructor(sport: SportType = SportType.Snowboard, hasTwintips: boolean = true) {
+  constructor(sport: SportType = SportType.Skis, hasTwintips: boolean = true) {
     this.sport = sport;
-    this.hasTwintips = (sport === SportType.Snowboard) ? true : hasTwintips;
+    this.hasTwintips = hasTwintips;
     this.config = createDefaultPlayerConfig();
   }
 

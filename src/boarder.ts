@@ -239,21 +239,22 @@ export class SnowTrailRibbon {
   }
 }
 
-export interface BoarderInput {
-  forward: boolean; // W / Up: slight flat push + aero tuck when moving fast (or pole staking for skis)
-  brake: boolean;   // S / Down: dig edge to brake / snowplow
+export interface SkierInput {
+  forward: boolean; // W / Up: pole staking push on flats/uphills + aero tuck
+  brake: boolean;   // S / Down: dig edges to brake / snowplow wedge
   left: boolean;    // A / Left: carve left / air spin left
   right: boolean;   // D / Right: carve right / air spin right
-  jump: boolean;    // Space: hold to charge, release to ollie/jump
-  grab?: boolean;   // J / Gamepad RB: grab board in air
-  sharpTurn?: boolean; // Q / Shift / Gamepad X: Sharp carve mode
-  slideTurn?: boolean; // E / Gamepad B: Slide / drift turn mode
+  jump: boolean;    // Space: instantaneous vertical pop (4.0 m/s)
+  grab?: boolean;   // J / Gamepad RB: ski grab (Safety Grab)
+  sharpTurn?: boolean; // Q / Shift / Gamepad X: Sharp carve mode (50 deg cap)
+  slideTurn?: boolean; // E / Gamepad B: Slide / drift turn mode (+2m/s boost)
   tackle?: boolean;    // F / Gamepad Y: Shoulder tackle / Pole slap
   steerX?: number;     // Analog steering input (-1.0 to +1.0)
   trickSpinX?: number;
   trickFlipY?: number;
   trickRoll?: number;
 }
+export type BoarderInput = SkierInput;
 
 export interface BoarderConfig {
   mass: number;
@@ -303,7 +304,7 @@ const DEFAULT_CONFIG: BoarderConfig = {
   jumpImpulseMax: 9.2,
 };
 
-export class SnowBoarder {
+export class Skier {
   public readonly rigidBody: RAPIER.RigidBody;
   public readonly collider: RAPIER.Collider;
   public readonly root: THREE.Group;
@@ -312,7 +313,6 @@ export class SnowBoarder {
 
   // Procedural rig hierarchy
   private readonly visualRoot = new THREE.Group();
-  private readonly boardGroup = new THREE.Group();
   private readonly skisGroup = new THREE.Group();
   private readonly polesGroup = new THREE.Group();
   private readonly hipsGroup = new THREE.Group();
@@ -387,7 +387,7 @@ export class SnowBoarder {
     this.world = world;
     this.cfg = { ...DEFAULT_CONFIG, ...config };
     this.trickEngine = new TrickEngine();
-    this.gmaPhysics = new GmaPlayerPhysics(SportType.Snowboard, true);
+    this.gmaPhysics = new GmaPlayerPhysics(SportType.Skis, true);
     this.gmaPhysics.reset(spawnPos, 0);
 
     // 1. Rapier Physics Body (frictionless sphere prevents triangle seam snags)
@@ -483,20 +483,8 @@ export class SnowBoarder {
   }
 
   public toggleSport(): SportType {
-    if (this.gmaPhysics.sport === SportType.Snowboard) {
-      this.gmaPhysics.sport = SportType.Skis;
-      this.boardGroup.visible = false;
-      this.skisGroup.visible = true;
-      this.polesGroup.visible = true;
-      this.torsoGroup.rotation.y = 0;
-    } else {
-      this.gmaPhysics.sport = SportType.Snowboard;
-      this.boardGroup.visible = true;
-      this.skisGroup.visible = false;
-      this.polesGroup.visible = false;
-      this.torsoGroup.rotation.y = Math.PI * 0.42;
-    }
-    return this.gmaPhysics.sport;
+    this.gmaPhysics.hasTwintips = !this.gmaPhysics.hasTwintips;
+    return SportType.Skis;
   }
 
   public toggleTwintips(): boolean {
@@ -511,7 +499,6 @@ export class SnowBoarder {
 
   private buildCharacterMesh(): void {
     // Materials
-    const boardMat = new THREE.MeshStandardMaterial({ color: 0xe63946, roughness: 0.3, metalness: 0.1 });
     const skiMat = new THREE.MeshStandardMaterial({ color: 0x2a9d8f, roughness: 0.3, metalness: 0.1 });
     const baseMat = new THREE.MeshStandardMaterial({ color: 0x1d3557, roughness: 0.6 });
     const jacketMat = new THREE.MeshStandardMaterial({ color: 0xf4a261, roughness: 0.7 });
@@ -519,25 +506,7 @@ export class SnowBoarder {
     const helmetMat = new THREE.MeshStandardMaterial({ color: 0xf1faee, roughness: 0.4 });
     const goggleMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.1, metalness: 0.8 });
 
-    // 1. Snowboard (length 3.1 units ~ 1.55m, single continuous deck)
-    const boardDeck = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.04, 1.55), boardMat);
-    boardDeck.castShadow = true;
-    boardDeck.receiveShadow = true;
-    this.boardGroup.add(boardDeck);
-
-    const tipGeo = new THREE.BoxGeometry(0.30, 0.035, 0.22);
-    const nose = new THREE.Mesh(tipGeo, boardMat);
-    nose.position.set(0, 0.035, -0.84);
-    nose.rotation.x = 0.35;
-    const tail = new THREE.Mesh(tipGeo, boardMat);
-    tail.position.set(0, 0.035, 0.84);
-    tail.rotation.x = -0.35;
-    this.boardGroup.add(nose, tail);
-
-    this.boardGroup.position.y = -this.cfg.sphereRadius + 0.02;
-    this.visualRoot.add(this.boardGroup);
-
-    // 2. Skis (length 3.7 units ~ 1.85m, two independent skis)
+    // 1. Dual Independent Skis (length 1.85m, two parallel skis)
     const skiGeo = new THREE.BoxGeometry(0.12, 0.035, 1.85);
     const skiTipGeo = new THREE.BoxGeometry(0.12, 0.03, 0.25);
 
@@ -559,29 +528,27 @@ export class SnowBoarder {
 
     this.skisGroup.add(skiLeft, skiRight);
     this.skisGroup.position.y = -this.cfg.sphereRadius + 0.02;
-    this.skisGroup.visible = false;
+    this.skisGroup.visible = true;
     this.visualRoot.add(this.skisGroup);
 
-    // 3. Character Rig
+    // 2. Character Rig (Parallel Alpine Ski Stance)
     this.hipsGroup.position.set(0, 0.55, 0);
     this.visualRoot.add(this.hipsGroup);
 
-    // Legs (boots/shins)
+    // Legs (boots/shins aligned over each ski)
     const legGeo = new THREE.CapsuleGeometry(0.085, 0.38, 4, 8);
-    const legFront = new THREE.Mesh(legGeo, pantsMat);
-    legFront.position.set(0, -0.22, -0.26);
-    legFront.rotation.x = -0.15;
-    legFront.castShadow = true;
+    const legLeft = new THREE.Mesh(legGeo, pantsMat);
+    legLeft.position.set(-0.20, -0.22, 0);
+    legLeft.castShadow = true;
 
-    const legBack = new THREE.Mesh(legGeo, pantsMat);
-    legBack.position.set(0, -0.22, 0.26);
-    legBack.rotation.x = 0.15;
-    legBack.castShadow = true;
-    this.hipsGroup.add(legFront, legBack);
+    const legRight = new THREE.Mesh(legGeo, pantsMat);
+    legRight.position.set(0.20, -0.22, 0);
+    legRight.castShadow = true;
+    this.hipsGroup.add(legLeft, legRight);
 
-    // Torso (starts sideways for snowboard)
+    // Torso (forward-facing alpine stance)
     this.torsoGroup.position.set(0, 0.08, 0);
-    this.torsoGroup.rotation.y = Math.PI * 0.42;
+    this.torsoGroup.rotation.y = 0;
     this.hipsGroup.add(this.torsoGroup);
 
     const torsoMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.36, 6, 10), jacketMat);
@@ -595,10 +562,10 @@ export class SnowBoarder {
     pack.castShadow = true;
     this.torsoGroup.add(pack);
 
-    // Head + Helmet + Goggles
+    // Head + Helmet + Goggles (forward-facing)
     const headGroup = new THREE.Group();
     headGroup.position.set(0, 0.62, 0);
-    headGroup.rotation.y = -Math.PI * 0.42;
+    headGroup.rotation.y = 0;
     this.torsoGroup.add(headGroup);
 
     const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), helmetMat);
@@ -644,7 +611,7 @@ export class SnowBoarder {
     this.armR.add(poleR);
 
     this.polesGroup.add(poleL, poleR);
-    this.polesGroup.visible = false;
+    this.polesGroup.visible = true;
 
     this.torsoGroup.add(this.armL, this.armR);
   }
@@ -879,7 +846,6 @@ export class SnowBoarder {
       // 2. Procedural Carving Lean & Edge Banking
       const speedRollScale = THREE.MathUtils.clamp(0.28 + 0.72 * (this.speed / 4.0), 0.28, 1.0);
       const targetRoll = -this.leanAngle * 0.52 * speedRollScale;
-      this.boardGroup.rotation.z = THREE.MathUtils.damp(this.boardGroup.rotation.z, targetRoll, 10, dt);
       this.skisGroup.rotation.z = THREE.MathUtils.damp(this.skisGroup.rotation.z, targetRoll, 10, dt);
 
       // 3. Hip Spring
@@ -892,10 +858,8 @@ export class SnowBoarder {
       this.hipOffsetY += this.hipVelY * dt;
       this.hipsGroup.position.y = THREE.MathUtils.clamp(0.55 + this.hipOffsetY, 0.26, 0.70);
 
-      // 4. Torso Counter-Rotation & Tuck
-      const isSnowboard = this.gmaPhysics.sport === SportType.Snowboard;
-      const baseTorsoY = isSnowboard ? Math.PI * 0.42 : 0;
-      this.torsoGroup.rotation.y = THREE.MathUtils.damp(this.torsoGroup.rotation.y, baseTorsoY, 10, dt);
+      // 4. Torso Counter-Rotation & Tuck (Forward-facing ski stance)
+      this.torsoGroup.rotation.y = THREE.MathUtils.damp(this.torsoGroup.rotation.y, 0, 10, dt);
       this.torsoGroup.rotation.z = THREE.MathUtils.damp(
         this.torsoGroup.rotation.z,
         -this.leanAngle * 0.36 * speedRollScale,
@@ -990,3 +954,6 @@ export class SnowBoarder {
     this.sprayGeo.attributes.position.needsUpdate = true;
   }
 }
+
+export { Skier as SnowBoarder };
+

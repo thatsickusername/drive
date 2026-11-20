@@ -262,9 +262,7 @@ class Game {
     const speed = this.player.speedKmh.toFixed(1);
     const altitude = pos.y.toFixed(1);
 
-    const sportName = this.player.sport === 'Snowboard'
-      ? 'SNOWBOARD (Twin Deck)'
-      : `SKIS (${this.player.gmaPhysics.hasTwintips ? 'Twin-Tip' : 'Directional'})`;
+    const sportName = `ALPINE SKIS (${this.player.gmaPhysics.hasTwintips ? 'Twin-Tip Freestyle' : 'Traditional Directional'})`;
 
     const isSwitch = this.player.gmaPhysics.isSwitchRiding();
     const switchBadge = isSwitch ? '<span style="color:#a855f7;font-weight:bold;margin-left:6px;">[SWITCH]</span>' : '';
@@ -317,10 +315,10 @@ class Game {
       ${carveBar}
       <div>Score: <strong style="color:#4ade80;">${trickEng.totalScore} pts</strong> ${trickEng.currentMultiplier > 1 ? `<span style="color:#facc15;font-weight:bold;">[${trickEng.currentMultiplier}x Combo]</span>` : ''}</div>
       <div style="margin-top:6px;border-top:1px dashed rgba(255,255,255,0.15);padding-top:4px;font-size:11px;color:#cbd5e1;">
-        <strong>GRAND MOUNTAIN ADVENTURE CONTROLS:</strong><br />
-        • <strong>A/D</strong>: Steer | <strong>Q / Shift</strong>: Sharp Turn (50°) | <strong>E</strong>: Slide Turn (+2m/s boost)<br />
-        • <strong>Space</strong>: Jump (4m/s pop) | <strong>S</strong>: Brake | <strong>F</strong>: Shoulder Tackle / Pole Slap<br />
-        • <strong>G</strong>: Swap Gear (Board ⇄ Skis) | <strong>T</strong>: Twintip Toggle | <strong>Z</strong>: Reverse Turn (Switch)<br />
+        <strong>GRAND MOUNTAIN ADVENTURE SKI CONTROLS:</strong><br />
+        • <strong>A/D / Stick</strong>: Steer (GMA Quadratic Curve) | <strong>W / Double-Tap</strong>: Pole Staking | <strong>Q / Shift</strong>: Sharp Carve (50°)<br />
+        • <strong>E</strong>: Slide Turn (+2m/s boost) | <strong>S</strong>: Snowplow Brake | <strong>Space</strong>: Jump (4m/s pop) | <strong>J</strong>: Ski Safety Grab<br />
+        • <strong>T / G</strong>: Twintip Ski Toggle | <strong>Z</strong>: Switch Invert | <strong>F</strong>: Pole Slap / Tackle<br />
         • <strong>1-6</strong>: Peaks Teleport | <strong>C</strong>: Fly-Cam | <strong>R</strong>: Reset at Summit
       </div>
     `;

@@ -73,7 +73,7 @@ export class TrickEngine {
     let basePoints = 0;
 
     if (this.isGrabbing) {
-      trickParts.push('Method Grab');
+      trickParts.push('Safety Grab');
       basePoints += 150 * Math.max(1, Math.floor(this.grabTime * 3));
     }
 

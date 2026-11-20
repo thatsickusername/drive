@@ -1,4 +1,3 @@
-import { SnowboardInputState } from './player/SnowboardController';
 import { BoarderInput } from './boarder';
 
 export interface VehicleInputs {
@@ -147,55 +146,6 @@ export class UnifiedInputController {
     this.inputs.brakeAnalog = reverseOrServiceBrake;
 
     return this.inputs;
-  }
-
-  public getSnowboardInputs(): SnowboardInputState {
-    const kW = !!(this.keyState['KeyW'] || this.keyState['ArrowUp']);
-    const kS = !!(this.keyState['KeyS'] || this.keyState['ArrowDown']);
-    const kA = !!(this.keyState['KeyA'] || this.keyState['ArrowLeft']);
-    const kD = !!(this.keyState['KeyD'] || this.keyState['ArrowRight']);
-    const kJump = !!this.keyState['Space'];
-    const kGrab = !!(this.keyState['ShiftLeft'] || this.keyState['ShiftRight'] || this.keyState['KeyJ']);
-
-    let steer = 0;
-    if (kA) steer -= 1.0;
-    if (kD) steer += 1.0;
-
-    let pitch = 0;
-    if (kW) pitch += 1.0;
-    if (kS) pitch -= 1.0;
-
-    let jump = kJump;
-    let grab = kGrab;
-
-    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-    for (const gp of gamepads) {
-      if (!gp || !gp.connected) continue;
-
-      const stickX = gp.axes[0] ?? 0;
-      if (Math.abs(stickX) > 0.08) {
-        steer = stickX;
-      }
-
-      const stickY = gp.axes[1] ?? 0;
-      if (Math.abs(stickY) > 0.08) {
-        pitch = -stickY;
-      }
-
-      if (gp.buttons[0]?.pressed) jump = true; // A button
-      if (gp.buttons[2]?.pressed || gp.buttons[5]?.pressed) grab = true; // X or RB button
-      break;
-    }
-
-    return {
-      steer,
-      tuck: kW,
-      brake: kS,
-      jump,
-      pitch,
-      yaw: steer,
-      grab
-    };
   }
 
   public getBoarderInputs(): BoarderInput {

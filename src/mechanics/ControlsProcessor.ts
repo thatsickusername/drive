@@ -26,6 +26,7 @@ export interface ProcessedControls {
 export class ControlsProcessor {
   public reverseTurn: boolean = false;
   private lastStakeTapTime: number = 0.0;
+  private wasStakePressed: boolean = false;
 
   constructor() {}
 
@@ -62,12 +63,14 @@ export class ControlsProcessor {
     let outStake = rawInput.stakePole;
     this.lastStakeTapTime += dt;
 
-    if (rawInput.stakePole) {
-      if (this.lastStakeTapTime < 0.35) {
+    const isTapEdge = rawInput.stakePole && !this.wasStakePressed;
+    if (isTapEdge) {
+      if (this.lastStakeTapTime < 0.35) { // gap_time ~ 0.3s
         outStake = true;
       }
       this.lastStakeTapTime = 0.0;
     }
+    this.wasStakePressed = rawInput.stakePole;
 
     return {
       steer: outSteer,
