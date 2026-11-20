@@ -8,8 +8,8 @@ export class DynamicCameraDirector {
   private targetLookAt = new THREE.Vector3();
 
   // Base off-road trail camera geometry
-  private readonly baseFollowDist = 5.2;
-  private readonly baseFollowHeight = 2.3;
+  private readonly baseFollowDist = 3.6;
+  private readonly baseFollowHeight = 1.5;
 
   // Scratch objects to eliminate GC
   private scratchForward = new THREE.Vector3();
@@ -18,6 +18,63 @@ export class DynamicCameraDirector {
     this.camera = camera;
     this.camera.fov = 60;
     this.camera.updateProjectionMatrix();
+  }
+
+  public initSnowboard(riderPos: THREE.Vector3, heading: number): void {
+    const forwardX = -Math.sin(heading);
+    const forwardZ = -Math.cos(heading);
+
+    this.currentPos.set(
+      riderPos.x - forwardX * this.baseFollowDist,
+      riderPos.y + this.baseFollowHeight,
+      riderPos.z - forwardZ * this.baseFollowDist
+    );
+    this.camera.position.copy(this.currentPos);
+
+    this.currentLookAt.set(
+      riderPos.x + forwardX * 1.5,
+      riderPos.y + 0.6,
+      riderPos.z + forwardZ * 1.5
+    );
+    this.camera.lookAt(this.currentLookAt);
+  }
+
+  public updateSnowboard(
+    dt: number,
+    riderPos: THREE.Vector3,
+    heading: number,
+    speedKmh: number
+  ): void {
+    const forwardX = -Math.sin(heading);
+    const forwardZ = -Math.cos(heading);
+
+    // Speed stretch & FOV kick
+    const speedRatio = Math.min(1.0, speedKmh / 100.0);
+    const targetFov = 60 + speedRatio * 14.0;
+    this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 0.1);
+    this.camera.updateProjectionMatrix();
+
+    const dynamicFollowDist = this.baseFollowDist + speedRatio * 0.8;
+    const dynamicFollowHeight = this.baseFollowHeight + speedRatio * 0.2;
+
+    this.targetPos.set(
+      riderPos.x - forwardX * dynamicFollowDist,
+      riderPos.y + dynamicFollowHeight,
+      riderPos.z - forwardZ * dynamicFollowDist
+    );
+
+    this.targetLookAt.set(
+      riderPos.x + forwardX * 1.8,
+      riderPos.y + 0.6,
+      riderPos.z + forwardZ * 1.8
+    );
+
+    const lerpFactor = 1.0 - Math.exp(-12.0 * dt);
+    this.currentPos.lerp(this.targetPos, lerpFactor);
+    this.currentLookAt.lerp(this.targetLookAt, lerpFactor);
+
+    this.camera.position.copy(this.currentPos);
+    this.camera.lookAt(this.currentLookAt);
   }
 
   public initPosition(carPos: THREE.Vector3, carQuat: THREE.Quaternion): void {

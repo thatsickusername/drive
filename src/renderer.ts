@@ -8,8 +8,8 @@ export class Renderer {
 
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x87ceeb);
-    this.scene.fog = new THREE.Fog(0x87ceeb, 60, 250);
+    this.scene.background = new THREE.Color(0xdcecf8); // Crisp alpine winter sky
+    this.scene.fog = new THREE.Fog(0xdcecf8, 80, 500);
 
     this.camera = new THREE.PerspectiveCamera(
       60,
