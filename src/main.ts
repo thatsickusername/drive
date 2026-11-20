@@ -53,7 +53,7 @@ class Game {
 
     // 4. Sample exact ground altitude at Summit Peak
     const initialGround = this.massif.heightfield.sampleTerrain(this.currentSpawn.x, this.currentSpawn.z);
-    const spawnY = initialGround.height + 1.2;
+    const spawnY = initialGround.height;
 
     // 5. Initialize Grand Mountain Adventure SnowBoarder
     const spawnPos = new THREE.Vector3(this.currentSpawn.x, spawnY, this.currentSpawn.z);
@@ -72,6 +72,15 @@ class Game {
     this.inputController = new UnifiedInputController();
     this.inputController.onResetRequested = () => this.respawnAtCurrent();
     this.inputController.onFlyCamToggleRequested = () => this.toggleFlyCam();
+    this.inputController.onToggleSportRequested = () => {
+      this.player.toggleSport();
+    };
+    this.inputController.onToggleTwintipsRequested = () => {
+      this.player.toggleTwintips();
+    };
+    this.inputController.onToggleReverseTurnRequested = () => {
+      this.player.toggleReverseTurn();
+    };
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Digit1') this.teleportTo(this.locations.summit);
@@ -93,7 +102,7 @@ class Game {
   private teleportTo(loc: { name: string; x: number; z: number; heading: number }): void {
     this.currentSpawn = { ...loc };
     const ground = this.massif.heightfield.sampleTerrain(loc.x, loc.z);
-    this.player.reset(loc.x, ground.height + 1.8, loc.z, loc.heading);
+    this.player.reset(loc.x, ground.height, loc.z, loc.heading);
 
     if (this.cameraDirector.isFlyCam) {
       this.cameraDirector.toggleFlyCam(this.player.mesh.position);
@@ -103,7 +112,7 @@ class Game {
 
   private respawnAtCurrent(): void {
     const ground = this.massif.heightfield.sampleTerrain(this.currentSpawn.x, this.currentSpawn.z);
-    this.player.reset(this.currentSpawn.x, ground.height + 1.8, this.currentSpawn.z, this.currentSpawn.heading);
+    this.player.reset(this.currentSpawn.x, ground.height, this.currentSpawn.z, this.currentSpawn.heading);
     this.cameraDirector.initSnowboard(this.player.mesh.position, this.player.heading);
   }
 
@@ -184,13 +193,13 @@ class Game {
     } else {
       // Grand Mountain Adventure Snowboard Physics Update
       const boarderInputs = this.inputController.getBoarderInputs();
-      const terrainSample = this.massif.heightfield.sampleTerrain(
-        this.player.root.position.x,
-        this.player.root.position.z
-      );
 
       this.physics.step(delta, (dt: number) => {
-        this.player.fixedUpdate(dt, boarderInputs, terrainSample.surfaceType);
+        const sample = this.massif.heightfield.sampleTerrain(
+          this.player.root.position.x,
+          this.player.root.position.z
+        );
+        this.player.fixedUpdate(dt, boarderInputs, sample);
       });
       this.player.renderUpdate(delta, boarderInputs);
 
@@ -252,13 +261,30 @@ class Game {
     const pos = this.player.mesh.position;
     const speed = this.player.speedKmh.toFixed(1);
     const altitude = pos.y.toFixed(1);
-    const stateBadge = !this.player.isGrounded
-      ? '<span style="color:#f59e0b;font-weight:bold;">▲ AIRBORNE</span>'
-      : this.player.isSlashing
-      ? `<span style="color:#fbbf24;font-weight:bold;">✦ SLASH TURN (${this.player.slipAngleDeg.toFixed(0)}°)</span>`
-      : this.player.isDrifting
-      ? `<span style="color:#f97316;font-weight:bold;">≋ DRIFTING (${this.player.slipAngleDeg.toFixed(0)}°)</span>`
-      : '<span style="color:#38bdf8;font-weight:bold;">● CARVING</span>';
+
+    const sportName = this.player.sport === 'Snowboard'
+      ? 'SNOWBOARD (Twin Deck)'
+      : `SKIS (${this.player.gmaPhysics.hasTwintips ? 'Twin-Tip' : 'Directional'})`;
+
+    const isSwitch = this.player.gmaPhysics.isSwitchRiding();
+    const switchBadge = isSwitch ? '<span style="color:#a855f7;font-weight:bold;margin-left:6px;">[SWITCH]</span>' : '';
+
+    let stateBadge = '';
+    if (this.player.movementState === 'Crashing') {
+      stateBadge = '<span style="color:#ef4444;font-weight:bold;">☠ CRASH RAGDOLL (50Hz Verlet)</span>';
+    } else if (!this.player.isGrounded) {
+      stateBadge = `<span style="color:#f59e0b;font-weight:bold;">▲ AIRBORNE (${this.player.airTimer.toFixed(1)}s)</span>`;
+    } else if (this.player.turnType === 'SlideTurn') {
+      stateBadge = `<span style="color:#f97316;font-weight:bold;">≋ SLIDE TURN (+2m/s boost: ${(this.player.carveCharge * 100).toFixed(0)}%)</span>`;
+    } else if (this.player.turnType === 'SharpTurn') {
+      stateBadge = `<span style="color:#fbbf24;font-weight:bold;">✦ SHARP TURN (50° Cap)</span>`;
+    } else if (this.player.turnType === 'OverTurn') {
+      stateBadge = `<span style="color:#ec4899;font-weight:bold;">⚡ OVERTURN (10x Drag)</span>`;
+    } else if (this.player.turnType === 'StandardTurn') {
+      stateBadge = `<span style="color:#38bdf8;font-weight:bold;">● STANDARD CARVE (30° Cap)</span>`;
+    } else {
+      stateBadge = '<span style="color:#94a3b8;font-weight:bold;">● GLIDING</span>';
+    }
 
     const trickEng = this.player.trickEngine;
 
@@ -274,7 +300,7 @@ class Game {
     const chargeColor = this.player.carveCharge > 0.85 ? '#facc15' : '#38bdf8';
     const carveBar = `
       <div style="margin-top:4px;display:flex;align-items:center;gap:6px;font-size:11px;">
-        <span style="color:#cbd5e1;font-weight:600;">CARVE PUMP ${this.player.pumpChain > 0 ? `<span style="color:#38bdf8;">[Lv.${this.player.pumpChain} ${this.player.pumpFlow.toFixed(1)}x]</span>` : ''}:</span>
+        <span style="color:#cbd5e1;font-weight:600;">GMA CARVE & DRIFT ${this.player.pumpChain > 0 ? `<span style="color:#38bdf8;">[Stage ${this.player.pumpChain} ${this.player.pumpFlow.toFixed(1)}x]</span>` : ''}:</span>
         <div style="flex:1;background:rgba(255,255,255,0.18);height:6px;border-radius:3px;overflow:hidden;">
           <div style="width:${chargePct}%;height:100%;background:${chargeColor};transition:width 0.05s ease;"></div>
         </div>
@@ -284,18 +310,18 @@ class Game {
 
     this.hudElement.innerHTML = `
       <div style="font-weight:bold;font-size:14px;color:#38bdf8;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:4px;margin-bottom:6px;display:flex;justify-content:space-between;gap:12px;">
-        <span>${currentZone}</span>
+        <span>${currentZone} | <span style="color:#4ade80;">${sportName}</span>${switchBadge}</span>
         <span>${stateBadge}</span>
       </div>
       <div>Speed: <strong style="color:#fff;font-size:16px;">${speed}</strong> km/h (${(this.player.speedKmh / 3.6).toFixed(1)} m/s) | Alt: <strong>${altitude}m</strong></div>
       ${carveBar}
-      <div>Score: <strong style="color:#4ade80;">${trickEng.totalScore} pts</strong></div>
-      <div style="margin-top:6px;border-top:1px dashed rgba(255,255,255,0.15);padding-top:4px;font-size:11px;color:#94a3b8;">
-        <strong>QUICK TELEPORT / RESORT TIERS:</strong><br />
-        • <strong>1</strong>: Main Summit (540m) | <strong>2</strong>: West Peak (360m)<br />
-        • <strong>3</strong>: East Park (310m) | <strong>4</strong>: Mid Hub (190m)<br />
-        • <strong>5</strong>: Base Village (20m) | <strong>6</strong>: Halfpipe Gully<br />
-        • <strong>C</strong>: Toggle Fly-Cam | <strong>R</strong>: Reset at Summit
+      <div>Score: <strong style="color:#4ade80;">${trickEng.totalScore} pts</strong> ${trickEng.currentMultiplier > 1 ? `<span style="color:#facc15;font-weight:bold;">[${trickEng.currentMultiplier}x Combo]</span>` : ''}</div>
+      <div style="margin-top:6px;border-top:1px dashed rgba(255,255,255,0.15);padding-top:4px;font-size:11px;color:#cbd5e1;">
+        <strong>GRAND MOUNTAIN ADVENTURE CONTROLS:</strong><br />
+        • <strong>A/D</strong>: Steer | <strong>Q / Shift</strong>: Sharp Turn (50°) | <strong>E</strong>: Slide Turn (+2m/s boost)<br />
+        • <strong>Space</strong>: Jump (4m/s pop) | <strong>S</strong>: Brake | <strong>F</strong>: Shoulder Tackle / Pole Slap<br />
+        • <strong>G</strong>: Swap Gear (Board ⇄ Skis) | <strong>T</strong>: Twintip Toggle | <strong>Z</strong>: Reverse Turn (Switch)<br />
+        • <strong>1-6</strong>: Peaks Teleport | <strong>C</strong>: Fly-Cam | <strong>R</strong>: Reset at Summit
       </div>
     `;
 

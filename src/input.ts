@@ -29,6 +29,9 @@ export class UnifiedInputController {
 
   public onResetRequested?: () => void;
   public onFlyCamToggleRequested?: () => void;
+  public onToggleSportRequested?: () => void;
+  public onToggleTwintipsRequested?: () => void;
+  public onToggleReverseTurnRequested?: () => void;
 
   private keyState: { [code: string]: boolean } = {};
   private prevButtonLB: boolean = false;
@@ -58,6 +61,12 @@ export class UnifiedInputController {
       if (this.onResetRequested) this.onResetRequested();
     } else if (e.code === 'KeyC') {
       if (this.onFlyCamToggleRequested) this.onFlyCamToggleRequested();
+    } else if (e.code === 'KeyG') {
+      if (this.onToggleSportRequested) this.onToggleSportRequested();
+    } else if (e.code === 'KeyT') {
+      if (this.onToggleTwintipsRequested) this.onToggleTwintipsRequested();
+    } else if (e.code === 'KeyZ') {
+      if (this.onToggleReverseTurnRequested) this.onToggleReverseTurnRequested();
     }
   }
 
@@ -195,7 +204,10 @@ export class UnifiedInputController {
     const kA = !!(this.keyState['KeyA'] || this.keyState['ArrowLeft']);
     const kD = !!(this.keyState['KeyD'] || this.keyState['ArrowRight']);
     const kJump = !!this.keyState['Space'];
-    const kGrab = !!(this.keyState['ShiftLeft'] || this.keyState['ShiftRight'] || this.keyState['KeyJ']);
+    const kGrab = !!(this.keyState['KeyJ']);
+    const kSharp = !!(this.keyState['KeyQ'] || this.keyState['ShiftLeft'] || this.keyState['ShiftRight']);
+    const kSlide = !!this.keyState['KeyE'];
+    const kTackle = !!this.keyState['KeyF'];
 
     let forward = kW;
     let brake = kS;
@@ -203,12 +215,25 @@ export class UnifiedInputController {
     let right = kD;
     let jump = kJump;
     let grab = kGrab;
+    let sharpTurn = kSharp;
+    let slideTurn = kSlide;
+    let tackle = kTackle;
+    let steerX: number | undefined = undefined;
+    let trickSpinX: number | undefined = undefined;
+    let trickFlipY: number | undefined = undefined;
+    let trickRoll: number | undefined = undefined;
+
+    if (left && !right) steerX = -1.0;
+    else if (right && !left) steerX = 1.0;
 
     const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
     for (const gp of gamepads) {
       if (!gp || !gp.connected) continue;
 
       const stickX = gp.axes[0] ?? 0;
+      if (Math.abs(stickX) > 0.05) {
+        steerX = stickX;
+      }
       if (stickX < -0.15) left = true;
       if (stickX > 0.15) right = true;
 
@@ -219,11 +244,33 @@ export class UnifiedInputController {
       if (triggerR || stickY < -0.3) forward = true;
       if (triggerL || (gp.buttons[1]?.pressed ?? false) || stickY > 0.3) brake = true;
       if (gp.buttons[0]?.pressed) jump = true;
-      if (gp.buttons[2]?.pressed || gp.buttons[5]?.pressed) grab = true;
+      if (gp.buttons[1]?.pressed) slideTurn = true; // B button: Slide turn
+      if (gp.buttons[2]?.pressed) sharpTurn = true; // X button: Sharp turn
+      if (gp.buttons[3]?.pressed) tackle = true;    // Y button: Shoulder tackle / Pole slap
+      if (gp.buttons[4]?.pressed || gp.buttons[5]?.pressed) grab = true;
+
+      const rStickX = gp.axes[2] ?? 0;
+      const rStickY = gp.axes[3] ?? 0;
+      if (Math.abs(rStickX) > 0.1) trickSpinX = rStickX;
+      if (Math.abs(rStickY) > 0.1) trickFlipY = -rStickY;
       break;
     }
 
-    return { forward, brake, left, right, jump, grab };
+    return {
+      forward,
+      brake,
+      left,
+      right,
+      jump,
+      grab,
+      sharpTurn,
+      slideTurn,
+      tackle,
+      steerX,
+      trickSpinX,
+      trickFlipY,
+      trickRoll
+    };
   }
 
   public getCameraLookInputs(dt: number): { yawDelta: number; pitchDelta: number } {
