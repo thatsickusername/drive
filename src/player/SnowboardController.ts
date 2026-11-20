@@ -35,13 +35,14 @@ export class SnowboardController {
   public pitchAngle: number = 0; // Pitch in air
   public rollAngle: number = 0;
 
-  // Physics tuning constants (Sword of the Sea feel)
+  // Physics tuning constants (Sword of the Sea + Grand Mountain Adventure scale)
   private readonly hoverHeight = 0.42;
-  private readonly maxForwardSpeed = 38.0;   // ~136 km/h terminal velocity
-  private readonly turnSpeed = 3.6;          // Heading rotation speed (rad/s)
-  private readonly lateralGrip = 7.5;        // How fast lateral drift converges to forward line
+  private readonly maxCruisingSpeed = 24.0;  // ~86 km/h normal cruising
+  private readonly maxTerminalSpeed = 33.5;  // ~120 km/h tucking terminal velocity
+  private readonly turnSpeed = 3.2;          // Heading rotation speed (rad/s)
+  private readonly lateralGrip = 8.5;        // How fast lateral drift converges to forward line
   private readonly jumpForce = 11.5;         // Ollie vertical impulse (m/s)
-  private readonly airRotationSpeed = 4.2;   // Rad/s in air for flips and spins
+  private readonly airRotationSpeed = 4.0;   // Rad/s in air for flips and spins
 
   // Internal vectors to prevent GC
   private scratchRay = new RAPIER.Ray(
@@ -307,32 +308,50 @@ export class SnowboardController {
       vy += slopeForceY * dt;
       vz += slopeForceZ * dt;
 
-      // Tuck (W) reduces drag & adds carving pump
+      // Tuck (W) adds forward pump
       if (inputs.tuck) {
-        vx += this.scratchForward.x * 6.0 * dt;
-        vz += this.scratchForward.z * 6.0 * dt;
+        vx += this.scratchForward.x * 5.0 * dt;
+        vz += this.scratchForward.z * 5.0 * dt;
       }
 
       // Brake / Power slide (S)
       if (inputs.brake) {
-        const brakeDecel = Math.max(0, 1.0 - 4.5 * dt);
+        const brakeDecel = Math.max(0, 1.0 - 5.5 * dt);
         vx *= brakeDecel;
         vz *= brakeDecel;
       }
 
-      // Lateral Grip: Blends horizontal velocity into forward line (no loose drifting unless sliding)
+      // Quadratic Aerodynamic Drag: F_drag = -k * v^2
+      // Normal cruising: sits at 18-24 m/s (65-85 km/h)
+      // Tucking: drag reduced by 58%, caps at 30-34 m/s (110-120 km/h)
       const currentHorizSpeed = Math.hypot(vx, vz);
       if (currentHorizSpeed > 0.1) {
+        const kDrag = inputs.tuck ? 0.0036 : 0.0090;
+        const dragAccel = kDrag * currentHorizSpeed * currentHorizSpeed;
+        const dragFactor = Math.max(0, 1.0 - (dragAccel / currentHorizSpeed) * dt);
+        vx *= dragFactor;
+        vz *= dragFactor;
+
+        // Hard Carving Edge Drag: sheds 15-20% speed on sharp turns
+        const edgeBite = Math.abs(inputs.steer);
+        if (edgeBite > 0.15 && !inputs.tuck) {
+          const edgeDecel = Math.max(0, 1.0 - 0.22 * edgeBite * dt);
+          vx *= edgeDecel;
+          vz *= edgeDecel;
+        }
+
+        // Lateral Grip: Blends horizontal velocity into forward line (no loose drifting unless sliding)
         const forwardSpeed = vx * this.scratchForward.x + vz * this.scratchForward.z;
-        const grip = inputs.brake ? 1.5 : this.lateralGrip;
+        const grip = inputs.brake ? 2.0 : this.lateralGrip;
         const blend = Math.min(1.0, grip * dt);
 
         vx = THREE.MathUtils.lerp(vx, this.scratchForward.x * forwardSpeed, blend);
         vz = THREE.MathUtils.lerp(vz, this.scratchForward.z * forwardSpeed, blend);
       }
 
-      // Speed Clamping
-      const clampedHoriz = Math.min(this.maxForwardSpeed, Math.hypot(vx, vz));
+      // Hard speed clamp to prevent runaway speeds
+      const maxAllowedSpeed = inputs.tuck ? this.maxTerminalSpeed : this.maxCruisingSpeed;
+      const clampedHoriz = Math.min(maxAllowedSpeed, Math.hypot(vx, vz));
       const horizAngle = Math.atan2(vx, vz);
       vx = Math.sin(horizAngle) * clampedHoriz;
       vz = Math.cos(horizAngle) * clampedHoriz;
@@ -356,8 +375,14 @@ export class SnowboardController {
 
     } else {
       // 4. Airborne Dynamics & Tricks
-      // Standard gravity
+      // Standard gravity & ballistic air drag
       vy -= 22.0 * dt;
+      const airHoriz = Math.hypot(vx, vz);
+      if (airHoriz > 0.1) {
+        const airDragFactor = Math.max(0, 1.0 - 0.0032 * airHoriz * dt);
+        vx *= airDragFactor;
+        vz *= airDragFactor;
+      }
 
       // Airborne trick rotations
       const deltaYawDeg = inputs.yaw * this.airRotationSpeed * (180 / Math.PI) * dt;

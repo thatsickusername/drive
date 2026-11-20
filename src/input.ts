@@ -27,13 +27,25 @@ export class UnifiedInputController {
   };
 
   public onResetRequested?: () => void;
+  public onFlyCamToggleRequested?: () => void;
 
   private keyState: { [code: string]: boolean } = {};
   private prevButtonLB: boolean = false;
+  private mouseDeltaX: number = 0;
+  private mouseDeltaY: number = 0;
+  private isPointerActive: boolean = false;
 
   constructor() {
     window.addEventListener('keydown', this.onKeyDown.bind(this));
     window.addEventListener('keyup', this.onKeyUp.bind(this));
+    window.addEventListener('mousedown', () => { this.isPointerActive = true; });
+    window.addEventListener('mouseup', () => { this.isPointerActive = false; });
+    window.addEventListener('mousemove', (e) => {
+      if (this.isPointerActive) {
+        this.mouseDeltaX += e.movementX;
+        this.mouseDeltaY += e.movementY;
+      }
+    });
   }
 
   private onKeyDown(e: KeyboardEvent): void {
@@ -43,6 +55,8 @@ export class UnifiedInputController {
       this.inputs.lowRange = !this.inputs.lowRange;
     } else if (e.code === 'KeyR') {
       if (this.onResetRequested) this.onResetRequested();
+    } else if (e.code === 'KeyC') {
+      if (this.onFlyCamToggleRequested) this.onFlyCamToggleRequested();
     }
   }
 
@@ -171,6 +185,60 @@ export class UnifiedInputController {
       pitch,
       yaw: steer,
       grab
+    };
+  }
+
+  public getFlyCamInputs(): {
+    moveForward: number;
+    moveRight: number;
+    moveUp: number;
+    yawDelta: number;
+    pitchDelta: number;
+  } {
+    const kW = !!this.keyState['KeyW'];
+    const kS = !!this.keyState['KeyS'];
+    const kA = !!this.keyState['KeyA'];
+    const kD = !!this.keyState['KeyD'];
+    const kUp = !!this.keyState['Space'];
+    const kDown = !!(this.keyState['ShiftLeft'] || this.keyState['ShiftRight']);
+
+    const kArrLeft = !!this.keyState['ArrowLeft'];
+    const kArrRight = !!this.keyState['ArrowRight'];
+    const kArrUp = !!this.keyState['ArrowUp'];
+    const kArrDown = !!this.keyState['ArrowDown'];
+
+    let moveForward = 0;
+    if (kW) moveForward += 1.0;
+    if (kS) moveForward -= 1.0;
+
+    let moveRight = 0;
+    if (kD) moveRight += 1.0;
+    if (kA) moveRight -= 1.0;
+
+    let moveUp = 0;
+    if (kUp) moveUp += 1.0;
+    if (kDown) moveUp -= 1.0;
+
+    let yawDelta = 0;
+    if (kArrRight) yawDelta -= 1.0;
+    if (kArrLeft) yawDelta += 1.0;
+
+    let pitchDelta = 0;
+    if (kArrDown) pitchDelta += 1.0;
+    if (kArrUp) pitchDelta -= 1.0;
+
+    // Mouse drag contribution
+    yawDelta -= this.mouseDeltaX * 0.05;
+    pitchDelta -= this.mouseDeltaY * 0.05;
+    this.mouseDeltaX = 0;
+    this.mouseDeltaY = 0;
+
+    return {
+      moveForward,
+      moveRight,
+      moveUp,
+      yawDelta,
+      pitchDelta
     };
   }
 }

@@ -1,16 +1,15 @@
-import * as THREE from 'three';
 import { Renderer } from './renderer';
 import { PhysicsEngine } from './physics';
 import { DynamicCameraDirector } from './camera';
 import { UnifiedInputController } from './input';
 import { SnowboardController } from './player/SnowboardController';
-import { Phase1TestSlope } from './world/Phase1TestSlope';
+import { AlpineMassif } from './world/AlpineMassif';
 
 class Game {
   private renderer!: Renderer;
   private physics!: PhysicsEngine;
   private player!: SnowboardController;
-  public testSlope!: Phase1TestSlope;
+  public massif!: AlpineMassif;
   private cameraDirector!: DynamicCameraDirector;
   private inputController!: UnifiedInputController;
 
@@ -19,8 +18,17 @@ class Game {
   private lastTime: number = 0;
   private lastHudUpdateTime: number = 0;
 
-  private readonly spawnPos = new THREE.Vector3(0, 82.5, 40);
-  private readonly spawnHeading = 0; // Pointing downhill along -Z
+  // Preset mountain locations (2.4km x 2.4km Grand Mountain Adventure Resort)
+  private readonly locations = {
+    summit: { name: 'Main Summit Peak (Glacier Chute)', x: -100, z: -880, heading: 2.8 },
+    west: { name: 'West Peak (Powder Highway)', x: -680, z: -310, heading: 2.2 },
+    east: { name: 'East Park Ridge (Slopestyle Run)', x: 650, z: -250, heading: 3.8 },
+    mid: { name: 'Mid-Mountain Hub Plateau', x: 0, z: 130, heading: 2.9 },
+    base: { name: 'Base Village Lodge', x: 0, z: 900, heading: 0 },
+    halfpipe: { name: 'Glacial Halfpipe Gully', x: 310, z: -60, heading: 2.7 }
+  };
+
+  private currentSpawn = { ...this.locations.summit };
 
   public async start(): Promise<void> {
     const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
@@ -35,42 +43,81 @@ class Game {
     this.physics = new PhysicsEngine();
     await this.physics.init();
 
-    // 3. Build Phase 1 Test Slope & Kicker Ramps
-    this.testSlope = new Phase1TestSlope(
+    // 3. Build 1.5km x 1.5km Fixed 4-Layer Alpine Massif
+    this.massif = new AlpineMassif(
       this.renderer.scene,
       this.physics.rapier,
       this.physics.world
     );
 
-    // 4. Initialize Snowboard Rider Controller
+    // 4. Sample exact ground altitude at Summit Peak
+    const initialGround = this.massif.heightfield.sampleTerrain(this.currentSpawn.x, this.currentSpawn.z);
+    const spawnY = initialGround.height + 1.8;
+
+    // 5. Initialize Snowboard Rider Controller
     this.player = new SnowboardController(
       this.renderer.scene,
       this.physics.rapier,
       this.physics.world,
-      this.spawnPos.x,
-      this.spawnPos.y,
-      this.spawnPos.z
+      this.currentSpawn.x,
+      spawnY,
+      this.currentSpawn.z
     );
+    this.player.heading = this.currentSpawn.heading;
 
-    // 5. Initialize Camera Director
+    // 6. Initialize Camera Director
     this.cameraDirector = new DynamicCameraDirector(this.renderer.camera);
     this.cameraDirector.initSnowboard(this.player.mesh.position, this.player.heading);
 
-    // 6. Initialize Controller & Reset Listener
+    // 7. Initialize Controller & Hotkeys
     this.inputController = new UnifiedInputController();
-    this.inputController.onResetRequested = () => this.resetPlayer();
+    this.inputController.onResetRequested = () => this.respawnAtCurrent();
+    this.inputController.onFlyCamToggleRequested = () => this.toggleFlyCam();
 
-    // 7. Setup HUD & UI
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Digit1') this.teleportTo(this.locations.summit);
+      else if (e.code === 'Digit2') this.teleportTo(this.locations.west);
+      else if (e.code === 'Digit3') this.teleportTo(this.locations.east);
+      else if (e.code === 'Digit4') this.teleportTo(this.locations.mid);
+      else if (e.code === 'Digit5') this.teleportTo(this.locations.base);
+      else if (e.code === 'Digit6') this.teleportTo(this.locations.halfpipe);
+    });
+
+    // 8. Setup HUD
     this.setupHUD();
 
-    // 8. Start Game Loop
+    // 9. Start Game Loop
     this.lastTime = performance.now();
     requestAnimationFrame(this.loop.bind(this));
   }
 
-  private resetPlayer(): void {
-    this.player.reset(this.spawnPos.x, this.spawnPos.y, this.spawnPos.z, this.spawnHeading);
+  private teleportTo(loc: { name: string; x: number; z: number; heading: number }): void {
+    this.currentSpawn = { ...loc };
+    const ground = this.massif.heightfield.sampleTerrain(loc.x, loc.z);
+    this.player.reset(loc.x, ground.height + 1.8, loc.z, loc.heading);
+
+    if (this.cameraDirector.isFlyCam) {
+      this.cameraDirector.toggleFlyCam(this.player.mesh.position);
+    }
     this.cameraDirector.initSnowboard(this.player.mesh.position, this.player.heading);
+  }
+
+  private respawnAtCurrent(): void {
+    const ground = this.massif.heightfield.sampleTerrain(this.currentSpawn.x, this.currentSpawn.z);
+    this.player.reset(this.currentSpawn.x, ground.height + 1.8, this.currentSpawn.z, this.currentSpawn.heading);
+    this.cameraDirector.initSnowboard(this.player.mesh.position, this.player.heading);
+  }
+
+  private toggleFlyCam(): void {
+    const isFly = this.cameraDirector.toggleFlyCam(this.player.mesh.position);
+    if (!isFly) {
+      // Drop boarder where camera was hovering (at safe ground clearance)
+      const camPos = this.cameraDirector.camera.position;
+      const ground = this.massif.heightfield.sampleTerrain(camPos.x, camPos.z);
+      const safeY = Math.max(camPos.y, ground.height + 2.0);
+      this.player.reset(camPos.x, safeY, camPos.z, this.cameraDirector.flyCamYaw + Math.PI);
+      this.cameraDirector.initSnowboard(this.player.mesh.position, this.player.heading);
+    }
   }
 
   private setupHUD(): void {
@@ -79,7 +126,6 @@ class Game {
       existingHud.remove();
     }
 
-    // Telemetry & State HUD (Top-Left)
     this.hudElement = document.createElement('div');
     this.hudElement.id = 'hud';
     this.hudElement.style.cssText = `
@@ -89,19 +135,19 @@ class Game {
       color: #f1f5f9;
       font-family: 'Segoe UI', Roboto, monospace;
       font-size: 13px;
-      background: rgba(15, 23, 42, 0.78);
-      backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(15, 23, 42, 0.82);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.18);
       border-radius: 8px;
       padding: 12px 18px;
       pointer-events: none;
       line-height: 1.6;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.45);
       z-index: 100;
+      max-width: 380px;
     `;
     document.body.appendChild(this.hudElement);
 
-    // Dynamic Trick Score & Notification Banner (Top-Center)
     this.trickBannerElement = document.createElement('div');
     this.trickBannerElement.id = 'trick-banner';
     this.trickBannerElement.style.cssText = `
@@ -124,34 +170,70 @@ class Game {
 
     // 1. Gather Unified Inputs
     this.inputController.update();
-    const snowboardInputs = this.inputController.getSnowboardInputs();
 
-    // 2. Fixed Timestep Physics Stepping
-    this.physics.step(delta, (dt: number) => {
-      this.player.update(dt, snowboardInputs);
-    });
+    if (this.cameraDirector.isFlyCam) {
+      // Fly-Cam Free Navigation
+      const flyInputs = this.inputController.getFlyCamInputs();
+      this.cameraDirector.updateFlyCam(
+        delta,
+        flyInputs.moveForward,
+        flyInputs.moveRight,
+        flyInputs.moveUp,
+        flyInputs.yawDelta,
+        flyInputs.pitchDelta
+      );
+    } else {
+      // Snowboard Physics Update
+      const snowboardInputs = this.inputController.getSnowboardInputs();
+      this.physics.step(delta, (dt: number) => {
+        this.player.update(dt, snowboardInputs);
+      });
 
-    // 3. Update Camera Director
-    this.cameraDirector.updateSnowboard(
-      delta,
-      this.player.mesh.position,
-      this.player.heading,
-      this.player.speedKmh
-    );
+      // Update Follow Camera
+      this.cameraDirector.updateSnowboard(
+        delta,
+        this.player.mesh.position,
+        this.player.heading,
+        this.player.speedKmh
+      );
+    }
 
-    // 4. Update HUD (at 30Hz to prevent DOM thrashing)
+    // 2. Update HUD (at 30Hz)
     if (currentTime - this.lastHudUpdateTime >= 33) {
       this.lastHudUpdateTime = currentTime;
       this.updateHUD();
     }
 
-    // 5. Render Scene
+    // 3. Render Scene
     this.renderer.render();
 
     requestAnimationFrame(this.loop.bind(this));
   }
 
   private updateHUD(): void {
+    const isFly = this.cameraDirector.isFlyCam;
+
+    if (isFly) {
+      const cam = this.cameraDirector.camera.position;
+      this.hudElement.innerHTML = `
+        <div style="font-weight:bold;font-size:14px;color:#f59e0b;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:4px;margin-bottom:6px;display:flex;justify-content:space-between;">
+          <span>DEBUG FLY-CAM ACTIVE</span>
+          <span style="color:#4ade80;">[C] DROP RIDER</span>
+        </div>
+        <div>Cam Pos: <strong>X: ${cam.x.toFixed(0)}, Y: ${cam.y.toFixed(0)}m, Z: ${cam.z.toFixed(0)}</strong></div>
+        <div style="margin-top:6px;border-top:1px dashed rgba(255,255,255,0.15);padding-top:4px;font-size:11px;color:#cbd5e1;">
+          <strong>FLY-CAM CONTROLS:</strong><br />
+          • <strong>WASD</strong>: Fly Forward / Strafe<br />
+          • <strong>Space / Shift</strong>: Ascend / Descend<br />
+          • <strong>Mouse Drag / Arrows</strong>: Look Around<br />
+          • <strong>1-5</strong>: Teleport to Peaks / Lodge<br />
+          • <strong>C</strong>: Exit Fly-Cam & Shred Here
+        </div>
+      `;
+      this.trickBannerElement.style.display = 'none';
+      return;
+    }
+
     const pos = this.player.mesh.position;
     const speed = this.player.speedKmh.toFixed(1);
     const altitude = pos.y.toFixed(1);
@@ -161,21 +243,27 @@ class Game {
 
     const trickEng = this.player.trickEngine;
 
+    // Detect zone based on position
+    let currentZone = 'Off-Piste Powder Bowl';
+    if (pos.y > 450) currentZone = 'Main Summit (Glacier Chute)';
+    else if (pos.x < -350 && pos.y > 220) currentZone = 'West Peak (Powder Highway)';
+    else if (pos.x > 350 && pos.y > 200) currentZone = 'East Freestyle Slopestyle Park';
+    else if (Math.hypot(pos.x, pos.z - 120) < 140) currentZone = 'Mid-Mountain Hub Plateau (190m)';
+    else if (pos.z > 720) currentZone = 'Base Village Lodge Basin (20m)';
+
     this.hudElement.innerHTML = `
-      <div style="font-weight:bold;font-size:14px;color:#38bdf8;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:4px;margin-bottom:6px;display:flex;justify-content:space-between;gap:20px;">
-        <span>ALPINE FREERIDE // PHASE 1</span>
+      <div style="font-weight:bold;font-size:14px;color:#38bdf8;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:4px;margin-bottom:6px;display:flex;justify-content:space-between;gap:12px;">
+        <span>${currentZone}</span>
         <span>${stateBadge}</span>
       </div>
-      <div>Speed: <strong style="color:#fff;font-size:16px;">${speed}</strong> km/h | Alt: <strong>${altitude}m</strong></div>
+      <div>Speed: <strong style="color:#fff;font-size:16px;">${speed}</strong> km/h (${(this.player.speedKmh / 3.6).toFixed(1)} m/s) | Alt: <strong>${altitude}m</strong></div>
       <div>Score: <strong style="color:#4ade80;">${trickEng.totalScore} pts</strong></div>
       <div style="margin-top:6px;border-top:1px dashed rgba(255,255,255,0.15);padding-top:4px;font-size:11px;color:#94a3b8;">
-        <strong>CONTROLS:</strong><br />
-        • <strong>A / D</strong>: Carve Left / Right (Yaw Spin in air)<br />
-        • <strong>W</strong>: Tuck / Speed Pump (Frontflip in air)<br />
-        • <strong>S</strong>: Brake / Power Slide (Backflip in air)<br />
-        • <strong>Space</strong>: Pop Ollie / Jump<br />
-        • <strong>Shift / J</strong>: Grab Board (+Multiplier)<br />
-        • <strong>R</strong>: Respawn at Top
+        <strong>QUICK TELEPORT / RESORT TIERS:</strong><br />
+        • <strong>1</strong>: Main Summit (540m) | <strong>2</strong>: West Peak (360m)<br />
+        • <strong>3</strong>: East Park (310m) | <strong>4</strong>: Mid Hub (190m)<br />
+        • <strong>5</strong>: Base Village (20m) | <strong>6</strong>: Halfpipe Gully<br />
+        • <strong>C</strong>: Toggle Fly-Cam | <strong>R</strong>: Reset at Summit
       </div>
     `;
 

@@ -14,10 +14,63 @@ export class DynamicCameraDirector {
   // Scratch objects to eliminate GC
   private scratchForward = new THREE.Vector3();
 
+  // Debug Fly-Cam Mode
+  public isFlyCam: boolean = false;
+  public flyCamPos = new THREE.Vector3(0, 460, -720);
+  public flyCamYaw: number = 0; // In radians (0 = looking +Z towards base)
+  public flyCamPitch: number = -0.38; // Looking down at massif
+
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
-    this.camera.fov = 60;
+    this.camera.fov = 56;
     this.camera.updateProjectionMatrix();
+  }
+
+  public toggleFlyCam(startPos?: THREE.Vector3): boolean {
+    this.isFlyCam = !this.isFlyCam;
+    if (this.isFlyCam) {
+      if (startPos) {
+        this.flyCamPos.set(startPos.x, startPos.y + 60, startPos.z - 80);
+      } else {
+        this.flyCamPos.set(0, 460, -720);
+      }
+      this.flyCamYaw = 0;
+      this.flyCamPitch = -0.38;
+      this.camera.fov = 65;
+      this.camera.updateProjectionMatrix();
+    } else {
+      this.camera.fov = 60;
+      this.camera.updateProjectionMatrix();
+    }
+    return this.isFlyCam;
+  }
+
+  public updateFlyCam(
+    dt: number,
+    moveForward: number, // -1 to +1
+    moveRight: number,   // -1 to +1
+    moveUp: number,      // -1 to +1
+    yawDelta: number,
+    pitchDelta: number
+  ): void {
+    const flySpeed = 160.0; // Fast flight across 1.5km mountain
+
+    this.flyCamYaw += yawDelta * 1.8 * dt;
+    this.flyCamPitch = Math.max(-1.45, Math.min(1.45, this.flyCamPitch + pitchDelta * 1.8 * dt));
+
+    const forwardX = Math.sin(this.flyCamYaw) * Math.cos(this.flyCamPitch);
+    const forwardY = -Math.sin(this.flyCamPitch);
+    const forwardZ = Math.cos(this.flyCamYaw) * Math.cos(this.flyCamPitch);
+
+    const rightX = Math.cos(this.flyCamYaw);
+    const rightZ = -Math.sin(this.flyCamYaw);
+
+    this.flyCamPos.x += (forwardX * moveForward + rightX * moveRight) * flySpeed * dt;
+    this.flyCamPos.y += (forwardY * moveForward + moveUp) * flySpeed * dt;
+    this.flyCamPos.z += (forwardZ * moveForward + rightZ * moveRight) * flySpeed * dt;
+
+    this.camera.position.copy(this.flyCamPos);
+    this.camera.rotation.set(this.flyCamPitch, this.flyCamYaw, 0, 'YXZ');
   }
 
   public initSnowboard(riderPos: THREE.Vector3, heading: number): void {
@@ -48,10 +101,10 @@ export class DynamicCameraDirector {
     const forwardX = -Math.sin(heading);
     const forwardZ = -Math.cos(heading);
 
-    // Speed stretch & FOV kick
-    const speedRatio = Math.min(1.0, speedKmh / 100.0);
-    const targetFov = 60 + speedRatio * 14.0;
-    this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 0.1);
+    // Disciplined FOV: 56° base, scales to 70° only at terminal tuck speeds (>100 km/h)
+    const speedRatio = Math.max(0, Math.min(1.0, (speedKmh - 60.0) / 60.0));
+    const targetFov = 56.0 + speedRatio * 14.0;
+    this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 0.08);
     this.camera.updateProjectionMatrix();
 
     const dynamicFollowDist = this.baseFollowDist + speedRatio * 0.8;
