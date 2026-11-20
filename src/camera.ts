@@ -81,21 +81,24 @@ export class DynamicCameraDirector {
 
   public initSnowboard(riderPos: THREE.Vector3, heading: number): void {
     this.camYaw = heading;
-    this.camPitch = 0.1;
+    this.camPitch = 0.08;
     this.timeSinceManualLook = 999;
     const forwardX = -Math.sin(this.camYaw);
     const forwardZ = -Math.cos(this.camYaw);
 
+    const initDist = 5.2;
+    const initHeight = 2.4;
+
     this.currentPos.set(
-      riderPos.x - forwardX * this.baseFollowDist,
-      riderPos.y + this.baseFollowHeight,
-      riderPos.z - forwardZ * this.baseFollowDist
+      riderPos.x - forwardX * initDist,
+      riderPos.y + initHeight,
+      riderPos.z - forwardZ * initDist
     );
     this.camera.position.copy(this.currentPos);
 
     this.currentLookAt.set(
       riderPos.x + forwardX * 1.5,
-      riderPos.y + 0.6,
+      riderPos.y + 0.85,
       riderPos.z + forwardZ * 1.5
     );
     this.camera.lookAt(this.currentLookAt);
@@ -108,7 +111,8 @@ export class DynamicCameraDirector {
     speedKmh: number,
     yawDelta: number = 0,
     pitchDelta: number = 0,
-    lateralSlip: number = 0
+    lateralSlip: number = 0,
+    isAirborne: boolean = false
   ): void {
     const hasManualLook = Math.abs(yawDelta) > 0.0001 || Math.abs(pitchDelta) > 0.0001;
 
@@ -119,15 +123,19 @@ export class DynamicCameraDirector {
     } else {
       this.timeSinceManualLook += dt;
 
-      // Only catch up if player made a drastic U-turn / 180° and user hasn't moved camera
+      // Responsive chase alignment: continuously tracks behind rider heading
       let angleDiff = (heading - this.camYaw) % (Math.PI * 2);
       if (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
       if (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
 
-      // If rider is facing backwards (> 115° deviation) and untouched for 1.2s, slowly catch up
-      if (Math.abs(angleDiff) > 2.0 && this.timeSinceManualLook > 1.2) {
-        const catchUpSpeed = 1.2; // Slow, smooth re-alignment
-        this.camYaw += Math.sign(angleDiff) * Math.min(Math.abs(angleDiff), catchUpSpeed * dt);
+      const trackSpeed = this.timeSinceManualLook > 0.35
+        ? THREE.MathUtils.lerp(3.2, 5.2, THREE.MathUtils.smoothstep(speedKmh, 20.0, 58.0))
+        : 1.0;
+      this.camYaw += angleDiff * Math.min(1.0, trackSpeed * dt);
+
+      // Return pitch to neutral downhill incline if untouched
+      if (this.timeSinceManualLook > 0.8) {
+        this.camPitch = THREE.MathUtils.damp(this.camPitch, 0.08, 2.5, dt);
       }
     }
 
@@ -136,17 +144,19 @@ export class DynamicCameraDirector {
     const rightX = forwardZ;
     const rightZ = -forwardX;
 
-    // Step 1: Normalize speed intensity factor early (20 km/h to 58 km/h)
+    // Step 1: Normalize speed intensity factor (20 km/h to 58 km/h)
     const speedT = THREE.MathUtils.smoothstep(speedKmh, 20.0, 58.0);
 
-    // Step 3: Dynamic FOV (55° idle -> 80° at speed)
+    // Step 2: Dynamic FOV (55° idle -> 80° at speed)
     const targetFov = 55.0 + speedT * 25.0;
     this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, Math.min(1.0, dt * 6.0));
     this.camera.updateProjectionMatrix();
 
-    // Step 3: Ground rush camera height (drops closer to snow at high speed: 3.2m down to 2.1m)
-    const heightOffset = THREE.MathUtils.lerp(3.2, 2.1, speedT);
-    const dynamicFollowDist = (this.baseFollowDist + speedT * 0.6) * Math.cos(this.camPitch);
+    // Step 3: Camera Distance & Height
+    // Starting position (idle/low speed) is 5.2m back to clearly frame character; distant high-speed chase remains 4.2m
+    const currentBaseDist = THREE.MathUtils.lerp(5.2, 4.2, speedT);
+    const dynamicFollowDist = currentBaseDist * Math.cos(this.camPitch);
+    const heightOffset = THREE.MathUtils.lerp(2.4, 2.1, speedT);
     const dynamicFollowHeight = heightOffset + Math.sin(this.camPitch) * 2.2;
 
     this.targetPos.set(
@@ -155,9 +165,12 @@ export class DynamicCameraDirector {
       riderPos.z - forwardZ * dynamicFollowDist
     );
 
+    // Airborne Landing Pitch
+    const airLandingPitchDrop = isAirborne ? -0.55 : 0.0;
+
     this.targetLookAt.set(
       riderPos.x + forwardX * 1.8,
-      riderPos.y + 0.6 - this.camPitch * 0.5,
+      riderPos.y + 0.85 - this.camPitch * 0.5 + airLandingPitchDrop,
       riderPos.z + forwardZ * 1.8
     );
 

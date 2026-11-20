@@ -167,6 +167,7 @@ export class SnowBoarder {
   private smoothNormal = new THREE.Vector3(0, 1, 0);
   private coyoteTimer = 0;
   private jumpCharge = 0;
+  private jumpBufferTimer = 0; // 140ms pre-buffer window for pop on touchdown
   private wasJumpHeld = false;
   private airPitch = 0;
   private airRoll = 0;
@@ -467,23 +468,28 @@ export class SnowBoarder {
     const distCenter = hitCenter ? hitCenter.timeOfImpact - 0.15 : 999.0;
     const distNose = hitNose ? hitNose.timeOfImpact - 0.15 : 999.0;
     const distTail = hitTail ? hitTail.timeOfImpact - 0.15 : 999.0;
-    const hitDist = distCenter < 900 ? distCenter : Math.min(distNose, distTail);
-    this.groundDistance = hitDist;
 
+    // True perpendicular normal distance (invariant to slope angle)
+    const normalDistCenter = hitCenter ? distCenter * Math.max(0.15, hitCenter.normal.y) : 999.0;
+    const normalDistNose = hitNose ? distNose * Math.max(0.15, hitNose.normal.y) : 999.0;
+    const normalDistTail = hitTail ? distTail * Math.max(0.15, hitTail.normal.y) : 999.0;
+    this.groundDistance = Math.min(normalDistCenter, normalDistNose, normalDistTail);
+
+    const maxContactDist = this.cfg.sphereRadius + 0.38;
     let normX = 0, normY = 0, normZ = 0, normW = 0;
-    if (hitCenter && distCenter <= this.cfg.sphereRadius + 0.85 && hitCenter.normal.y > 0.15) {
+    if (hitCenter && normalDistCenter <= maxContactDist && hitCenter.normal.y > 0.12) {
       normX += hitCenter.normal.x * 2.0;
       normY += hitCenter.normal.y * 2.0;
       normZ += hitCenter.normal.z * 2.0;
       normW += 2.0;
     }
-    if (hitNose && distNose <= this.cfg.sphereRadius + 0.85 && hitNose.normal.y > 0.15) {
+    if (hitNose && normalDistNose <= maxContactDist && hitNose.normal.y > 0.12) {
       normX += hitNose.normal.x;
       normY += hitNose.normal.y;
       normZ += hitNose.normal.z;
       normW += 1.0;
     }
-    if (hitTail && distTail <= this.cfg.sphereRadius + 0.85 && hitTail.normal.y > 0.15) {
+    if (hitTail && normalDistTail <= maxContactDist && hitTail.normal.y > 0.12) {
       normX += hitTail.normal.x;
       normY += hitTail.normal.y;
       normZ += hitTail.normal.z;
@@ -495,19 +501,19 @@ export class SnowBoarder {
 
     if (isGroundHit) {
       this.isGrounded = true;
-      this.coyoteTimer = 0.20;
+      this.coyoteTimer = 0.15;
       this._rawNormal.set(normX / normW, normY / normW, normZ / normW).normalize();
       this.smoothNormal.lerp(this._rawNormal, Math.min(1, dt * 25)).normalize();
       this.rigidBody.setGravityScale(0.0, true);
 
-      // Only perform jump landing evaluation if player was in the air for a real jump (> 0.20s)
-      const wasRealJump = this.airTimer > 0.20;
+      // Only perform jump landing evaluation if player was in the air for a real deliberate jump (> 0.30s)
+      const wasRealJump = this.airTimer > 0.30;
       if (!this.wasGrounded && wasRealJump) {
         this.airYawVel = 0;
         this.airPitchVel = 0;
 
         // Grand Mountain Adventure landing impact decomposition:
-        // Downward normal impact velocity is absorbed by snow and rider knee flex (NO bounce, NO artificial speed injection)
+        // Downward normal impact velocity is absorbed by snow (NO outward bounce)
         const vDotNormal = this._vel.dot(this.smoothNormal);
         if (vDotNormal < 0) {
           this._vel.addScaledVector(this.smoothNormal, -vDotNormal);
@@ -530,28 +536,38 @@ export class SnowBoarder {
 
         const impactSpeed = Math.abs(vDotNormal);
 
-        // Crash vs Stumble vs Clean landing
-        if (impactSpeed > 18.0 || yawErrorDeg > 46.0 || pitchErrorDeg > 45.0) {
-          // Hard Wipeout: severe speed scrub, stumble, crash spray, trick failed
-          this._vel.multiplyScalar(0.25);
-          this.stumbleTimer = 0.55;
-          this.hipVelY = -5.0;
+        // 3-Tier Landing Spectrum: Stomped vs Recoverable Revert vs Wipeout
+        if (impactSpeed > 18.0 || yawErrorDeg > 55.0 || pitchErrorDeg > 45.0) {
+          // Tier 3: Hard Wipeout (severe speed scrub, stumble, crash spray, trick failed)
+          this._vel.multiplyScalar(0.22);
+          this.stumbleTimer = 0.50;
+          this.hipVelY = -4.5;
           this.triggerCrashSpray();
           this.trickEngine.land(false);
-        } else if (impactSpeed > 11.5 || yawErrorDeg > 30.0 || pitchErrorDeg > 30.0) {
-          // Sketchy Landing: moderate scrub, knee compression
-          this._vel.multiplyScalar(0.78);
-          this.stumbleTimer = 0.25;
-          this.hipVelY = -Math.min(5.0, impactSpeed * 0.35);
+        } else if (impactSpeed > 11.5 || yawErrorDeg > 22.0 || pitchErrorDeg > 30.0) {
+          // Tier 2: Sketchy / Revert (recoverable pivot out of landing, 25% speed scrub, no wipeout)
+          this._vel.multiplyScalar(0.75);
+          this.stumbleTimer = 0.20;
+          this.hipVelY = -Math.min(4.5, impactSpeed * 0.35);
+          if (horizSpeed > 2.0) {
+            const travelYaw = Math.atan2(-this._vel.x, -this._vel.z);
+            this.yaw = travelYaw;
+          }
           this.trickEngine.land(true);
         } else {
-          // Stomped Clean Landing: 100% tangential speed preserved, crisp compression
+          // Tier 1: Stomped Clean Landing (<20 deg yaw error): 100% momentum retained + subtle landing boost
+          this._vel.multiplyScalar(1.03);
           this.stumbleTimer = 0;
-          this.hipVelY = -Math.min(4.5, impactSpeed * 0.25);
+          this.hipVelY = -Math.min(4.0, impactSpeed * 0.25);
           this.trickEngine.land(true);
         }
+
+        // Fire pre-buffered jump pop immediately on touchdown if primed deliberately
+        if (this.jumpBufferTimer > 0 && this.jumpCharge > 0.15) {
+          this.triggerJumpPop(this.jumpCharge);
+        }
       } else if (!this.wasGrounded) {
-        // Micro-ground separation over bumps: absorb downward normal cleanly
+        // Micro-ground separation over bumps: absorb downward normal cleanly with zero bounce
         const vDotNormal = this._vel.dot(this.smoothNormal);
         if (vDotNormal < 0) {
           this._vel.addScaledVector(this.smoothNormal, -vDotNormal);
@@ -581,46 +597,73 @@ export class SnowBoarder {
 
     // 3. Apply Grounded vs Airborne Physics
     if (this.isGrounded) {
-      this.updateGroundedPhysics(dt, input, surfaceType, hitDist);
+      this.updateGroundedPhysics(dt, input, surfaceType);
     } else {
       this.updateAirPhysics(dt, input);
     }
 
-    // 4. Ollie / Jump Handling (Charge on hold, pop on release)
-    if (input.jump && (this.isGrounded || this.coyoteTimer > 0)) {
-      this.jumpCharge = Math.min(1, this.jumpCharge + dt * 2.2);
-    } else if (!input.jump && this.wasJumpHeld && (this.isGrounded || this.coyoteTimer > 0)) {
-      const impulse = THREE.MathUtils.lerp(
-        this.cfg.jumpImpulseMin,
-        this.cfg.jumpImpulseMax,
-        this.jumpCharge
-      );
-      // Pop mostly upward with slight slope-normal kick
-      const popX = this.smoothNormal.x * impulse * 0.35;
-      const popY = Math.max(impulse * 0.85, this.smoothNormal.y * impulse);
-      const popZ = this.smoothNormal.z * impulse * 0.35;
+    // 4. Ollie / Jump Handling (Charge on hold, pop on release, coyote time, and 140ms pre-buffering)
+    this.jumpBufferTimer = Math.max(0, this.jumpBufferTimer - dt);
 
-      this.rigidBody.setLinvel(
-        { x: this._vel.x + popX, y: Math.max(0, this._vel.y) + popY, z: this._vel.z + popZ },
-        true
-      );
-      this.isGrounded = false;
-      this.coyoteTimer = 0;
-      this.jumpCharge = 0;
-      this.hipVelY += 3.5; // Visual pop extension
-      this.trickEngine.startAir();
-    } else if (!input.jump) {
+    const canCharge = this.isGrounded || this.coyoteTimer > 0 || this.groundDistance < 1.6;
+    if (input.jump && canCharge) {
+      this.jumpCharge = Math.min(1, this.jumpCharge + dt * 2.2);
+    } else if (!input.jump && this.wasJumpHeld) {
+      if (this.isGrounded || this.coyoteTimer > 0) {
+        this.triggerJumpPop(this.jumpCharge);
+      } else {
+        // Airborne within pre-buffer window (140ms)
+        this.jumpBufferTimer = 0.14;
+      }
+    } else if (!input.jump && this.jumpBufferTimer <= 0) {
       this.jumpCharge = THREE.MathUtils.damp(this.jumpCharge, 0, 10, dt);
     }
     this.wasJumpHeld = input.jump;
   }
 
+  private triggerJumpPop(charge: number): void {
+    const popRatio = Math.max(0.2, charge);
+    const impulse = THREE.MathUtils.lerp(
+      this.cfg.jumpImpulseMin,
+      this.cfg.jumpImpulseMax,
+      popRatio
+    );
+    // Pop mostly upward with slight slope-normal kick
+    const popX = this.smoothNormal.x * impulse * 0.35;
+    const popY = Math.max(impulse * 0.85, this.smoothNormal.y * impulse);
+    const popZ = this.smoothNormal.z * impulse * 0.35;
+
+    this.rigidBody.setLinvel(
+      { x: this._vel.x + popX, y: Math.max(0, this._vel.y) + popY, z: this._vel.z + popZ },
+      true
+    );
+    this.isGrounded = false;
+    this.coyoteTimer = 0;
+    this.jumpCharge = 0;
+    this.jumpBufferTimer = 0;
+    this.hipVelY += 3.5; // Visual pop extension
+    this.trickEngine.startAir();
+  }
+
   private updateGroundedPhysics(
     dt: number,
     input: BoarderInput,
-    surfaceType: SurfaceType,
-    hitDist: number
+    surfaceType: SurfaceType
   ): void {
+    // Surface modifier hook
+    let surfaceFrictionMult = 1.0;
+    let surfaceGripMult = 1.0;
+    if (surfaceType === 'ICE') {
+      surfaceFrictionMult = 0.20; // Super slick glide on river ice
+      surfaceGripMult = 0.45;
+    } else if (surfaceType === 'ROCK') {
+      surfaceFrictionMult = 3.6;  // Heavy drag on rock
+      surfaceGripMult = 0.70;
+    } else if (surfaceType === 'POWDER') {
+      surfaceFrictionMult = this.cfg.powderFriction / this.cfg.baseFriction;
+      surfaceGripMult = 1.08;
+    }
+
     // Step 1: Sidecut Carving Kinematics
     const absLean = Math.abs(this.leanAngle);
     const edgeRollRad = absLean * 0.72; // Board roll tilt (radians, max ~41 deg)
@@ -664,20 +707,6 @@ export class SnowBoarder {
       this._vel.addScaledVector(this.smoothNormal, -vDotNormal);
     }
 
-    // Ground adherence spring
-    const distError = hitDist - this.cfg.sphereRadius;
-    if (distError > 0.002) {
-      const pullSpeed = THREE.MathUtils.clamp(distError * 35.0, 0, 25.0);
-      this._vel.addScaledVector(this.smoothNormal, -pullSpeed);
-    } else if (distError < -0.002) {
-      const pushSpeed = THREE.MathUtils.clamp(-distError * 20.0, 0, 10.0);
-      this._vel.addScaledVector(this.smoothNormal, pushSpeed);
-    }
-
-    // Speed-Scaled Downforce (Ground Stick)
-    const downforce = 18.0 + this.speed * 1.2;
-    this._vel.addScaledVector(this.smoothNormal, -downforce * dt);
-
     // Step 3: Slope Gravity Projection: g_slope = g - (g . n) * n
     const gMag = -this.cfg.gravity;
     const gDotN = gMag * this.smoothNormal.y;
@@ -699,20 +728,6 @@ export class SnowBoarder {
       slipAngle = Math.acos(THREE.MathUtils.clamp(Math.abs(this.vForward) / planarSpeed, 0, 1));
     }
     this.slipAngleDeg = THREE.MathUtils.radToDeg(slipAngle);
-
-    // Surface modifier hook
-    let surfaceFrictionMult = 1.0;
-    let surfaceGripMult = 1.0;
-    if (surfaceType === 'ICE') {
-      surfaceFrictionMult = 0.20; // Super slick glide on river ice
-      surfaceGripMult = 0.45;
-    } else if (surfaceType === 'ROCK') {
-      surfaceFrictionMult = 3.6;  // Heavy drag on rock
-      surfaceGripMult = 0.70;
-    } else if (surfaceType === 'POWDER') {
-      surfaceFrictionMult = this.cfg.powderFriction / this.cfg.baseFriction;
-      surfaceGripMult = 1.08;
-    }
 
     // Dynamic Edge Bite vs Skid evaluation
     const centripetalAcc = planarSpeed * Math.abs(turnRate);
@@ -836,8 +851,12 @@ export class SnowBoarder {
       newVFwd -= Math.sign(newVFwd) * brakeDecel;
     }
 
-    // Reconstruct velocity from forward & lateral components
-    this._vel.copy(this._forward).multiplyScalar(newVFwd).addScaledVector(this._right, newVLat);
+    // Reconstruct velocity from forward & lateral components + continuous ground-stick adherence
+    // Gentle continuous normal downforce keeps the sphere glued to terrain contours over rollers and steep slopes with zero bounce
+    const stickSpeed = THREE.MathUtils.clamp(4.0 + curHorizSpeed * 0.15, 4.0, 9.0);
+    this._vel.copy(this._forward).multiplyScalar(newVFwd)
+      .addScaledVector(this._right, newVLat)
+      .addScaledVector(this.smoothNormal, -stickSpeed);
 
     // Quadratic Aerodynamic Drag
     const curSpeed = this._vel.length();
@@ -875,12 +894,18 @@ export class SnowBoarder {
       !!input.grab
     );
 
-    // Auto-Leveling Landing Assist:
+    // Auto-Leveling Landing Assist & Spin Spotting:
     // When player releases rotation input or is within 1.5m of ground, level pitch/roll and nudge yaw toward velocity
     const noRotInput = Math.abs(rawYawInput) < 0.1 && Math.abs(rawPitchInput) < 0.1;
     if (noRotInput || this.groundDistance < 1.5) {
       this.airPitch = THREE.MathUtils.damp(this.airPitch, 0, 7.5, dt);
       this.airRoll = THREE.MathUtils.damp(this.airRoll, 0, 7.5, dt);
+
+      // Spin spotting assist: smoothly damp yaw toward the nearest 180 deg multiple (PI rad) when spin input is released
+      if (Math.abs(rawYawInput) < 0.1) {
+        const nearest180 = Math.round(this.yaw / Math.PI) * Math.PI;
+        this.yaw = THREE.MathUtils.damp(this.yaw, nearest180, 4.0, dt);
+      }
 
       const horizSpeed = Math.hypot(this._vel.x, this._vel.z);
       if (horizSpeed > 1.2) {

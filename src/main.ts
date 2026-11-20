@@ -203,7 +203,8 @@ class Game {
         this.player.speedKmh,
         lookInputs.yawDelta,
         lookInputs.pitchDelta,
-        Math.abs(this.player.vLateral)
+        Math.abs(this.player.vLateral),
+        !this.player.isGrounded
       );
     }
 
