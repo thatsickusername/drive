@@ -1,14 +1,15 @@
+import * as THREE from 'three';
 import { Renderer } from './renderer';
 import { PhysicsEngine } from './physics';
 import { DynamicCameraDirector } from './camera';
 import { UnifiedInputController } from './input';
-import { SnowboardController } from './player/SnowboardController';
+import { SnowBoarder } from './boarder';
 import { AlpineMassif } from './world/AlpineMassif';
 
 class Game {
   private renderer!: Renderer;
   private physics!: PhysicsEngine;
-  private player!: SnowboardController;
+  private player!: SnowBoarder;
   public massif!: AlpineMassif;
   private cameraDirector!: DynamicCameraDirector;
   private inputController!: UnifiedInputController;
@@ -52,16 +53,14 @@ class Game {
 
     // 4. Sample exact ground altitude at Summit Peak
     const initialGround = this.massif.heightfield.sampleTerrain(this.currentSpawn.x, this.currentSpawn.z);
-    const spawnY = initialGround.height + 1.8;
+    const spawnY = initialGround.height + 1.2;
 
-    // 5. Initialize Snowboard Rider Controller
-    this.player = new SnowboardController(
-      this.renderer.scene,
-      this.physics.rapier,
+    // 5. Initialize Grand Mountain Adventure SnowBoarder
+    const spawnPos = new THREE.Vector3(this.currentSpawn.x, spawnY, this.currentSpawn.z);
+    this.player = new SnowBoarder(
       this.physics.world,
-      this.currentSpawn.x,
-      spawnY,
-      this.currentSpawn.z
+      this.renderer.scene,
+      spawnPos
     );
     this.player.heading = this.currentSpawn.heading;
 
@@ -183,18 +182,28 @@ class Game {
         flyInputs.pitchDelta
       );
     } else {
-      // Snowboard Physics Update
-      const snowboardInputs = this.inputController.getSnowboardInputs();
-      this.physics.step(delta, (dt: number) => {
-        this.player.update(dt, snowboardInputs);
-      });
+      // Grand Mountain Adventure Snowboard Physics Update
+      const boarderInputs = this.inputController.getBoarderInputs();
+      const terrainSample = this.massif.heightfield.sampleTerrain(
+        this.player.root.position.x,
+        this.player.root.position.z
+      );
 
-      // Update Follow Camera
+      this.physics.step(delta, (dt: number) => {
+        this.player.fixedUpdate(dt, boarderInputs, terrainSample.surfaceType);
+      });
+      this.player.renderUpdate(delta, boarderInputs);
+
+      // Update Follow Camera with Mouse & Controller Right-Stick Look
+      const lookInputs = this.inputController.getCameraLookInputs(delta);
       this.cameraDirector.updateSnowboard(
         delta,
         this.player.mesh.position,
         this.player.heading,
-        this.player.speedKmh
+        this.player.speedKmh,
+        lookInputs.yawDelta,
+        lookInputs.pitchDelta,
+        Math.abs(this.player.vLateral)
       );
     }
 
@@ -237,9 +246,11 @@ class Game {
     const pos = this.player.mesh.position;
     const speed = this.player.speedKmh.toFixed(1);
     const altitude = pos.y.toFixed(1);
-    const stateBadge = this.player.isGrounded
-      ? '<span style="color:#38bdf8;font-weight:bold;">● CARVING</span>'
-      : '<span style="color:#f59e0b;font-weight:bold;">▲ AIRBORNE</span>';
+    const stateBadge = !this.player.isGrounded
+      ? '<span style="color:#f59e0b;font-weight:bold;">▲ AIRBORNE</span>'
+      : this.player.isDrifting
+      ? `<span style="color:#f97316;font-weight:bold;">≋ DRIFTING (${this.player.slipAngleDeg.toFixed(0)}°)</span>`
+      : '<span style="color:#38bdf8;font-weight:bold;">● CARVING</span>';
 
     const trickEng = this.player.trickEngine;
 
@@ -251,12 +262,25 @@ class Game {
     else if (Math.hypot(pos.x, pos.z - 120) < 140) currentZone = 'Mid-Mountain Hub Plateau (190m)';
     else if (pos.z > 720) currentZone = 'Base Village Lodge Basin (20m)';
 
+    const chargePct = (this.player.carveCharge * 100).toFixed(0);
+    const chargeColor = this.player.carveCharge > 0.85 ? '#facc15' : '#38bdf8';
+    const carveBar = `
+      <div style="margin-top:4px;display:flex;align-items:center;gap:6px;font-size:11px;">
+        <span style="color:#cbd5e1;font-weight:600;">CARVE PUMP ${this.player.pumpChain > 0 ? `<span style="color:#38bdf8;">[Lv.${this.player.pumpChain} ${this.player.pumpFlow.toFixed(1)}x]</span>` : ''}:</span>
+        <div style="flex:1;background:rgba(255,255,255,0.18);height:6px;border-radius:3px;overflow:hidden;">
+          <div style="width:${chargePct}%;height:100%;background:${chargeColor};transition:width 0.05s ease;"></div>
+        </div>
+        <span style="font-weight:bold;color:${chargeColor};width:32px;text-align:right;">${chargePct}%</span>
+      </div>
+    `;
+
     this.hudElement.innerHTML = `
       <div style="font-weight:bold;font-size:14px;color:#38bdf8;border-bottom:1px solid rgba(255,255,255,0.2);padding-bottom:4px;margin-bottom:6px;display:flex;justify-content:space-between;gap:12px;">
         <span>${currentZone}</span>
         <span>${stateBadge}</span>
       </div>
       <div>Speed: <strong style="color:#fff;font-size:16px;">${speed}</strong> km/h (${(this.player.speedKmh / 3.6).toFixed(1)} m/s) | Alt: <strong>${altitude}m</strong></div>
+      ${carveBar}
       <div>Score: <strong style="color:#4ade80;">${trickEng.totalScore} pts</strong></div>
       <div style="margin-top:6px;border-top:1px dashed rgba(255,255,255,0.15);padding-top:4px;font-size:11px;color:#94a3b8;">
         <strong>QUICK TELEPORT / RESORT TIERS:</strong><br />

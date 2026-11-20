@@ -11,8 +11,14 @@ export class DynamicCameraDirector {
   private readonly baseFollowDist = 3.6;
   private readonly baseFollowHeight = 1.5;
 
+  // Snowboard Camera Decoupled Heading & Pitch
+  public camYaw: number = 0;
+  public camPitch: number = 0.1;
+  public timeSinceManualLook: number = 0;
+
   // Scratch objects to eliminate GC
   private scratchForward = new THREE.Vector3();
+  private shakeTime: number = 0;
 
   // Debug Fly-Cam Mode
   public isFlyCam: boolean = false;
@@ -74,8 +80,11 @@ export class DynamicCameraDirector {
   }
 
   public initSnowboard(riderPos: THREE.Vector3, heading: number): void {
-    const forwardX = -Math.sin(heading);
-    const forwardZ = -Math.cos(heading);
+    this.camYaw = heading;
+    this.camPitch = 0.1;
+    this.timeSinceManualLook = 999;
+    const forwardX = -Math.sin(this.camYaw);
+    const forwardZ = -Math.cos(this.camYaw);
 
     this.currentPos.set(
       riderPos.x - forwardX * this.baseFollowDist,
@@ -96,19 +105,49 @@ export class DynamicCameraDirector {
     dt: number,
     riderPos: THREE.Vector3,
     heading: number,
-    speedKmh: number
+    speedKmh: number,
+    yawDelta: number = 0,
+    pitchDelta: number = 0,
+    lateralSlip: number = 0
   ): void {
-    const forwardX = -Math.sin(heading);
-    const forwardZ = -Math.cos(heading);
+    const hasManualLook = Math.abs(yawDelta) > 0.0001 || Math.abs(pitchDelta) > 0.0001;
 
-    // Disciplined FOV: 56° base, scales to 70° only at terminal tuck speeds (>100 km/h)
-    const speedRatio = Math.max(0, Math.min(1.0, (speedKmh - 60.0) / 60.0));
-    const targetFov = 56.0 + speedRatio * 14.0;
-    this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, 0.08);
+    if (hasManualLook) {
+      this.camYaw += yawDelta;
+      this.camPitch = THREE.MathUtils.clamp(this.camPitch + pitchDelta, -0.65, 0.75);
+      this.timeSinceManualLook = 0;
+    } else {
+      this.timeSinceManualLook += dt;
+
+      // Only catch up if player made a drastic U-turn / 180° and user hasn't moved camera
+      let angleDiff = (heading - this.camYaw) % (Math.PI * 2);
+      if (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+      if (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+
+      // If rider is facing backwards (> 115° deviation) and untouched for 1.2s, slowly catch up
+      if (Math.abs(angleDiff) > 2.0 && this.timeSinceManualLook > 1.2) {
+        const catchUpSpeed = 1.2; // Slow, smooth re-alignment
+        this.camYaw += Math.sign(angleDiff) * Math.min(Math.abs(angleDiff), catchUpSpeed * dt);
+      }
+    }
+
+    const forwardX = -Math.sin(this.camYaw);
+    const forwardZ = -Math.cos(this.camYaw);
+    const rightX = forwardZ;
+    const rightZ = -forwardX;
+
+    // Step 1: Normalize speed intensity factor early (20 km/h to 58 km/h)
+    const speedT = THREE.MathUtils.smoothstep(speedKmh, 20.0, 58.0);
+
+    // Step 3: Dynamic FOV (55° idle -> 80° at speed)
+    const targetFov = 55.0 + speedT * 25.0;
+    this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, Math.min(1.0, dt * 6.0));
     this.camera.updateProjectionMatrix();
 
-    const dynamicFollowDist = this.baseFollowDist + speedRatio * 0.8;
-    const dynamicFollowHeight = this.baseFollowHeight + speedRatio * 0.2;
+    // Step 3: Ground rush camera height (drops closer to snow at high speed: 3.2m down to 2.1m)
+    const heightOffset = THREE.MathUtils.lerp(3.2, 2.1, speedT);
+    const dynamicFollowDist = (this.baseFollowDist + speedT * 0.6) * Math.cos(this.camPitch);
+    const dynamicFollowHeight = heightOffset + Math.sin(this.camPitch) * 2.2;
 
     this.targetPos.set(
       riderPos.x - forwardX * dynamicFollowDist,
@@ -118,16 +157,41 @@ export class DynamicCameraDirector {
 
     this.targetLookAt.set(
       riderPos.x + forwardX * 1.8,
-      riderPos.y + 0.6,
+      riderPos.y + 0.6 - this.camPitch * 0.5,
       riderPos.z + forwardZ * 1.8
     );
 
-    const lerpFactor = 1.0 - Math.exp(-12.0 * dt);
-    this.currentPos.lerp(this.targetPos, lerpFactor);
-    this.currentLookAt.lerp(this.targetLookAt, lerpFactor);
+    // Step 2: Asymmetric Elastic Lag (Forward tight: 8.0 - 2.5*speedT; Lateral loose: 2.8)
+    const deltaX = this.targetPos.x - this.currentPos.x;
+    const deltaZ = this.targetPos.z - this.currentPos.z;
+    const deltaFwd = deltaX * forwardX + deltaZ * forwardZ;
+    const deltaLat = deltaX * rightX + deltaZ * rightZ;
+
+    const lerpRateFwd = 8.0 - speedT * 2.5;
+    const lerpRateLat = 2.8;
+    const lerpRateY = 8.0;
+
+    const fwdDamp = 1.0 - Math.exp(-lerpRateFwd * dt);
+    const latDamp = 1.0 - Math.exp(-lerpRateLat * dt);
+    const yDamp = 1.0 - Math.exp(-lerpRateY * dt);
+
+    this.currentPos.x += forwardX * deltaFwd * fwdDamp + rightX * deltaLat * latDamp;
+    this.currentPos.z += forwardZ * deltaFwd * fwdDamp + rightZ * deltaLat * latDamp;
+    this.currentPos.y += (this.targetPos.y - this.currentPos.y) * yDamp;
+
+    this.currentLookAt.lerp(this.targetLookAt, 1.0 - Math.exp(-12.0 * dt));
+
+    // Step 3: Snow chatter micro-shake scaled by speedT * (0.3 + lateralSlip * 0.7)
+    this.shakeTime += dt * 36.0;
+    const slipFactor = Math.min(1.0, lateralSlip / 8.0);
+    const shakeAmp = speedT * (0.3 + slipFactor * 0.7) * 0.035;
+    const shakeY = Math.sin(this.shakeTime) * Math.cos(this.shakeTime * 1.25) * shakeAmp;
+    const shakeRoll = Math.sin(this.shakeTime * 1.6) * shakeAmp * 0.35;
 
     this.camera.position.copy(this.currentPos);
+    this.camera.position.y += shakeY;
     this.camera.lookAt(this.currentLookAt);
+    this.camera.rotation.z += shakeRoll;
   }
 
   public initPosition(carPos: THREE.Vector3, carQuat: THREE.Quaternion): void {

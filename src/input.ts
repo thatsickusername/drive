@@ -1,4 +1,5 @@
 import { SnowboardInputState } from './player/SnowboardController';
+import { BoarderInput } from './boarder';
 
 export interface VehicleInputs {
   forward: boolean;
@@ -41,7 +42,7 @@ export class UnifiedInputController {
     window.addEventListener('mousedown', () => { this.isPointerActive = true; });
     window.addEventListener('mouseup', () => { this.isPointerActive = false; });
     window.addEventListener('mousemove', (e) => {
-      if (this.isPointerActive) {
+      if (this.isPointerActive || e.buttons > 0 || document.pointerLockElement) {
         this.mouseDeltaX += e.movementX;
         this.mouseDeltaY += e.movementY;
       }
@@ -186,6 +187,75 @@ export class UnifiedInputController {
       yaw: steer,
       grab
     };
+  }
+
+  public getBoarderInputs(): BoarderInput {
+    const kW = !!(this.keyState['KeyW'] || this.keyState['ArrowUp']);
+    const kS = !!(this.keyState['KeyS'] || this.keyState['ArrowDown']);
+    const kA = !!(this.keyState['KeyA'] || this.keyState['ArrowLeft']);
+    const kD = !!(this.keyState['KeyD'] || this.keyState['ArrowRight']);
+    const kJump = !!this.keyState['Space'];
+    const kGrab = !!(this.keyState['ShiftLeft'] || this.keyState['ShiftRight'] || this.keyState['KeyJ']);
+
+    let forward = kW;
+    let brake = kS;
+    let left = kA;
+    let right = kD;
+    let jump = kJump;
+    let grab = kGrab;
+
+    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (const gp of gamepads) {
+      if (!gp || !gp.connected) continue;
+
+      const stickX = gp.axes[0] ?? 0;
+      if (stickX < -0.15) left = true;
+      if (stickX > 0.15) right = true;
+
+      const stickY = gp.axes[1] ?? 0;
+      const triggerR = (gp.buttons[7]?.value ?? 0) > 0.2;
+      const triggerL = (gp.buttons[6]?.value ?? 0) > 0.2;
+
+      if (triggerR || stickY < -0.3) forward = true;
+      if (triggerL || (gp.buttons[1]?.pressed ?? false) || stickY > 0.3) brake = true;
+      if (gp.buttons[0]?.pressed) jump = true;
+      if (gp.buttons[2]?.pressed || gp.buttons[5]?.pressed) grab = true;
+      break;
+    }
+
+    return { forward, brake, left, right, jump, grab };
+  }
+
+  public getCameraLookInputs(dt: number): { yawDelta: number; pitchDelta: number } {
+    let yawDelta = 0;
+    let pitchDelta = 0;
+
+    // Mouse drag / pointer movement
+    if (this.mouseDeltaX !== 0 || this.mouseDeltaY !== 0) {
+      yawDelta -= this.mouseDeltaX * 0.0035;
+      pitchDelta += this.mouseDeltaY * 0.0035;
+      this.mouseDeltaX = 0;
+      this.mouseDeltaY = 0;
+    }
+
+    // Controller Right Stick (axes[2] = yaw, axes[3] = pitch)
+    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (const gp of gamepads) {
+      if (!gp || !gp.connected) continue;
+
+      const rightX = gp.axes[2] ?? 0;
+      const rightY = gp.axes[3] ?? 0;
+
+      if (Math.abs(rightX) > 0.12) {
+        yawDelta -= rightX * 2.8 * dt;
+      }
+      if (Math.abs(rightY) > 0.12) {
+        pitchDelta += rightY * 2.2 * dt;
+      }
+      break;
+    }
+
+    return { yawDelta, pitchDelta };
   }
 
   public getFlyCamInputs(): {

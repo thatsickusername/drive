@@ -216,7 +216,7 @@ export class AlpineMassif {
           scale
         )
           .setFriction(0.02)
-          .setRestitution(0.02);
+          .setRestitution(0.0);
 
         const collider = this.world.createCollider(heightfieldDesc, rigidBody);
         this.rigidBodies.push(rigidBody);
