@@ -322,6 +322,12 @@ export class DynamicCameraDirector {
 
     this.camera.position.copy(this.currentPos);
     this.camera.position.y += this.shakeYOffset;
+    if (this.terrainSampler) {
+      const finalGroundY = this.terrainSampler(this.camera.position.x, this.camera.position.z);
+      if (this.camera.position.y < finalGroundY + 0.8) {
+        this.camera.position.y = finalGroundY + 0.8;
+      }
+    }
     this.camera.lookAt(this.currentLookAt);
   }
 
@@ -456,8 +462,8 @@ export class DynamicCameraDirector {
     dt: number,
     riderPos: THREE.Vector3,
     heading: number,
-    _speedKmh: number,
-    _isAirborne: boolean,
+    speedKmh: number,
+    isAirborne: boolean,
     _airTime: number,
     zoomRatio: number,
     slopeNormal?: THREE.Vector3,
@@ -477,121 +483,110 @@ export class DynamicCameraDirector {
 
     // 2. Dynamic slope inclination tracking along travel direction
     let slopePitchRad = 0.0;
-    if (slopeNormal && slopeNormal.y > 0.05) {
+    if (!isAirborne && slopeNormal && slopeNormal.y > 0.05) {
       // Projected normal along forward motion vector
       const normalDotFwd = slopeNormal.x * fwdX + slopeNormal.z * fwdZ;
-      // When skiing downhill, normalDotFwd < 0, atan2 gives negative pitch angle
+      // When skiing downhill, normalDotFwd > 0, atan2 gives negative pitch angle
       slopePitchRad = Math.atan2(-normalDotFwd, slopeNormal.y);
     }
-    // Dynamic slope adjustment: when going downhill (slopePitchRad < 0), elevate pitch to stay clear above uphill slope
-    // When going uphill (slopePitchRad > 0), lower pitch so camera looks up towards the crest
+    // Dynamic slope adjustment: when going downhill (slopePitchRad < 0), lower pitch so camera looks forward-down along the descent,
+    // framing the rider from behind and opening up the view of the terrain ahead.
     const dynamicSlopePitch = THREE.MathUtils.clamp(
-      -slopePitchRad * 0.70,
-      -THREE.MathUtils.degToRad(18),
-      THREE.MathUtils.degToRad(28)
+      slopePitchRad * 0.25,
+      -THREE.MathUtils.degToRad(8.0),
+      THREE.MathUtils.degToRad(2.0)
     );
     this.smoothedBehindSlopePitch = THREE.MathUtils.damp(
       this.smoothedBehindSlopePitch,
       dynamicSlopePitch,
-      3.5,
+      1.2,
       dt
     );
 
-    // 3. Pitch bounds: resting angle is settings.behindPitch + dynamic slope offset, clamped between min and max
+    // Speed-dependent pitch lowering: as rider speeds up down the mountain, lower pitch slightly to look further ahead
+    const speedRatio = THREE.MathUtils.clamp((speedKmh - 15.0) / 65.0, 0.0, 1.0);
+    const speedPitchDelta = -speedRatio * THREE.MathUtils.degToRad(4.0);
+
+    // 3. Pitch bounds: resting angle is settings.behindPitch + dynamic slope offset + speed offset, clamped between min and max
     const minPitchRad = THREE.MathUtils.degToRad(this.settings.behindMinPitch);
-    const maxPitchRad = THREE.MathUtils.degToRad(this.settings.behindMaxPitch + 15.0); // allow dynamic elevation on steep downhills
+    const maxPitchRad = THREE.MathUtils.degToRad(this.settings.behindMaxPitch);
     const basePitchRad = THREE.MathUtils.degToRad(this.settings.behindPitch);
     const targetPitch = THREE.MathUtils.clamp(
-      basePitchRad + this.smoothedBehindSlopePitch + this.manualPitchOffset,
+      basePitchRad + this.smoothedBehindSlopePitch + speedPitchDelta + this.manualPitchOffset,
       minPitchRad,
       maxPitchRad
     );
-    this.camPitch = THREE.MathUtils.damp(this.camPitch, targetPitch, 4.5, dt);
+    this.camPitch = THREE.MathUtils.damp(this.camPitch, targetPitch, 1.5, dt);
 
-    // 4. Over The Hill / Jusant Orbital Clearance & Collision Solver
+    // 4. Line-of-sight Terrain Clearance & Collision Solver
     const minSafeDist = 3.2; // Absolute minimum radius before player mesh
     const comfortDist = 6.5; // Threshold below which roof-glide engages
     const focusY = riderPos.y + 1.2; // Rider torso/chest focus anchor
     let safeIdealDist = idealDist;
 
     if (this.terrainSampler) {
-      // Probe along the ideal orbital ray to test for terrain occlusion (10 samples)
+      // Calculate where the camera eye naturally rests (including terrain clearance at eye)
+      const testDistH = idealDist * Math.cos(this.camPitch);
+      const testEyeX = riderPos.x - fwdX * testDistH;
+      const testEyeZ = riderPos.z - fwdZ * testDistH;
+      const groundAtTestEye = this.terrainSampler(testEyeX, testEyeZ);
+      const testEyeY = Math.max(focusY + idealDist * Math.sin(this.camPitch), groundAtTestEye + 1.4);
+
+      // Probe along the actual line of sight between rider's chest and camera eye
       const numSamples = 10;
       for (let i = 1; i <= numSamples; i++) {
-        const t = i / numSamples;
-        const r = t * idealDist;
-        const px = riderPos.x - fwdX * r * Math.cos(this.camPitch);
-        const pz = riderPos.z - fwdZ * r * Math.cos(this.camPitch);
-        const py = focusY + r * Math.sin(this.camPitch);
+        const t = i / (numSamples + 1); // Sample strictly between rider and eye (0.09 to 0.91)
+        const px = THREE.MathUtils.lerp(riderPos.x, testEyeX, t);
+        const pz = THREE.MathUtils.lerp(riderPos.z, testEyeZ, t);
+        const py = THREE.MathUtils.lerp(focusY, testEyeY, t);
 
         const groundY = this.terrainSampler(px, pz);
-        const reqClearance = THREE.MathUtils.lerp(0.5, 1.4, t);
-        if (py < groundY + reqClearance) {
-          // Occlusion found: limit safe distance along ideal ray
-          const hitDist = Math.max(minSafeDist, r - 0.4);
+        const clearance = THREE.MathUtils.lerp(0.3, 0.7, t);
+        if (py < groundY + clearance) {
+          // Convex obstacle or ridge blocks line of sight
+          const hitDist = Math.max(minSafeDist, t * idealDist - 0.3);
           if (hitDist < safeIdealDist) {
             safeIdealDist = hitDist;
+            break;
           }
         }
       }
     }
 
-    // 5. Roof-Glide Fallback for Tight Spaces & Steep Downhill Slopes
-    // When boxed in horizontally or heading down a steep slope, smoothly glide upward over the rider's roof
+    // 5. Roof-Glide Fallback for Tight Spaces
+    // When boxed in horizontally by terrain/obstacles behind, smoothly glide upward over the rider's roof
     let roofDemand = 0.0;
     if (safeIdealDist < comfortDist) {
       roofDemand = THREE.MathUtils.clamp((comfortDist - safeIdealDist) / (comfortDist - minSafeDist), 0.0, 1.0);
     }
-    // Skiing down a steep slope (>15 deg) pushes uphill terrain directly behind the camera
-    if (slopePitchRad < -0.22) {
-      const slopeDemand = THREE.MathUtils.clamp((-slopePitchRad - 0.22) / 0.38, 0.0, 1.0);
-      roofDemand = Math.max(roofDemand, slopeDemand);
-    }
 
     if (roofDemand > this.roofGlideProgress) {
-      // Fast responsive roof-glide ascent
-      this.roofGlideProgress = THREE.MathUtils.damp(this.roofGlideProgress, roofDemand, 8.0, dt);
+      // Gentle responsive roof-glide ascent
+      this.roofGlideProgress = THREE.MathUtils.damp(this.roofGlideProgress, roofDemand, 1.8, dt);
     } else {
       // Damped roof-glide descent after obstacle clears
       if (this.easeOutDelayTimer <= 0) {
-        this.roofGlideProgress = THREE.MathUtils.damp(this.roofGlideProgress, roofDemand, 2.2, dt);
+        this.roofGlideProgress = THREE.MathUtils.damp(this.roofGlideProgress, roofDemand, 1.2, dt);
       }
     }
 
     // Effective pitch & vertical lift combining standard chase with roof-glide
-    const roofPitchRad = THREE.MathUtils.degToRad(68.0); // High near-top-down angle
+    const roofPitchRad = THREE.MathUtils.degToRad(this.settings.behindMaxPitch); // Capped to max behind pitch
     const effectivePitch = THREE.MathUtils.lerp(this.camPitch, roofPitchRad, this.roofGlideProgress);
     const roofVerticalLift = this.roofGlideProgress * 2.2;
     const roofAnchorY = focusY + this.roofGlideProgress * 0.8;
 
-    // 6. Safe Distance Evaluation along the Effective Roof-Glide Orbit
-    let safeRoofDist = idealDist;
-    if (this.terrainSampler) {
-      const numSamples = 10;
-      for (let i = 1; i <= numSamples; i++) {
-        const t = i / numSamples;
-        const r = t * idealDist;
-        const px = riderPos.x - fwdX * r * Math.cos(effectivePitch);
-        const pz = riderPos.z - fwdZ * r * Math.cos(effectivePitch);
-        const py = roofAnchorY + roofVerticalLift + r * Math.sin(effectivePitch);
+    const desiredDist = Math.max(minSafeDist, safeIdealDist);
 
-        const groundY = this.terrainSampler(px, pz);
-        const reqClearance = THREE.MathUtils.lerp(0.5, 1.4, t);
-        if (py < groundY + reqClearance) {
-          const hitDist = Math.max(minSafeDist, r - 0.4);
-          if (hitDist < safeRoofDist) {
-            safeRoofDist = hitDist;
-          }
-        }
-      }
-    }
-
-    const desiredDist = Math.max(minSafeDist, Math.min(idealDist, safeRoofDist));
-
-    // 7. Asymmetric Timing: Instant Tuck-In on Occlusion vs Delayed Smooth Ease-Out
+    // 6. Smooth Damped Distance Follow (no abrupt snaps)
     if (desiredDist < this.settledBehindDistance) {
-      // Instant inward pull-in so camera never clips geometry
-      this.settledBehindDistance = desiredDist;
+      // Smooth damped inward pull-in so camera never snaps or jumps abruptly
+      this.settledBehindDistance = THREE.MathUtils.damp(
+        this.settledBehindDistance,
+        desiredDist,
+        6.0,
+        dt
+      );
       this.easeOutDelayTimer = 0.40; // 400ms hold beat
     } else {
       // If user is actively steering or rotating camera, hold beat to eliminate in-out wobble
@@ -612,11 +607,12 @@ export class DynamicCameraDirector {
       }
     }
 
-    // 8. Forward look-ahead
+    // 8. Forward look-ahead with dynamic speed lead
+    const dynamicLookAheadDist = this.settings.behindLookAheadDist + speedRatio * 3.0;
     this.targetLookAt.set(
-      riderPos.x + fwdX * this.settings.behindLookAheadDist,
+      riderPos.x + fwdX * dynamicLookAheadDist,
       riderPos.y + this.settings.behindLookAheadHeight + this.roofGlideProgress * 0.4,
-      riderPos.z + fwdZ * this.settings.behindLookAheadDist
+      riderPos.z + fwdZ * dynamicLookAheadDist
     );
 
     // 9. Position Camera along Settled Orbit
