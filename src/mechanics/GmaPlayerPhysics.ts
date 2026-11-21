@@ -396,7 +396,7 @@ export class GmaPlayerPhysics {
     const absSteer = Math.abs(steerInput);
     const curSpeed = this.velocity.length();
 
-    // 2a. Alternating Steer Wiggle / Skate Mechanic (GMA snowslide_push: Left <-> Right)
+    // 2a. Alternating Steer Wiggle / Skate Mechanic (GMA player.snowslide_push.push_mul: 3.0)
     // Moving stick completely left and then completely right rhythmically builds forward speed
     const currentSteerSign = absSteer > 0.35 ? Math.sign(steerInput) : 0;
     this.steerWiggleTimer += dt;
@@ -408,8 +408,7 @@ export class GmaPlayerPhysics {
         const maxSkateSpeed = 10.0; // 36 km/h cap for wiggle acceleration
         if (curSpeed < maxSkateSpeed) {
           const speedFactor = Math.max(0.15, 1.0 - (curSpeed / maxSkateSpeed));
-          // GMA player.snowslide_push.push_mul: 3.0
-          const skateImpulse = 1.8 * speedFactor;
+          const skateImpulse = (this.config.snowslide_push_mul * 0.5) * speedFactor;
           this.velocity.addScaledVector(this.forwardDir, skateImpulse);
           this.state = MovementState.Skiing;
           this.skateCadenceCount++;
@@ -484,7 +483,9 @@ export class GmaPlayerPhysics {
         turnCapRad = this.config.turn_cap_deg_sharpturn * (Math.PI / 180.0);
         const vFactor = this.config.turn_velocity_sharpturn.evaluate(normalizedSpeed);
         turnRate = vFactor;
-        driftFriction = this.config.drift_velocity_sharpturn.evaluate(normalizedSpeed) * this.config.drift_penalty_sharpturn;
+        const vDrift = this.config.drift_velocity_sharpturn.evaluate(normalizedSpeed);
+        const tDrift = this.config.drift_turntime_sharpturn.evaluate(Math.min(this.sharpTurnTimer, 1.0));
+        driftFriction = (vDrift + tDrift) * this.config.drift_penalty_sharpturn;
         break;
       }
       case TurnType.SlideTurn: {
@@ -492,17 +493,19 @@ export class GmaPlayerPhysics {
         const vFactor = this.config.turn_velocity_slideturn.evaluate(normalizedSpeed);
         const tFactor = this.config.turn_turntime_slideturn.evaluate(Math.min(this.turnTimer, 1.0));
         turnRate = vFactor * (1.0 + tFactor);
-        driftFriction = this.config.drift_velocity_slideturn.evaluate(normalizedSpeed) * this.config.drift_penalty_slideturn;
+        const vDrift = this.config.drift_velocity_slideturn.evaluate(normalizedSpeed);
+        const tDrift = this.config.drift_turntime_slideturn.evaluate(Math.min(this.currentDriftTime, 1.0));
+        driftFriction = vDrift + tDrift;
         this.currentDriftTime += dt;
 
-        // Authentic GMA slide turn boost at 0.5s mark (+2.0 m/s forward burst)
+        // Authentic GMA slide turn boost at 0.5s mark (+2.0 m/s forward burst - one-shot per slide turn)
         this.slideTurnBoostTimer += dt;
         if (this.slideTurnBoostTimer >= this.config.slideturn_boost_timepoint && !this.slideTurnBoostTriggered) {
           this.velocity.addScaledVector(this.forwardDir, this.config.slideturn_boost_velocity);
           this.slideTurnBoostTriggered = true;
         }
 
-        // Track drift duration milestones (awarded upon drift completion)
+        // Track drift duration milestones
         const milestones = this.config.speedboost_drift_durations;
         if (
           this.driftMilestoneIndex < milestones.length &&
@@ -521,11 +524,6 @@ export class GmaPlayerPhysics {
         break;
       }
       default: {
-        if (this.currentDriftTime > 0.0 && this.driftMilestoneIndex > 0) {
-          // Reward completed drift with milestone speedboost multiplier
-          const boostAdd = this.config.speedboost_drift_boosts[this.driftMilestoneIndex - 1];
-          this.velocity.multiplyScalar(1.0 + boostAdd * 0.20);
-        }
         this.slideTurnBoostTimer = 0.0;
         this.slideTurnBoostTriggered = false;
         this.currentDriftTime = 0.0;
@@ -573,7 +571,7 @@ export class GmaPlayerPhysics {
     this._gNormal.copy(this.groundNormal).multiplyScalar(normalComp);
     this._gParallel.subVectors(this._gVec, this._gNormal);
 
-    // Tangential fall-line gravity acceleration (pure g_parallel without artificial scaling)
+    // Tangential fall-line gravity acceleration (pure GMA 9.81 m/s^2 slope projection)
     this.velocity.addScaledVector(this._gParallel, dt);
 
     // Continuous adhesive normal pull: F_pull = -n * 5.0 m/s^2 (GMA contour adhesion)
@@ -609,8 +607,12 @@ export class GmaPlayerPhysics {
       effectiveFriction += this.config.backward_friction; // 15.0
     }
 
-    // Authentic GMA total ground friction formula (PlayerPhysics.cpp:222-224 & materials.yaml)
-    const totalFriction = (effectiveFriction * materialFriction) + (driftFriction * 100.0);
+    // Authentic GMA ground friction + aerodynamic drag (player.air_friction: 0.006)
+    // Quadratic aero drag ensures gradual speed buildup and caps terminal speeds realistically around 30 m/s (108 km/h)
+    const groundSpeed = this.velocity.length();
+    const speedRatio = groundSpeed / 30.0;
+    const aeroDrag = this.config.air_friction * (speedRatio * speedRatio) * 3.5;
+    const totalFriction = (effectiveFriction + driftFriction) * materialFriction + aeroDrag;
     const damping = Math.exp(-totalFriction * dt);
     this.velocity.multiplyScalar(damping);
 

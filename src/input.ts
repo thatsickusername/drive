@@ -13,6 +13,8 @@ export class UnifiedInputController {
   private mouseDeltaX: number = 0;
   private mouseDeltaY: number = 0;
   private isPointerActive: boolean = false;
+  private keyboardSteer: number = 0;
+  private lastInputTime: number = performance.now();
 
   constructor() {
     window.addEventListener('keydown', this.onKeyDown.bind(this));
@@ -85,14 +87,30 @@ export class UnifiedInputController {
     let trickFlipY: number | undefined = undefined;
     let trickRoll: number | undefined = undefined;
 
-    if (left && !right) {
-      steerX = -1.0;
-      trickSpinX = -1.0; // Left spin
-    } else if (right && !left) {
-      steerX = 1.0;
-      trickSpinX = 1.0; // Right spin
+    // Smooth keyboard digital-to-analog filter:
+    // Regular A/D key presses target 0.55 deflection (gentle carve), holding Shift/Q targets 1.0 (sharp carve).
+    // Ramps at 5.0/s on press, releases at 8.0/s on release.
+    const now = performance.now();
+    const inputDt = Math.min((now - this.lastInputTime) / 1000.0, 0.1);
+    this.lastInputTime = now;
+
+    const targetKeySteer = (left && !right) ? (kSharp ? -1.0 : -0.55)
+                         : (right && !left) ? (kSharp ? 1.0 : 0.55)
+                         : 0.0;
+    const rampRate = targetKeySteer !== 0 ? 5.0 : 8.0;
+
+    if (this.keyboardSteer < targetKeySteer) {
+      this.keyboardSteer = Math.min(targetKeySteer, this.keyboardSteer + rampRate * inputDt);
+    } else if (this.keyboardSteer > targetKeySteer) {
+      this.keyboardSteer = Math.max(targetKeySteer, this.keyboardSteer - rampRate * inputDt);
+    }
+
+    if (Math.abs(this.keyboardSteer) > 0.01) {
+      steerX = this.keyboardSteer;
+      trickSpinX = Math.sign(this.keyboardSteer);
     } else if (bothPressed) {
       steerX = 0.0;
+      this.keyboardSteer = 0.0;
     }
 
     if (kW) {
