@@ -23,12 +23,12 @@ class Game {
 
   // Preset mountain locations (2.4km x 2.4km Grand Mountain Adventure Resort)
   private readonly locations = {
-    summit: { name: 'Main Summit Peak (Glacier Chute)', x: -100, z: -880, heading: 2.8 },
-    west: { name: 'West Peak (Powder Highway)', x: -680, z: -310, heading: 2.2 },
-    east: { name: 'East Park Ridge (Slopestyle Run)', x: 650, z: -250, heading: 3.8 },
-    mid: { name: 'Mid-Mountain Hub Plateau', x: 0, z: 130, heading: 2.9 },
-    base: { name: 'Base Village Lodge', x: 0, z: 900, heading: 0 },
-    halfpipe: { name: 'Glacial Halfpipe Gully', x: 310, z: -60, heading: 2.7 }
+    summit: { name: 'Main Summit Peak (Glacier Chute)', x: -300, z: -750, heading: 3.26 },
+    west: { name: 'West Peak (Powder Highway)', x: -610, z: -665, heading: 2.39 },
+    east: { name: 'East Park Ridge (Slopestyle Run)', x: 695, z: -410, heading: 3.43 },
+    canyon: { name: 'Central Canyon Rim (Gorge Shoulder)', x: -190, z: -245, heading: 3.19 },
+    mid: { name: 'Mid-Mountain Hub (Alpine Flow Cruiser)', x: 140, z: 55, heading: 2.09 },
+    halfpipe: { name: 'Glacial Halfpipe Gully (Super-G Finish)', x: 360, z: 50, heading: 3.64 }
   };
 
   private currentSpawn = { ...this.locations.summit };
@@ -91,8 +91,8 @@ class Game {
       if (e.code === 'Digit1') this.teleportTo(this.locations.summit);
       else if (e.code === 'Digit2') this.teleportTo(this.locations.west);
       else if (e.code === 'Digit3') this.teleportTo(this.locations.east);
-      else if (e.code === 'Digit4') this.teleportTo(this.locations.mid);
-      else if (e.code === 'Digit5') this.teleportTo(this.locations.base);
+      else if (e.code === 'Digit4') this.teleportTo(this.locations.canyon);
+      else if (e.code === 'Digit5') this.teleportTo(this.locations.mid);
       else if (e.code === 'Digit6') this.teleportTo(this.locations.halfpipe);
       else if (e.code === 'KeyV') this.cameraDirector.togglePerspectiveMode();
       else if (e.code === 'KeyO') this.cameraTuner.toggle();

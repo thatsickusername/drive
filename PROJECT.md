@@ -125,12 +125,12 @@ The mountain is modeled as a 2.4 km × 2.4 km single inclined massif ($x \in [-1
 * **Snowboard Follow Camera:** Third-person trailing camera with speed-lag, orientation damping, dynamic pitch alignment, and FOV speed expansion.
 * **Fly-Cam Mode (`[C]` Key):** Free-flight debug camera with WASD strafing, Space/Shift vertical translation, mouse-look Euler navigation, coordinate HUD, and drop-rider spawn feature.
 * **Quick Teleport Hub (Hotkeys 1–6):**
-  - `1`: Main Summit Peak (Glacier Chute) `(-100, -880)`
-  - `2`: West Peak (Powder Highway) `(-680, -310)`
-  - `3`: East Park Ridge (Slopestyle Run) `(650, -250)`
-  - `4`: Mid-Mountain Hub Plateau `(0, 130)`
-  - `5`: Base Village Lodge `(0, 900)`
-  - `6`: Glacial Halfpipe Gully `(310, -60)`
+  - `1`: Main Summit Peak (Glacier Chute) `(-300, -750)`
+  - `2`: West Peak (Powder Highway) `(-610, -665)`
+  - `3`: East Park Ridge (Slopestyle Run) `(695, -410)`
+  - `4`: Central Canyon Rim (Gorge Shoulder) `(-190, -245)`
+  - `5`: Mid-Mountain Hub (Alpine Flow Cruiser) `(140, 55)`
+  - `6`: Glacial Halfpipe Gully (Super-G Finish) `(360, 50)`
 
 ---
 
