@@ -41,6 +41,11 @@ export class DynamicCameraDirector {
   private smoothedBehindSlopePitch: number = 0.0;
   public terrainSampler?: (x: number, z: number) => number;
 
+  // Chase Cam Slope Stabilization Buffer (24-frame rolling filter + deadband)
+  private chaseSlopeRingBuffer: number[] = new Array(24).fill(0);
+  private chaseSlopeBufferIdx: number = 0;
+  private filteredChaseSlopeAngle: number = 0;
+
   // Over The Hill / Jusant Orbital Collision System
   public settledBehindDistance: number = 12.5; // Active collision-settled orbital distance
   private easeOutDelayTimer: number = 0.0;     // Post-rotation / occlusion delay beat before easing out
@@ -153,6 +158,11 @@ export class DynamicCameraDirector {
     this.inclinationRingBuffer.fill(0);
     this.inclinationBufferIdx = 0;
     this.smoothedIncline = 0;
+
+    // Reset chase slope stabilization buffer
+    this.chaseSlopeRingBuffer.fill(0);
+    this.chaseSlopeBufferIdx = 0;
+    this.filteredChaseSlopeAngle = 0;
 
     if (this.mode === 'TOPDOWN') {
       // In GMA top-down isometric view, yaw aligns with the downhill fall line (0)
@@ -526,7 +536,7 @@ export class DynamicCameraDirector {
 
     // 4. Line-of-sight Terrain Clearance & Collision Solver
     const minSafeDist = 3.2; // Absolute minimum radius before player mesh
-    const comfortDist = 6.5; // Threshold below which roof-glide engages
+    // const comfortDist = 6.5; // Threshold below which roof-glide engages
     const focusY = riderPos.y + 1.2; // Rider torso/chest focus anchor
     let safeIdealDist = idealDist;
 
@@ -623,7 +633,32 @@ export class DynamicCameraDirector {
     */
 
     // [OLD - reverted for testing]
-    // 2. Dynamic slope inclination tracking along travel direction
+    // 2. Multi-Stage Slope Inclination Tracking & Bump Rejection
+    const rawSlopeAngle = slopeNormal ? Math.acos(THREE.MathUtils.clamp(slopeNormal.y, 0.0, 1.0)) : 0.0;
+
+    // Stage 1: 24-sample (~400ms) moving average rolling buffer to absorb micro-bumps and kickers
+    this.chaseSlopeRingBuffer[this.chaseSlopeBufferIdx] = rawSlopeAngle;
+    this.chaseSlopeBufferIdx = (this.chaseSlopeBufferIdx + 1) % this.chaseSlopeRingBuffer.length;
+
+    let sumSlope = 0.0;
+    for (let i = 0; i < this.chaseSlopeRingBuffer.length; i++) {
+      sumSlope += this.chaseSlopeRingBuffer[i];
+    }
+    const avgSlopeAngle = sumSlope / this.chaseSlopeRingBuffer.length;
+
+    // Stage 2: Deadband threshold filter (ignores slope chatter under 2.5 degrees)
+    const deadbandRad = THREE.MathUtils.degToRad(2.5);
+    if (Math.abs(avgSlopeAngle - this.filteredChaseSlopeAngle) > deadbandRad) {
+      this.filteredChaseSlopeAngle = THREE.MathUtils.damp(
+        this.filteredChaseSlopeAngle,
+        avgSlopeAngle,
+        1.8,
+        dt
+      );
+    }
+
+    // Stage 3: Smoothstep factor between flat (0 deg) and full alpine slope (25 deg)
+    const slopeFactor = THREE.MathUtils.smoothstep(this.filteredChaseSlopeAngle, 0.0, THREE.MathUtils.degToRad(25.0));
     let slopePitchRad = 0.0;
     if (slopeNormal && slopeNormal.y > 0.05) {
       // Projected normal along forward motion vector
@@ -637,28 +672,31 @@ export class DynamicCameraDirector {
       -slopePitchRad * 0.70,
       -THREE.MathUtils.degToRad(18),
       THREE.MathUtils.degToRad(28)
-    );
+    ) * slopeFactor;
     this.smoothedBehindSlopePitch = THREE.MathUtils.damp(
       this.smoothedBehindSlopePitch,
       dynamicSlopePitch,
-      3.5,
+      2.0,
       dt
     );
 
-    // 3. Pitch bounds: resting angle is settings.behindPitch + dynamic slope offset, clamped between min and max
-    const minPitchRad = THREE.MathUtils.degToRad(this.settings.behindMinPitch);
+    // 3. Pitch bounds: resting angle transitions from 10° on flat ground up to settings.behindPitch on slopes
+    const flatPitchRad = THREE.MathUtils.degToRad(10.0);
+    const slopeBasePitchRad = THREE.MathUtils.degToRad(this.settings.behindPitch);
+    const basePitchRad = THREE.MathUtils.lerp(flatPitchRad, slopeBasePitchRad, slopeFactor);
+
+    const minPitchRad = THREE.MathUtils.degToRad(Math.min(this.settings.behindMinPitch, 10.0));
     const maxPitchRad = THREE.MathUtils.degToRad(this.settings.behindMaxPitch + 15.0); // allow dynamic elevation on steep downhills
-    const basePitchRad = THREE.MathUtils.degToRad(this.settings.behindPitch);
     const targetPitch = THREE.MathUtils.clamp(
       basePitchRad + this.smoothedBehindSlopePitch + this.manualPitchOffset,
       minPitchRad,
       maxPitchRad
     );
-    this.camPitch = THREE.MathUtils.damp(this.camPitch, targetPitch, 4.5, dt);
+    this.camPitch = THREE.MathUtils.damp(this.camPitch, targetPitch, 1.2, dt);
 
     // 4. Over The Hill / Jusant Orbital Clearance & Collision Solver
     const minSafeDist = 3.2; // Absolute minimum radius before player mesh
-    const comfortDist = 6.5; // Threshold below which roof-glide engages
+    // const comfortDist = 6.5; // Threshold below which roof-glide engages
     const focusY = riderPos.y + 1.2; // Rider torso/chest focus anchor
     let safeIdealDist = idealDist;
 
@@ -684,8 +722,9 @@ export class DynamicCameraDirector {
       }
     }
 
-    // 5. Roof-Glide Fallback for Tight Spaces & Steep Downhill Slopes
-    // When boxed in horizontally or heading down a steep slope, smoothly glide upward over the rider's roof
+    // 5. Roof-Glide Fallback for Tight Spaces & Steep Downhill Slopes (DISABLED FOR TESTING)
+    this.roofGlideProgress = 0.0;
+    /*
     let roofDemand = 0.0;
     if (safeIdealDist < comfortDist) {
       roofDemand = THREE.MathUtils.clamp((comfortDist - safeIdealDist) / (comfortDist - minSafeDist), 0.0, 1.0);
@@ -705,6 +744,7 @@ export class DynamicCameraDirector {
         this.roofGlideProgress = THREE.MathUtils.damp(this.roofGlideProgress, roofDemand, 2.2, dt);
       }
     }
+    */
 
     // Effective pitch & vertical lift combining standard chase with roof-glide
     const roofPitchRad = THREE.MathUtils.degToRad(68.0); // High near-top-down angle
