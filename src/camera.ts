@@ -41,6 +41,11 @@ export class DynamicCameraDirector {
   private smoothedBehindSlopePitch: number = 0.0;
   public terrainSampler?: (x: number, z: number) => number;
 
+  // Over The Hill / Jusant Orbital Collision System
+  public settledBehindDistance: number = 12.5; // Active collision-settled orbital distance
+  private easeOutDelayTimer: number = 0.0;     // Post-rotation / occlusion delay beat before easing out
+  private roofGlideProgress: number = 0.0;     // Roof-glide vertical lift & steep-pitch blend [0, 1]
+
   // Debug Fly-Cam Mode ([C] Hotkey)
   public isFlyCam: boolean = false;
   public flyCamPos = new THREE.Vector3(0, 460, -720);
@@ -63,6 +68,9 @@ export class DynamicCameraDirector {
     Object.assign(this.settings, newSettings);
     if (newSettings.mode) {
       this.mode = newSettings.mode;
+    }
+    if (newSettings.behindDistance) {
+      this.settledBehindDistance = Math.min(this.settledBehindDistance, newSettings.behindDistance);
     }
     if (newSettings.fov && !this.isFlyCam) {
       this.camera.fov = newSettings.fov;
@@ -175,7 +183,10 @@ export class DynamicCameraDirector {
       // GMA Chase (cam.behind) mode
       this.camYaw = heading;
       this.camPitch = THREE.MathUtils.degToRad(this.settings.behindPitch);
-      const dist = this.settings.behindDistance;
+      this.settledBehindDistance = this.settings.behindDistance;
+      this.easeOutDelayTimer = 0.0;
+      this.roofGlideProgress = 0.0;
+      const dist = this.settledBehindDistance;
 
       const fwdX = -Math.sin(this.camYaw);
       const fwdZ = -Math.cos(this.camYaw);
@@ -190,7 +201,7 @@ export class DynamicCameraDirector {
 
       this.currentPos.set(
         riderPos.x - fwdX * eyeHorizontalDist,
-        riderPos.y + eyeElevation,
+        riderPos.y + 1.2 + eyeElevation,
         riderPos.z - fwdZ * eyeHorizontalDist
       );
 
@@ -296,15 +307,16 @@ export class DynamicCameraDirector {
         isAirborne,
         airTime,
         zoomRatio,
-        slopeNormal
+        slopeNormal,
+        hasManualLook
       );
     }
 
     // 5. Final Camera Transform Application & Ground Collision Protection
     if (this.terrainSampler) {
       const curGroundY = this.terrainSampler(this.currentPos.x, this.currentPos.z);
-      if (this.currentPos.y < curGroundY + 1.4) {
-        this.currentPos.y = curGroundY + 1.4;
+      if (this.currentPos.y < curGroundY + 1.2) {
+        this.currentPos.y = curGroundY + 1.2;
       }
     }
 
@@ -434,8 +446,11 @@ export class DynamicCameraDirector {
 
   /**
    * GMA Chase (cam.behind) Mode
-   * Follows rider heading down the slope with dynamic terrain inclination adaptation,
-   * forward look-ahead, and active terrain collision avoidance.
+   * Over The Hill / Jusant Orbital Collision System:
+   * 1. Multi-sample line-of-sight terrain probe (player intent vs world constraints).
+   * 2. Instant tuck-in on occlusion (pulls inward immediately so geometry never clips).
+   * 3. Post-rotation / post-occlusion delay ("brief beat") and smooth ease-out (eliminates wobble).
+   * 4. Roof-glide fallback for tight spaces & steep downhill slopes (glides upward over roof/head).
    */
   private updateBehindMode(
     dt: number,
@@ -445,9 +460,10 @@ export class DynamicCameraDirector {
     _isAirborne: boolean,
     _airTime: number,
     zoomRatio: number,
-    slopeNormal?: THREE.Vector3
+    slopeNormal?: THREE.Vector3,
+    hasManualLook: boolean = false
   ): void {
-    const behindDist = this.settings.behindDistance * zoomRatio;
+    const idealDist = this.settings.behindDistance * zoomRatio;
 
     // 1. Smooth heading follow first so forward azimuth is up-to-date
     let angleDiff = (heading - this.camYaw) % (Math.PI * 2);
@@ -492,35 +508,133 @@ export class DynamicCameraDirector {
     );
     this.camPitch = THREE.MathUtils.damp(this.camPitch, targetPitch, 4.5, dt);
 
-    // 4. Forward look-ahead: looks ahead down the slope so rider sees upcoming terrain
+    // 4. Over The Hill / Jusant Orbital Clearance & Collision Solver
+    const minSafeDist = 3.2; // Absolute minimum radius before player mesh
+    const comfortDist = 6.5; // Threshold below which roof-glide engages
+    const focusY = riderPos.y + 1.2; // Rider torso/chest focus anchor
+    let safeIdealDist = idealDist;
+
+    if (this.terrainSampler) {
+      // Probe along the ideal orbital ray to test for terrain occlusion (10 samples)
+      const numSamples = 10;
+      for (let i = 1; i <= numSamples; i++) {
+        const t = i / numSamples;
+        const r = t * idealDist;
+        const px = riderPos.x - fwdX * r * Math.cos(this.camPitch);
+        const pz = riderPos.z - fwdZ * r * Math.cos(this.camPitch);
+        const py = focusY + r * Math.sin(this.camPitch);
+
+        const groundY = this.terrainSampler(px, pz);
+        const reqClearance = THREE.MathUtils.lerp(0.5, 1.4, t);
+        if (py < groundY + reqClearance) {
+          // Occlusion found: limit safe distance along ideal ray
+          const hitDist = Math.max(minSafeDist, r - 0.4);
+          if (hitDist < safeIdealDist) {
+            safeIdealDist = hitDist;
+          }
+        }
+      }
+    }
+
+    // 5. Roof-Glide Fallback for Tight Spaces & Steep Downhill Slopes
+    // When boxed in horizontally or heading down a steep slope, smoothly glide upward over the rider's roof
+    let roofDemand = 0.0;
+    if (safeIdealDist < comfortDist) {
+      roofDemand = THREE.MathUtils.clamp((comfortDist - safeIdealDist) / (comfortDist - minSafeDist), 0.0, 1.0);
+    }
+    // Skiing down a steep slope (>15 deg) pushes uphill terrain directly behind the camera
+    if (slopePitchRad < -0.22) {
+      const slopeDemand = THREE.MathUtils.clamp((-slopePitchRad - 0.22) / 0.38, 0.0, 1.0);
+      roofDemand = Math.max(roofDemand, slopeDemand);
+    }
+
+    if (roofDemand > this.roofGlideProgress) {
+      // Fast responsive roof-glide ascent
+      this.roofGlideProgress = THREE.MathUtils.damp(this.roofGlideProgress, roofDemand, 8.0, dt);
+    } else {
+      // Damped roof-glide descent after obstacle clears
+      if (this.easeOutDelayTimer <= 0) {
+        this.roofGlideProgress = THREE.MathUtils.damp(this.roofGlideProgress, roofDemand, 2.2, dt);
+      }
+    }
+
+    // Effective pitch & vertical lift combining standard chase with roof-glide
+    const roofPitchRad = THREE.MathUtils.degToRad(68.0); // High near-top-down angle
+    const effectivePitch = THREE.MathUtils.lerp(this.camPitch, roofPitchRad, this.roofGlideProgress);
+    const roofVerticalLift = this.roofGlideProgress * 2.2;
+    const roofAnchorY = focusY + this.roofGlideProgress * 0.8;
+
+    // 6. Safe Distance Evaluation along the Effective Roof-Glide Orbit
+    let safeRoofDist = idealDist;
+    if (this.terrainSampler) {
+      const numSamples = 10;
+      for (let i = 1; i <= numSamples; i++) {
+        const t = i / numSamples;
+        const r = t * idealDist;
+        const px = riderPos.x - fwdX * r * Math.cos(effectivePitch);
+        const pz = riderPos.z - fwdZ * r * Math.cos(effectivePitch);
+        const py = roofAnchorY + roofVerticalLift + r * Math.sin(effectivePitch);
+
+        const groundY = this.terrainSampler(px, pz);
+        const reqClearance = THREE.MathUtils.lerp(0.5, 1.4, t);
+        if (py < groundY + reqClearance) {
+          const hitDist = Math.max(minSafeDist, r - 0.4);
+          if (hitDist < safeRoofDist) {
+            safeRoofDist = hitDist;
+          }
+        }
+      }
+    }
+
+    const desiredDist = Math.max(minSafeDist, Math.min(idealDist, safeRoofDist));
+
+    // 7. Asymmetric Timing: Instant Tuck-In on Occlusion vs Delayed Smooth Ease-Out
+    if (desiredDist < this.settledBehindDistance) {
+      // Instant inward pull-in so camera never clips geometry
+      this.settledBehindDistance = desiredDist;
+      this.easeOutDelayTimer = 0.40; // 400ms hold beat
+    } else {
+      // If user is actively steering or rotating camera, hold beat to eliminate in-out wobble
+      if (hasManualLook || Math.abs(angleDiff) > 0.35) {
+        this.easeOutDelayTimer = Math.max(this.easeOutDelayTimer, 0.30);
+      }
+
+      if (this.easeOutDelayTimer > 0) {
+        this.easeOutDelayTimer -= dt;
+      } else {
+        // Smooth damped ease-out back to optimal distance
+        this.settledBehindDistance = THREE.MathUtils.damp(
+          this.settledBehindDistance,
+          desiredDist,
+          2.8,
+          dt
+        );
+      }
+    }
+
+    // 8. Forward look-ahead
     this.targetLookAt.set(
       riderPos.x + fwdX * this.settings.behindLookAheadDist,
-      riderPos.y + this.settings.behindLookAheadHeight,
+      riderPos.y + this.settings.behindLookAheadHeight + this.roofGlideProgress * 0.4,
       riderPos.z + fwdZ * this.settings.behindLookAheadDist
     );
 
-    const eyeHorizontalDist = behindDist * Math.cos(this.camPitch);
-    const eyeElevation = behindDist * Math.sin(this.camPitch);
+    // 9. Position Camera along Settled Orbit
+    const eyeHorizontalDist = this.settledBehindDistance * Math.cos(effectivePitch);
+    const eyeElevation = this.settledBehindDistance * Math.sin(effectivePitch);
 
     this.targetPos.set(
       riderPos.x - fwdX * eyeHorizontalDist,
-      riderPos.y + eyeElevation,
+      roofAnchorY + roofVerticalLift + eyeElevation,
       riderPos.z - fwdZ * eyeHorizontalDist
     );
 
-    // 5. Dynamic ground collision avoidance / clearance probing
+    // 10. Secondary Ground Clearance Probing at Camera Eye
     if (this.terrainSampler) {
       const groundAtEye = this.terrainSampler(this.targetPos.x, this.targetPos.z);
-      const minEyeClearance = 1.6;
+      const minEyeClearance = 1.4;
       if (this.targetPos.y < groundAtEye + minEyeClearance) {
         this.targetPos.y = groundAtEye + minEyeClearance;
-      }
-      // Probe halfway between rider and eye to prevent crest clipping
-      const midX = (riderPos.x + this.targetPos.x) * 0.5;
-      const midZ = (riderPos.z + this.targetPos.z) * 0.5;
-      const groundAtMid = this.terrainSampler(midX, midZ);
-      if (this.targetPos.y < groundAtMid + 1.3) {
-        this.targetPos.y = groundAtMid + 1.3;
       }
     }
 

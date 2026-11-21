@@ -5,7 +5,7 @@
 export const GMACameraConfig = {
   // Base & FOV
   baseFov: 60.0,
-  nearFar: [5.0, 270.0] as [number, number],
+  nearFar: [0.2, 1200.0] as [number, number],
   playerScreenY: 0.15,
   offsetDistMul: 0.999,
   
