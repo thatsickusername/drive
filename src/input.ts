@@ -10,6 +10,8 @@ export class UnifiedInputController {
   private keyState: { [code: string]: boolean } = {};
   private prevBoarderJump: boolean = false;
   private prevStakeKey: boolean = false;
+  private prevLeftKey: boolean = false;
+  private prevRightKey: boolean = false;
   private mouseDeltaX: number = 0;
   private mouseDeltaY: number = 0;
   private isPointerActive: boolean = false;
@@ -67,8 +69,8 @@ export class UnifiedInputController {
     const kA = !!(this.keyState['KeyA'] || this.keyState['ArrowLeft']);
     const kD = !!(this.keyState['KeyD'] || this.keyState['ArrowRight']);
     const kSpace = !!this.keyState['Space'];
-    const kSharp = !!(this.keyState['KeyQ'] || this.keyState['ShiftLeft'] || this.keyState['ShiftRight']);
-    const kSlide = !!this.keyState['KeyE'];
+    const kShift = !!(this.keyState['ShiftLeft'] || this.keyState['ShiftRight']);
+    const kCtrl = !!(this.keyState['ControlLeft'] || this.keyState['ControlRight']);
     const kTackle = !!this.keyState['KeyF'];
 
     // Authentic GMA dual-control emergent behaviors (Left + Right):
@@ -82,28 +84,37 @@ export class UnifiedInputController {
     let jump = kSpace && !this.prevBoarderJump;
     this.prevBoarderJump = kSpace;
 
-    // Edge-triggered pole push (W / Up)
-    let forward = kW && !this.prevStakeKey;
+    // Turn initiation edges (pressing A or D)
+    const leftEdge = left && !this.prevLeftKey;
+    const rightEdge = right && !this.prevRightKey;
+    this.prevLeftKey = left;
+    this.prevRightKey = right;
+
+    // Forward pole push: triggered by W / Up or automatically on pressing A or D to turn
+    let forward = (kW && !this.prevStakeKey) || leftEdge || rightEdge;
     this.prevStakeKey = kW;
 
-    let grab = false;
-    let sharpTurn = kSharp;
-    let slideTurn = kSlide;
+    // Q and E eliminated:
+    // Slide Turn (drift) is triggered by Shift + A or Shift + D
+    // Sharp Turn is triggered by Ctrl + A or Ctrl + D
+    let sharpTurn = kCtrl && (left || right);
+    let slideTurn = kShift && (left || right);
     let tackle = kTackle;
+    let grab = false;
     let steerX: number | undefined = undefined;
     let trickSpinX: number | undefined = undefined;
     let trickFlipY: number | undefined = undefined;
     let trickRoll: number | undefined = undefined;
 
     // Smooth keyboard digital-to-analog filter:
-    // Regular A/D key presses target 0.55 deflection (gentle carve), holding Shift/Q targets 1.0 (sharp carve).
+    // Regular A/D key presses target 0.55 deflection (gentle carve), holding Ctrl targets 1.0 (sharp carve).
     // Ramps at 5.0/s on press, releases at 8.0/s on release.
     const now = performance.now();
     const inputDt = Math.min((now - this.lastInputTime) / 1000.0, 0.1);
     this.lastInputTime = now;
 
-    const targetKeySteer = (left && !right) ? (kSharp ? -1.0 : -0.55)
-                         : (right && !left) ? (kSharp ? 1.0 : 0.55)
+    const targetKeySteer = (left && !right) ? (sharpTurn ? -1.0 : -0.55)
+                         : (right && !left) ? (sharpTurn ? 1.0 : 0.55)
                          : 0.0;
     const rampRate = targetKeySteer !== 0 ? 5.0 : 8.0;
 

@@ -470,8 +470,6 @@ export class Skier {
   private sprayVelocities!: Float32Array;
   private sprayLifetimes!: Float32Array;
   private readonly sprayCount = 420;
-  private wasStaking = false;
-  private lastStakingSide = 0;
 
   // Scratch objects (zero allocations in hot path)
   private readonly _up = new THREE.Vector3(0, 1, 0);
@@ -1018,23 +1016,25 @@ export class Skier {
       if (this.isGrounded && this.gmaPhysics.isStaking) {
         // Drive specific pole into snow based on left/right steering side
         const isLeftPlant = this.gmaPhysics.stakingPoleSide < 0;
-        const armSwingL = isLeftPlant ? 0.55 : -0.15;
-        const armSwingR = isLeftPlant ? -0.15 : 0.55;
+        const isPowerStroke = this.gmaPhysics.stakingPoleTimer > 0.12;
+        const strokeAngle = isPowerStroke ? 0.55 : 0.10;
+        const armSwingL = isLeftPlant ? strokeAngle : -0.15;
+        const armSwingR = isLeftPlant ? -0.15 : strokeAngle;
         this.armL.rotation.x = THREE.MathUtils.damp(this.armL.rotation.x, armSwingL, 16, dt);
         this.armR.rotation.x = THREE.MathUtils.damp(this.armR.rotation.x, armSwingR, 16, dt);
-        this.torsoGroup.rotation.x = THREE.MathUtils.damp(this.torsoGroup.rotation.x, 0.14, 12, dt);
+        this.torsoGroup.rotation.x = THREE.MathUtils.damp(this.torsoGroup.rotation.x, isPowerStroke ? 0.14 : 0.04, 12, dt);
 
-        // Staking Sound: rhythmic crisp pole jab clicks into hardpack snow
-        if (!this.wasStaking || this.lastStakingSide !== this.gmaPhysics.stakingPoleSide) {
+        // Staking Sound: plays once per pole-plant trigger event
+        if (this.gmaPhysics.stakingPlantTriggered) {
           this.audio.playPolePlant();
-          this.lastStakingSide = this.gmaPhysics.stakingPoleSide;
+          this.gmaPhysics.stakingPlantTriggered = false;
         }
       } else {
+        this.gmaPhysics.stakingPlantTriggered = false;
         this.armL.rotation.x = THREE.MathUtils.damp(this.armL.rotation.x, 0.0, 8, dt);
         this.armR.rotation.x = THREE.MathUtils.damp(this.armR.rotation.x, 0.0, 8, dt);
         this.torsoGroup.rotation.x = THREE.MathUtils.damp(this.torsoGroup.rotation.x, 0.0, 8, dt);
       }
-      this.wasStaking = this.isGrounded && this.gmaPhysics.isStaking;
     }
 
     // 6. Snow Spray Particles, Persistent Trail Ribbon & Audio

@@ -67,8 +67,8 @@ export class ControlsProcessor {
     this.lastLeftPressTime += dt;
     this.lastRightPressTime += dt;
 
-    const isLeftPressed = rawSteer < -0.2;
-    const isRightPressed = rawSteer > 0.2;
+    const isLeftPressed = rawSteer < -0.05;
+    const isRightPressed = rawSteer > 0.05;
     const leftEdge = isLeftPressed && !this.wasLeftPressed;
     const rightEdge = isRightPressed && !this.wasRightPressed;
 
@@ -102,7 +102,8 @@ export class ControlsProcessor {
     const outSlide = rawInput.slideTurn || brakeWhileTurning;
     const outBrake = rawInput.brake && !brakeWhileTurning;
     const outJump = rawInput.jump || emergentJump;
-    const outStake = rawInput.stakePole || emergentStake;
+    // Explicit edge-triggered pole plant on turn initiation (A or D press) or double-tap
+    const outStake = rawInput.stakePole || emergentStake || leftEdge || rightEdge;
     const outTackle = rawInput.slapTackle;
 
     return {

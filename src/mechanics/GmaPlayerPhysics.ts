@@ -52,6 +52,7 @@ export class GmaPlayerPhysics {
   public isStakingDamped: boolean = false;
   public stakingPoleTimer: number = 0;
   public stakingPoleSide: number = 0; // -1 = Left pole plant, +1 = Right pole plant
+  public stakingPlantTriggered: boolean = false;
   public snowslidePumpTimer: number = 0; // Snowboard edge carve unweighting pump timer
   public roughGroundTimer: number = 0; // Riding on rough terrain/rocks exceeding 3.0s triggers crash
 
@@ -83,6 +84,7 @@ export class GmaPlayerPhysics {
   // Ragdoll recovery timer
   public crashRecoveryTimer: number = 0;
   private prevJumpPressed: boolean = false;
+  private prevStakePressed: boolean = false;
 
   constructor(sport: SportType = SportType.Skis, hasTwintips: boolean = true) {
     this.sport = sport;
@@ -112,6 +114,8 @@ export class GmaPlayerPhysics {
     this.isStakingDamped = false;
     this.stakingPoleTimer = 0;
     this.stakingPoleSide = 0;
+    this.stakingPlantTriggered = false;
+    this.prevStakePressed = false;
     this.snowslidePumpTimer = 0;
     this.roughGroundTimer = 0;
     this.subStepAccumulator = 0;
@@ -333,6 +337,7 @@ export class GmaPlayerPhysics {
       this.updateAirbornePhysics(dt, steerInput, spinInput, flipInput, rollInput);
     }
     this.prevJumpPressed = jumpPressed;
+    this.prevStakePressed = stakePressed;
   }
 
   private updateGroundPhysics(
@@ -436,12 +441,12 @@ export class GmaPlayerPhysics {
       this.state = MovementState.Standing;
     }
 
-    // 3. Determine Turn Type
-    if (absSteer > 0.85 && curSpeed > 14.0) {
-      this.currentTurnType = TurnType.OverTurn;
-      this.sharpTurnTimer = 0.0;
-    } else if (slideTurn && absSteer > 0.05) {
+    // 3. Determine Turn Type (Explicit Slide Turn via Shift takes precedence over passive OverTurn)
+    if (slideTurn && absSteer > 0.05) {
       this.currentTurnType = TurnType.SlideTurn;
+      this.sharpTurnTimer = 0.0;
+    } else if (absSteer > 0.85 && curSpeed > 14.0) {
+      this.currentTurnType = TurnType.OverTurn;
       this.sharpTurnTimer = 0.0;
     } else if (sharpTurn && absSteer > 0.05) {
       if (this.sharpTurnTimer < this.config.duration_sharpturn) {
@@ -644,7 +649,7 @@ export class GmaPlayerPhysics {
     }
 
     // 9. Propulsion: Ski poles staking (Skis)
-    this.handlePropulsion(dt, stakePressed);
+    this.handlePropulsion(dt, stakePressed, steerInput);
 
     // 10. Shoulder Tackle / Pole Slap
     if (tacklePressed) {
@@ -721,12 +726,13 @@ export class GmaPlayerPhysics {
     this.position.addScaledVector(this.velocity, dt);
   }
 
-  private handlePropulsion(dt: number, stakePressed: boolean): void {
+  private handlePropulsion(dt: number, stakePressed: boolean, steerInput: number): void {
     if (this.sport === SportType.Snowboard) {
       // GMA Snowboard: No poles, cannot stake on flats
       this.isStaking = false;
       this.isStakingDamped = false;
       this.stakingPoleTimer = 0.0;
+      this.stakingPlantTriggered = false;
       return;
     }
 
@@ -741,13 +747,26 @@ export class GmaPlayerPhysics {
       slopePitchDeg > this.config.staking_inclination_damped_from_deg &&
       slopePitchDeg <= this.config.staking_inclination_damped_to_deg;
 
-    const eligible = (canStakeRegular || canStakeDamped) && (curSpeed < this.config.staking_max_vel * 15.0);
+    // Hard speed cutoff limit: beyond this speed, forward pole propulsion stops completely and only gravity provides force
+    const maxSpeedLimit = this.config.staking_max_vel * 15.0; // 10.5 m/s (~38 km/h)
+    const eligible = (canStakeRegular || canStakeDamped) && (curSpeed < maxSpeedLimit);
 
-    // Staking is a discrete pole-plant impulse, not continuous engine throttle
-    if (stakePressed && eligible && this.stakingPoleTimer <= 0.0) {
+    // Staking is an edge-triggered single pole-plant impulse per key press, not a continuous engine throttle
+    const isStakeTriggered = stakePressed && !this.prevStakePressed;
+    if (isStakeTriggered && eligible && this.stakingPoleTimer <= 0.0) {
       this.isStaking = true;
       this.isStakingDamped = canStakeDamped;
       this.stakingPoleTimer = 0.40;
+      this.stakingPlantTriggered = true;
+
+      // Assign pole plant side based on steering direction: Left turn -> Left pole (-1), Right turn -> Right pole (+1)
+      if (steerInput < -0.05) {
+        this.stakingPoleSide = -1;
+      } else if (steerInput > 0.05) {
+        this.stakingPoleSide = 1;
+      } else {
+        this.stakingPoleSide = this.stakingPoleSide === -1 ? 1 : -1;
+      }
 
       let power = this.config.staking_power;
       if (curSpeed < 1.0) {
@@ -757,12 +776,13 @@ export class GmaPlayerPhysics {
         power *= this.config.staking_damped_mul; // 0.2
       }
       this.velocity.addScaledVector(this.forwardDir, power * 0.12);
-    } else if (this.stakingPoleTimer > 0.0) {
+    } else if (this.stakingPoleTimer > 0.0 && eligible) {
       this.stakingPoleTimer -= dt;
       this.isStaking = true;
     } else {
       this.isStaking = false;
       this.isStakingDamped = false;
+      this.stakingPoleTimer = 0.0;
     }
   }
 

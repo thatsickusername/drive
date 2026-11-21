@@ -331,10 +331,11 @@ class Game {
       <div>Score: <strong style="color:#4ade80;">${trickEng.totalScore} pts</strong> ${trickEng.currentMultiplier > 1 ? `<span style="color:#facc15;font-weight:bold;">[${trickEng.currentMultiplier}x Combo]</span>` : ''} | Cam: <strong style="color:#a78bfa;">${this.cameraDirector.mode === 'BEHIND' ? 'CHASE CAM (BEHIND)' : 'GMA ISOMETRIC TILT-SHIFT'}</strong> <span style="color:#94a3b8;">[V]</span> <strong style="color:#38bdf8;margin-left:6px;">[O] TUNER</strong></div>
       <div style="margin-top:6px;border-top:1px dashed rgba(255,255,255,0.15);padding-top:4px;font-size:11px;color:#cbd5e1;">
         <strong>GRAND MOUNTAIN ADVENTURE CONTROLS:</strong><br />
-        • <strong>A / D (Left / Right)</strong>: Carve (Hard steer enters <strong>Sharp Carve</strong>, rapid counter-flick triggers <strong>Slide Drift</strong>)<br />
+        • <strong>A / D (Left / Right)</strong>: Carve &amp; Auto Pole-Plant on flats/turns<br />
+        • <strong>Shift + A / D</strong>: <strong>Slide Turn (Drift)</strong> | <strong>Ctrl + A / D</strong>: <strong>Sharp Turn</strong><br />
         • <strong>Hold A + D (or S)</strong>: <strong>Snowplow Brake</strong> (or <strong>Hockey Drift Stop</strong> when cornering)<br />
-        • <strong>Double-Tap A / D (or W)</strong>: <strong>Double-Pole Push</strong> on flats | <strong>Space / Gamepad A</strong>: <strong>Jump Pop</strong><br />
-        • <strong>In Air</strong>: <strong>A / D</strong> Spins, <strong>W / S</strong> Front/Back Flips | <strong>V</strong>: Camera Mode | <strong>O</strong>: Camera Studio | <strong>C</strong>: Fly-Cam | <strong>1-6</strong>: Peaks
+        • <strong>Space / Gamepad A</strong>: <strong>Jump Pop</strong> | <strong>In Air</strong>: <strong>A / D</strong> Spins, <strong>W / S</strong> Flips<br />
+        • <strong>V</strong>: Camera Mode | <strong>O</strong>: Camera Studio | <strong>C</strong>: Fly-Cam | <strong>1-6</strong>: Peaks
       </div>
     `;
 
