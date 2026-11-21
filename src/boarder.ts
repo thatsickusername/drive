@@ -454,7 +454,7 @@ export class Skier {
   public lastWiggleSign = 0;   // Flat ground wiggle alternation sign
   public airTimer = 0;         // Airborne duration in seconds
 
-  private smoothNormal = new THREE.Vector3(0, 1, 0);
+  public smoothNormal = new THREE.Vector3(0, 1, 0);
 
   // Procedural animation springs
   private hipOffsetY = 0;

@@ -1,33 +1,88 @@
 import * as THREE from 'three';
+import { GMACameraConfig, CameraSettings, defaultCameraSettings } from './config/gmaCameraConfig';
+
+export type CameraPerspectiveMode = 'TOPDOWN' | 'BEHIND';
 
 export class DynamicCameraDirector {
   public camera: THREE.PerspectiveCamera;
+  public mode: CameraPerspectiveMode = 'BEHIND';
+  public settings: CameraSettings = { ...defaultCameraSettings };
+
+  // Smooth interpolated vectors
   private currentPos = new THREE.Vector3();
   private targetPos = new THREE.Vector3();
   private currentLookAt = new THREE.Vector3();
   private targetLookAt = new THREE.Vector3();
 
-  // Snowboard Camera Decoupled Heading & Pitch
-  public camYaw: number = 0;
-  public camPitch: number = 0.1;
-  public timeSinceManualLook: number = 0;
+  // Camera Orientation
+  public camYaw: number = 0; // 0 = looking down +Z (downhill fall-line)
+  public camPitch: number = THREE.MathUtils.degToRad(20.0); // Resting low chase pitch
+  public timeSinceManualLook: number = 999;
 
-  // Scratch objects to eliminate GC
-  private shakeTime: number = 0;
-  private pumpFovBoost: number = 0;
-  private smoothLeadInX: number = 0;
-  private smoothLeadInZ: number = 0;
+  // 10-Sample Terrain Inclination Rolling Buffer
+  private inclinationRingBuffer: number[] = new Array(GMACameraConfig.inclination.windowSize).fill(0);
+  private inclinationBufferIdx: number = 0;
+  private smoothedIncline: number = 0;
 
-  // Debug Fly-Cam Mode
+  // Touchdown Landing Impact Shake Generator (k=0.9, speed=8, power=0.7)
+  private shakeTimer: number = 999.0;
+  private shakeAmplitude: number = 0.0;
+  private shakeYOffset: number = 0.0;
+  private wasAirborne: boolean = false;
+
+  // Flying Dynamics Progress (fade time 2.0s)
+  private flyingProgress: number = 0.0;
+
+  // Manual look deflections
+  private manualYawOffset: number = 0.0;
+  private manualPitchOffset: number = 0.0;
+
+  // Dynamic Chase Slope Pitch & Terrain Sampler
+  private smoothedBehindSlopePitch: number = 0.0;
+  public terrainSampler?: (x: number, z: number) => number;
+
+  // Debug Fly-Cam Mode ([C] Hotkey)
   public isFlyCam: boolean = false;
   public flyCamPos = new THREE.Vector3(0, 460, -720);
-  public flyCamYaw: number = 0; // In radians (0 = looking +Z towards base)
-  public flyCamPitch: number = -0.38; // Looking down at massif
+  public flyCamYaw: number = 0;
+  public flyCamPitch: number = -0.38;
 
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
-    this.camera.fov = 56;
+    this.camera.fov = this.settings.fov;
+    this.camera.near = GMACameraConfig.nearFar[0]; // 5.0m
+    this.camera.far = 1200.0; // Ensure entire mountain massif remains visible
     this.camera.updateProjectionMatrix();
+  }
+
+  public getSettings(): CameraSettings {
+    return this.settings;
+  }
+
+  public applySettings(newSettings: Partial<CameraSettings>): void {
+    Object.assign(this.settings, newSettings);
+    if (newSettings.mode) {
+      this.mode = newSettings.mode;
+    }
+    if (newSettings.fov && !this.isFlyCam) {
+      this.camera.fov = newSettings.fov;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  public setTerrainSampler(sampler: (x: number, z: number) => number): void {
+    this.terrainSampler = sampler;
+  }
+
+  public setMode(mode: CameraPerspectiveMode): void {
+    this.mode = mode;
+    this.settings.mode = mode;
+  }
+
+  public togglePerspectiveMode(): CameraPerspectiveMode {
+    this.mode = this.mode === 'TOPDOWN' ? 'BEHIND' : 'TOPDOWN';
+    this.settings.mode = this.mode;
+    return this.mode;
   }
 
   public toggleFlyCam(startPos?: THREE.Vector3): boolean {
@@ -43,7 +98,7 @@ export class DynamicCameraDirector {
       this.camera.fov = 65;
       this.camera.updateProjectionMatrix();
     } else {
-      this.camera.fov = 60;
+      this.camera.fov = GMACameraConfig.baseFov;
       this.camera.updateProjectionMatrix();
     }
     return this.isFlyCam;
@@ -51,13 +106,13 @@ export class DynamicCameraDirector {
 
   public updateFlyCam(
     dt: number,
-    moveForward: number, // -1 to +1
-    moveRight: number,   // -1 to +1
-    moveUp: number,      // -1 to +1
+    moveForward: number,
+    moveRight: number,
+    moveUp: number,
     yawDelta: number,
     pitchDelta: number
   ): void {
-    const flySpeed = 160.0; // Fast flight across 1.5km mountain
+    const flySpeed = 160.0;
 
     this.flyCamYaw += yawDelta * 1.8 * dt;
     this.flyCamPitch = Math.max(-1.45, Math.min(1.45, this.flyCamPitch + pitchDelta * 1.8 * dt));
@@ -78,27 +133,79 @@ export class DynamicCameraDirector {
   }
 
   public initSnowboard(riderPos: THREE.Vector3, heading: number): void {
-    this.camYaw = heading;
-    this.camPitch = 0.08;
     this.timeSinceManualLook = 999;
-    const forwardX = -Math.sin(this.camYaw);
-    const forwardZ = -Math.cos(this.camYaw);
+    this.manualYawOffset = 0;
+    this.manualPitchOffset = 0;
+    this.shakeTimer = 999;
+    this.shakeAmplitude = 0;
+    this.wasAirborne = false;
+    this.flyingProgress = 0;
 
-    const initDist = 5.2;
-    const initHeight = 2.4;
+    // Reset 10-sample inclination buffer
+    this.inclinationRingBuffer.fill(0);
+    this.inclinationBufferIdx = 0;
+    this.smoothedIncline = 0;
 
-    this.currentPos.set(
-      riderPos.x - forwardX * initDist,
-      riderPos.y + initHeight,
-      riderPos.z - forwardZ * initDist
-    );
+    if (this.mode === 'TOPDOWN') {
+      // In GMA top-down isometric view, yaw aligns with the downhill fall line (0)
+      this.camYaw = 0;
+      this.camPitch = THREE.MathUtils.degToRad(this.settings.topdownPitch);
+
+      const baseDist = this.settings.topdownDistance;
+      const tanHalfFov = Math.tan(THREE.MathUtils.degToRad(this.settings.fov / 2));
+      // Focus look-ahead offset placing rider at 15% from bottom of viewport
+      const ndcY = 2.0 * GMACameraConfig.playerScreenY - 1.0; // -0.70
+      const forwardLeadDist = -ndcY * baseDist * tanHalfFov * GMACameraConfig.topdownOffsetT;
+
+      this.currentLookAt.set(
+        riderPos.x,
+        riderPos.y,
+        riderPos.z + forwardLeadDist
+      );
+
+      const eyeElevation = baseDist * Math.sin(this.camPitch);
+      const eyeHorizontalDist = baseDist * Math.cos(this.camPitch);
+
+      this.currentPos.set(
+        this.currentLookAt.x,
+        this.currentLookAt.y + eyeElevation,
+        this.currentLookAt.z - eyeHorizontalDist
+      );
+    } else {
+      // GMA Chase (cam.behind) mode
+      this.camYaw = heading;
+      this.camPitch = THREE.MathUtils.degToRad(this.settings.behindPitch);
+      const dist = this.settings.behindDistance;
+
+      const fwdX = -Math.sin(this.camYaw);
+      const fwdZ = -Math.cos(this.camYaw);
+      const eyeElevation = dist * Math.sin(this.camPitch);
+      const eyeHorizontalDist = dist * Math.cos(this.camPitch);
+
+      this.currentLookAt.set(
+        riderPos.x + fwdX * this.settings.behindLookAheadDist,
+        riderPos.y + this.settings.behindLookAheadHeight,
+        riderPos.z + fwdZ * this.settings.behindLookAheadDist
+      );
+
+      this.currentPos.set(
+        riderPos.x - fwdX * eyeHorizontalDist,
+        riderPos.y + eyeElevation,
+        riderPos.z - fwdZ * eyeHorizontalDist
+      );
+
+      if (this.terrainSampler) {
+        const groundAtEye = this.terrainSampler(this.currentPos.x, this.currentPos.z);
+        if (this.currentPos.y < groundAtEye + 1.6) {
+          this.currentPos.y = groundAtEye + 1.6;
+        }
+      }
+    }
+
+    this.targetPos.copy(this.currentPos);
+    this.targetLookAt.copy(this.currentLookAt);
+
     this.camera.position.copy(this.currentPos);
-
-    this.currentLookAt.set(
-      riderPos.x + forwardX * 1.5,
-      riderPos.y + 0.85,
-      riderPos.z + forwardZ * 1.5
-    );
     this.camera.lookAt(this.currentLookAt);
   }
 
@@ -109,133 +216,316 @@ export class DynamicCameraDirector {
     speedKmh: number,
     yawDelta: number = 0,
     pitchDelta: number = 0,
-    lateralSlip: number = 0,
+    _lateralSlip: number = 0,
     isAirborne: boolean = false,
     leanAngle: number = 0,
     airTime: number = 0,
-    groundDistance: number = 0,
-    pumpKick: number = 0
+    _groundDistance: number = 0,
+    _pumpKick: number = 0,
+    slopeNormal?: THREE.Vector3,
+    velocity?: THREE.Vector3
   ): void {
-    const hasManualLook = Math.abs(yawDelta) > 0.0001 || Math.abs(pitchDelta) > 0.0001;
+    if (this.isFlyCam) return;
 
+    // 1. Aspect Ratio Zoom Compensation per camera.screen_ratio_zoom: 0.45 0.55 0.95 1
+    const aspect = this.camera.aspect || (window.innerWidth / window.innerHeight);
+    const zoomRatio = aspect < 1.0 
+      ? THREE.MathUtils.lerp(GMACameraConfig.portraitDistanceMul, 1.0, aspect) 
+      : 1.0;
+
+    // 2. Manual Look Input Handling
+    const hasManualLook = Math.abs(yawDelta) > 0.0001 || Math.abs(pitchDelta) > 0.0001;
     if (hasManualLook) {
-      this.camYaw += yawDelta;
-      this.camPitch = THREE.MathUtils.clamp(this.camPitch + pitchDelta, -0.65, 0.75);
+      this.manualYawOffset += yawDelta * this.settings.mouseSensitivity;
+      this.manualPitchOffset = THREE.MathUtils.clamp(
+        this.manualPitchOffset + pitchDelta * this.settings.mouseSensitivity,
+        -THREE.MathUtils.degToRad(35),
+        THREE.MathUtils.degToRad(35)
+      );
       this.timeSinceManualLook = 0;
     } else {
       this.timeSinceManualLook += dt;
-
-      // Responsive chase alignment: continuously tracks behind rider heading
-      let angleDiff = (heading - this.camYaw) % (Math.PI * 2);
-      if (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-      if (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-
-      const trackSpeed = this.timeSinceManualLook > 0.35
-        ? THREE.MathUtils.lerp(3.2, 5.2, THREE.MathUtils.smoothstep(speedKmh, 20.0, 58.0))
-        : 1.0;
-      this.camYaw += angleDiff * Math.min(1.0, trackSpeed * dt);
-
-      // Carve Lead-In Camera Yaw Bias: slightly bias camera yaw into turn apex so player sees exit line
-      if (Math.abs(leanAngle) > 0.15 && !isAirborne) {
-        const speedFactor = THREE.MathUtils.smoothstep(speedKmh, 10.0, 55.0);
-        const yawBias = -Math.sign(leanAngle) * Math.min(0.24, Math.abs(leanAngle) * 0.20 * speedFactor);
-        this.camYaw += yawBias * Math.min(1.0, dt * 2.8);
-      }
-
-      // Return pitch to neutral downhill incline if untouched
-      if (this.timeSinceManualLook > 0.8) {
-        this.camPitch = THREE.MathUtils.damp(this.camPitch, 0.08, 2.5, dt);
+      if (this.timeSinceManualLook > 1.2) {
+        this.manualYawOffset = THREE.MathUtils.damp(this.manualYawOffset, 0, 3.0, dt);
+        this.manualPitchOffset = THREE.MathUtils.damp(this.manualPitchOffset, 0, 3.0, dt);
       }
     }
 
-    const forwardX = -Math.sin(this.camYaw);
-    const forwardZ = -Math.cos(this.camYaw);
-    const rightX = forwardZ;
-    const rightZ = -forwardX;
-
-    // Step 1: Normalize speed intensity factor (20 km/h to 58 km/h)
-    const speedT = THREE.MathUtils.smoothstep(speedKmh, 20.0, 58.0);
-
-    // Step 2: Dynamic FOV (55° idle -> 80° at speed) + Carve Unweighting Pump Kick Surge
-    if (pumpKick > 0) {
-      this.pumpFovBoost = Math.max(this.pumpFovBoost, 3.2 * pumpKick);
+    // 3. Touchdown Landing Impact Shake Generator (k=0.9, speed=8, power=0.7)
+    if (this.wasAirborne && !isAirborne) {
+      // Touchdown event: calculate landing impact velocity
+      const impactSpeed = velocity ? Math.abs(velocity.y) : airTime * 9.81;
+      if (impactSpeed >= GMACameraConfig.shake.start) {
+        const excess = impactSpeed - GMACameraConfig.shake.start;
+        this.shakeAmplitude = Math.min(1.2, Math.pow(excess, GMACameraConfig.shake.power) * 0.28);
+        this.shakeTimer = 0.0;
+      }
     }
-    this.pumpFovBoost = THREE.MathUtils.damp(this.pumpFovBoost, 0, 8.5, dt);
-    const targetFov = 55.0 + speedT * 25.0 + this.pumpFovBoost;
-    this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, Math.min(1.0, dt * 6.0));
-    this.camera.updateProjectionMatrix();
+    this.wasAirborne = isAirborne;
 
-    // Step 3: Camera Distance & Height
-    // Starting position (idle/low speed) is 5.2m back to clearly frame character; distant high-speed chase remains 4.2m
-    const currentBaseDist = THREE.MathUtils.lerp(5.2, 4.2, speedT);
-    const dynamicFollowDist = currentBaseDist * Math.cos(this.camPitch);
-    const heightOffset = THREE.MathUtils.lerp(2.4, 2.1, speedT);
-    const dynamicFollowHeight = heightOffset + Math.sin(this.camPitch) * 2.2;
-
-    this.targetPos.set(
-      riderPos.x - forwardX * dynamicFollowDist,
-      riderPos.y + dynamicFollowHeight,
-      riderPos.z - forwardZ * dynamicFollowDist
-    );
-
-    // Carve Lead-In: Offset look target toward the inside of the turn & down the fall line
-    // Inside of turn is opposite to lean direction (lean right = +leanAngle => look right +rightX)
-    let leadInsideX = 0;
-    let leadInsideZ = 0;
-    if (!isAirborne && Math.abs(leanAngle) > 0.12) {
-      const turnMag = Math.abs(leanAngle);
-      const turnSign = Math.sign(leanAngle);
-      const leadDist = THREE.MathUtils.smoothstep(speedKmh, 8.0, 50.0) * 2.4 * turnMag;
-      leadInsideX = rightX * turnSign * leadDist + forwardX * (turnMag * 0.6);
-      leadInsideZ = rightZ * turnSign * leadDist + forwardZ * (turnMag * 0.6);
-    }
-    this.smoothLeadInX = THREE.MathUtils.damp(this.smoothLeadInX, leadInsideX, 7.5, dt);
-    this.smoothLeadInZ = THREE.MathUtils.damp(this.smoothLeadInZ, leadInsideZ, 7.5, dt);
-
-    // Airborne Landing Pitch: smoothly pitch downward toward projected touchdown point
-    let airLandingPitchDrop = 0.0;
-    if (isAirborne) {
-      const airProgress = THREE.MathUtils.clamp(airTime / 0.7, 0, 1);
-      const proximityBoost = groundDistance < 4.5 ? (1.0 - groundDistance / 4.5) * 0.55 : 0.0;
-      airLandingPitchDrop = -(0.35 + airProgress * 0.40 + proximityBoost);
+    // Evaluate active shake displacement
+    if (this.shakeTimer < 1.5) {
+      this.shakeTimer += dt;
+      const decay = Math.exp(-GMACameraConfig.shake.k * GMACameraConfig.shake.speed * this.shakeTimer);
+      const osc = Math.sin(GMACameraConfig.shake.speed * Math.PI * 2.0 * this.shakeTimer);
+      this.shakeYOffset = -this.shakeAmplitude * decay * osc;
+    } else {
+      this.shakeYOffset = 0.0;
     }
 
-    this.targetLookAt.set(
-      riderPos.x + forwardX * 1.8 + this.smoothLeadInX,
-      riderPos.y + 0.85 - this.camPitch * 0.5 + airLandingPitchDrop,
-      riderPos.z + forwardZ * 1.8 + this.smoothLeadInZ
-    );
+    // 4. Mode Execution
+    if (this.mode === 'TOPDOWN') {
+      this.updateTopDownMode(
+        dt,
+        riderPos,
+        heading,
+        speedKmh,
+        isAirborne,
+        airTime,
+        leanAngle,
+        zoomRatio,
+        slopeNormal,
+        velocity
+      );
+    } else {
+      this.updateBehindMode(
+        dt,
+        riderPos,
+        heading,
+        speedKmh,
+        isAirborne,
+        airTime,
+        zoomRatio,
+        slopeNormal
+      );
+    }
 
-    // Step 2: Asymmetric Elastic Lag (Forward tight: 8.0 - 2.5*speedT; Lateral loose: 2.8)
-    const deltaX = this.targetPos.x - this.currentPos.x;
-    const deltaZ = this.targetPos.z - this.currentPos.z;
-    const deltaFwd = deltaX * forwardX + deltaZ * forwardZ;
-    const deltaLat = deltaX * rightX + deltaZ * rightZ;
-
-    const lerpRateFwd = 8.0 - speedT * 2.5;
-    const lerpRateLat = 2.8;
-    const lerpRateY = 8.0;
-
-    const fwdDamp = 1.0 - Math.exp(-lerpRateFwd * dt);
-    const latDamp = 1.0 - Math.exp(-lerpRateLat * dt);
-    const yDamp = 1.0 - Math.exp(-lerpRateY * dt);
-
-    this.currentPos.x += forwardX * deltaFwd * fwdDamp + rightX * deltaLat * latDamp;
-    this.currentPos.z += forwardZ * deltaFwd * fwdDamp + rightZ * deltaLat * latDamp;
-    this.currentPos.y += (this.targetPos.y - this.currentPos.y) * yDamp;
-
-    this.currentLookAt.lerp(this.targetLookAt, 1.0 - Math.exp(-12.0 * dt));
-
-    // Step 3: Snow chatter micro-shake scaled by speedT * (0.3 + lateralSlip * 0.7)
-    this.shakeTime += dt * 36.0;
-    const slipFactor = Math.min(1.0, lateralSlip / 8.0);
-    const shakeAmp = speedT * (0.3 + slipFactor * 0.7) * 0.035;
-    const shakeY = Math.sin(this.shakeTime) * Math.cos(this.shakeTime * 1.25) * shakeAmp;
-    const shakeRoll = Math.sin(this.shakeTime * 1.6) * shakeAmp * 0.35;
+    // 5. Final Camera Transform Application & Ground Collision Protection
+    if (this.terrainSampler) {
+      const curGroundY = this.terrainSampler(this.currentPos.x, this.currentPos.z);
+      if (this.currentPos.y < curGroundY + 1.4) {
+        this.currentPos.y = curGroundY + 1.4;
+      }
+    }
 
     this.camera.position.copy(this.currentPos);
-    this.camera.position.y += shakeY;
+    this.camera.position.y += this.shakeYOffset;
     this.camera.lookAt(this.currentLookAt);
-    this.camera.rotation.z += shakeRoll;
+  }
+
+  /**
+   * Authentic GMA Isometric Top-Down Camera Mode
+   * Driven by camera.yaml top-down parameters:
+   * - camera.degree_range: 38 80
+   * - camera.player_screen_y: 0.15
+   * - camera.topdown_focus_playerpos_t: 0.99
+   * - camera.topdown_offset_t: 0.6
+   * - camera.rot_speed_mul: 2.0
+   * - camera.inclination_*: 10-sample window, smoothener 0.03, offset 0.01, min -0.2, max 0.4
+   * - camera.flying_*: fade time 2.0s, camera dist mul -0.3, offset dist mul -0.15
+   */
+  private updateTopDownMode(
+    dt: number,
+    riderPos: THREE.Vector3,
+    heading: number,
+    _speedKmh: number,
+    isAirborne: boolean,
+    _airTime: number,
+    _leanAngle: number,
+    zoomRatio: number,
+    slopeNormal?: THREE.Vector3,
+    _velocity?: THREE.Vector3
+  ): void {
+    // 1. Terrain Inclination 10-Sample Rolling Window Filter
+    // In GMA, downhill is +Z. Forward terrain tilt: positive when skiing downhill, negative when going up
+    let rawIncline = 0.0;
+    if (slopeNormal && slopeNormal.y > 0.1) {
+      // Angle between ground normal and vertical, projected along downhill fall-line
+      rawIncline = Math.asin(THREE.MathUtils.clamp(slopeNormal.z, -0.9, 0.9));
+    }
+    this.inclinationRingBuffer[this.inclinationBufferIdx] = rawIncline;
+    this.inclinationBufferIdx = (this.inclinationBufferIdx + 1) % GMACameraConfig.inclination.windowSize;
+
+    let sumIncline = 0.0;
+    for (let i = 0; i < GMACameraConfig.inclination.windowSize; i++) {
+      sumIncline += this.inclinationRingBuffer[i];
+    }
+    const avgIncline = sumIncline / GMACameraConfig.inclination.windowSize;
+    const clampedIncline = THREE.MathUtils.clamp(
+      avgIncline * GMACameraConfig.inclination.offset * 100.0,
+      GMACameraConfig.inclination.min,
+      GMACameraConfig.inclination.max
+    );
+    this.smoothedIncline = THREE.MathUtils.damp(
+      this.smoothedIncline,
+      clampedIncline,
+      1.0 / GMACameraConfig.inclination.smoothener,
+      dt
+    );
+
+    // 2. Pitch Angle clamped to [38 deg, 80 deg]
+    const minPitchRad = THREE.MathUtils.degToRad(GMACameraConfig.degreeRange[0]); // 38 deg = 0.663 rad
+    const maxPitchRad = THREE.MathUtils.degToRad(GMACameraConfig.degreeRange[1]); // 80 deg = 1.396 rad
+    const neutralPitchRad = THREE.MathUtils.degToRad(50.0); // 50 deg standard isometric tilt
+    const targetPitch = THREE.MathUtils.clamp(
+      neutralPitchRad + this.smoothedIncline + this.manualPitchOffset,
+      minPitchRad,
+      maxPitchRad
+    );
+    this.camPitch = THREE.MathUtils.damp(this.camPitch, targetPitch, 4.0, dt);
+
+    // 3. Fall-Line Heading Alignment with Smooth Course Follow
+    // Fall-line in Alvdalen Massif is 0 radians (downhill along +Z)
+    //rotSpeedMul = 2.0 allows responsive slight yaw swivel during turns while preserving mountain orientation
+    let targetYaw = 0.0;
+    const riderYawFromFallLine = heading % (Math.PI * 2);
+    // Swivel slightly with rider heading (capped at +/- 25 degrees) so isometric orientation is never flipped
+    const maxSwivel = THREE.MathUtils.degToRad(25.0);
+    const clampedRiderYaw = THREE.MathUtils.clamp(riderYawFromFallLine, -maxSwivel, maxSwivel);
+    targetYaw = clampedRiderYaw * 0.45 * (GMACameraConfig.rotSpeedMul / 2.0) + this.manualYawOffset;
+    this.camYaw = THREE.MathUtils.damp(this.camYaw, targetYaw, 3.5, dt);
+
+    // 4. Airborne / Flying Dynamics Progress (fadeTime = 2.0s)
+    if (isAirborne) {
+      this.flyingProgress = Math.min(GMACameraConfig.flying.fadeTime, this.flyingProgress + dt);
+    } else {
+      this.flyingProgress = Math.max(0.0, this.flyingProgress - dt * 2.5);
+    }
+    const flyingT = this.flyingProgress / GMACameraConfig.flying.fadeTime;
+    const flyingDistMul = 1.0 + flyingT * GMACameraConfig.flying.cameraDistMul; // down by up to -30%
+    const flyingOffsetMul = 1.0 + flyingT * GMACameraConfig.flying.offsetDistMul; // down by up to -15%
+
+    // 5. Distance & Framing (camera.player_screen_y = 0.15)
+    const baseDist = this.settings.topdownDistance * zoomRatio * flyingDistMul;
+    const tanHalfFov = Math.tan(THREE.MathUtils.degToRad(this.settings.fov / 2.0));
+
+    // Rider pinned at Y = 15% from bottom of viewport: NDC y = 2 * 0.15 - 1 = -0.70
+    // To achieve this, the focus look target is advanced forward along the downhill view vector
+    const ndcY = 2.0 * GMACameraConfig.playerScreenY - 1.0; // -0.70
+    const forwardLeadDist = -ndcY * baseDist * tanHalfFov * GMACameraConfig.topdownOffsetT * flyingOffsetMul;
+
+    // Look-ahead lead vector along camera forward azimuth
+    const fwdX = Math.sin(this.camYaw);
+    const fwdZ = Math.cos(this.camYaw);
+
+    this.targetLookAt.set(
+      riderPos.x + fwdX * forwardLeadDist,
+      riderPos.y + 0.4,
+      riderPos.z + fwdZ * forwardLeadDist
+    );
+
+    // Camera Eye position placed up and behind the target lookAt
+    const eyeElevation = baseDist * Math.sin(this.camPitch);
+    const eyeHorizontalDist = baseDist * Math.cos(this.camPitch);
+
+    this.targetPos.set(
+      this.targetLookAt.x - fwdX * eyeHorizontalDist,
+      this.targetLookAt.y + eyeElevation,
+      this.targetLookAt.z - fwdZ * eyeHorizontalDist
+    );
+
+    // 6. Top-down Smoothing Filter per camera.yaml (topdown_focus_playerpos_t: 0.99, topdown_offset_t: 0.60)
+    const focusLerpRate = 1.0 - Math.pow(1.0 - GMACameraConfig.topdownFocusPlayerPosT, dt * 60.0);
+    const posLerpRate = 1.0 - Math.pow(1.0 - GMACameraConfig.topdownOffsetT, dt * 60.0);
+
+    this.currentLookAt.lerp(this.targetLookAt, Math.min(1.0, focusLerpRate));
+    this.currentPos.lerp(this.targetPos, Math.min(1.0, posLerpRate));
+  }
+
+  /**
+   * GMA Chase (cam.behind) Mode
+   * Follows rider heading down the slope with dynamic terrain inclination adaptation,
+   * forward look-ahead, and active terrain collision avoidance.
+   */
+  private updateBehindMode(
+    dt: number,
+    riderPos: THREE.Vector3,
+    heading: number,
+    _speedKmh: number,
+    _isAirborne: boolean,
+    _airTime: number,
+    zoomRatio: number,
+    slopeNormal?: THREE.Vector3
+  ): void {
+    const behindDist = this.settings.behindDistance * zoomRatio;
+
+    // 1. Smooth heading follow first so forward azimuth is up-to-date
+    let angleDiff = (heading - this.camYaw) % (Math.PI * 2);
+    if (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+    if (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+    this.camYaw += angleDiff * Math.min(1.0, this.settings.behindFollowSpeed * dt);
+
+    // Rider forward direction: (-sin(camYaw), 0, -cos(camYaw))
+    const fwdX = -Math.sin(this.camYaw);
+    const fwdZ = -Math.cos(this.camYaw);
+
+    // 2. Dynamic slope inclination tracking along travel direction
+    let slopePitchRad = 0.0;
+    if (slopeNormal && slopeNormal.y > 0.05) {
+      // Projected normal along forward motion vector
+      const normalDotFwd = slopeNormal.x * fwdX + slopeNormal.z * fwdZ;
+      // When skiing downhill, normalDotFwd < 0, atan2 gives negative pitch angle
+      slopePitchRad = Math.atan2(-normalDotFwd, slopeNormal.y);
+    }
+    // Dynamic slope adjustment: when going downhill (slopePitchRad < 0), elevate pitch to stay clear above uphill slope
+    // When going uphill (slopePitchRad > 0), lower pitch so camera looks up towards the crest
+    const dynamicSlopePitch = THREE.MathUtils.clamp(
+      -slopePitchRad * 0.70,
+      -THREE.MathUtils.degToRad(18),
+      THREE.MathUtils.degToRad(28)
+    );
+    this.smoothedBehindSlopePitch = THREE.MathUtils.damp(
+      this.smoothedBehindSlopePitch,
+      dynamicSlopePitch,
+      3.5,
+      dt
+    );
+
+    // 3. Pitch bounds: resting angle is settings.behindPitch + dynamic slope offset, clamped between min and max
+    const minPitchRad = THREE.MathUtils.degToRad(this.settings.behindMinPitch);
+    const maxPitchRad = THREE.MathUtils.degToRad(this.settings.behindMaxPitch + 15.0); // allow dynamic elevation on steep downhills
+    const basePitchRad = THREE.MathUtils.degToRad(this.settings.behindPitch);
+    const targetPitch = THREE.MathUtils.clamp(
+      basePitchRad + this.smoothedBehindSlopePitch + this.manualPitchOffset,
+      minPitchRad,
+      maxPitchRad
+    );
+    this.camPitch = THREE.MathUtils.damp(this.camPitch, targetPitch, 4.5, dt);
+
+    // 4. Forward look-ahead: looks ahead down the slope so rider sees upcoming terrain
+    this.targetLookAt.set(
+      riderPos.x + fwdX * this.settings.behindLookAheadDist,
+      riderPos.y + this.settings.behindLookAheadHeight,
+      riderPos.z + fwdZ * this.settings.behindLookAheadDist
+    );
+
+    const eyeHorizontalDist = behindDist * Math.cos(this.camPitch);
+    const eyeElevation = behindDist * Math.sin(this.camPitch);
+
+    this.targetPos.set(
+      riderPos.x - fwdX * eyeHorizontalDist,
+      riderPos.y + eyeElevation,
+      riderPos.z - fwdZ * eyeHorizontalDist
+    );
+
+    // 5. Dynamic ground collision avoidance / clearance probing
+    if (this.terrainSampler) {
+      const groundAtEye = this.terrainSampler(this.targetPos.x, this.targetPos.z);
+      const minEyeClearance = 1.6;
+      if (this.targetPos.y < groundAtEye + minEyeClearance) {
+        this.targetPos.y = groundAtEye + minEyeClearance;
+      }
+      // Probe halfway between rider and eye to prevent crest clipping
+      const midX = (riderPos.x + this.targetPos.x) * 0.5;
+      const midZ = (riderPos.z + this.targetPos.z) * 0.5;
+      const groundAtMid = this.terrainSampler(midX, midZ);
+      if (this.targetPos.y < groundAtMid + 1.3) {
+        this.targetPos.y = groundAtMid + 1.3;
+      }
+    }
+
+    const behindLerpRate = 1.0 - Math.pow(1.0 - GMACameraConfig.behind.playerT, dt * 60.0);
+    this.currentLookAt.lerp(this.targetLookAt, Math.min(1.0, behindLerpRate));
+    this.currentPos.lerp(this.targetPos, Math.min(1.0, behindLerpRate));
   }
 }

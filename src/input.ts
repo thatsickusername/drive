@@ -19,9 +19,17 @@ export class UnifiedInputController {
   constructor() {
     window.addEventListener('keydown', this.onKeyDown.bind(this));
     window.addEventListener('keyup', this.onKeyUp.bind(this));
-    window.addEventListener('mousedown', () => { this.isPointerActive = true; });
+    window.addEventListener('mousedown', (e: MouseEvent) => {
+      if ((e.target as HTMLElement)?.closest('#camera-tuner-panel') || (e.target as HTMLElement)?.closest('#camera-tuner-toggle-btn')) {
+        return;
+      }
+      this.isPointerActive = true;
+    });
     window.addEventListener('mouseup', () => { this.isPointerActive = false; });
     window.addEventListener('mousemove', (e) => {
+      if ((e.target as HTMLElement)?.closest('#camera-tuner-panel') || (e.target as HTMLElement)?.closest('#camera-tuner-toggle-btn')) {
+        return;
+      }
       if (this.isPointerActive || e.buttons > 0 || document.pointerLockElement) {
         this.mouseDeltaX += e.movementX;
         this.mouseDeltaY += e.movementY;
