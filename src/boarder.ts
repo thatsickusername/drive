@@ -421,6 +421,7 @@ export class Skier {
   // Procedural rig hierarchy
   private readonly visualRoot = new THREE.Group();
   private readonly skisGroup = new THREE.Group();
+  private readonly snowboardGroup = new THREE.Group();
   private readonly polesGroup = new THREE.Group();
   private readonly hipsGroup = new THREE.Group();
   private readonly torsoGroup = new THREE.Group();
@@ -498,12 +499,9 @@ export class Skier {
     this.gmaPhysics = new GmaPlayerPhysics(SportType.Skis, true);
     this.gmaPhysics.reset(spawnPos, 0);
 
-    // 1. Rapier Physics Body (frictionless sphere prevents triangle seam snags)
-    const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
-      .setTranslation(spawnPos.x, spawnPos.y + this.cfg.sphereRadius, spawnPos.z)
-      .setLinearDamping(0.05)
-      .lockRotations()
-      .setCcdEnabled(true);
+    // 1. Rapier Kinematic Body (GMA 333.3 Hz integrator has sole position authority)
+    const bodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased()
+      .setTranslation(spawnPos.x, spawnPos.y + this.cfg.sphereRadius, spawnPos.z);
 
     this.rigidBody = world.createRigidBody(bodyDesc);
 
@@ -591,8 +589,17 @@ export class Skier {
   }
 
   public toggleSport(): SportType {
-    this.gmaPhysics.hasTwintips = !this.gmaPhysics.hasTwintips;
-    return SportType.Skis;
+    this.gmaPhysics.sport = this.gmaPhysics.sport === SportType.Skis ? SportType.Snowboard : SportType.Skis;
+    this.updateSportVisuals();
+    return this.gmaPhysics.sport;
+  }
+
+  public updateSportVisuals(): void {
+    const isSki = this.gmaPhysics.sport === SportType.Skis;
+    this.skisGroup.visible = isSki;
+    this.polesGroup.visible = isSki;
+    this.snowboardGroup.visible = !isSki;
+    this.torsoGroup.rotation.y = isSki ? 0 : 0.65;
   }
 
   public toggleTwintips(): boolean {
@@ -608,6 +615,7 @@ export class Skier {
   private buildCharacterMesh(): void {
     // Materials
     const skiMat = new THREE.MeshStandardMaterial({ color: 0x2a9d8f, roughness: 0.3, metalness: 0.1 });
+    const boardMat = new THREE.MeshStandardMaterial({ color: 0xe63946, roughness: 0.3, metalness: 0.2 });
     const baseMat = new THREE.MeshStandardMaterial({ color: 0x1d3557, roughness: 0.6 });
     const jacketMat = new THREE.MeshStandardMaterial({ color: 0xf4a261, roughness: 0.7 });
     const pantsMat = new THREE.MeshStandardMaterial({ color: 0x264653, roughness: 0.8 });
@@ -638,6 +646,31 @@ export class Skier {
     this.skisGroup.position.y = -this.cfg.sphereRadius + 0.02;
     this.skisGroup.visible = true;
     this.visualRoot.add(this.skisGroup);
+
+    // 1b. Snowboard Deck (posture_snowboard.yaml dimension: 3.1 units ~ 1.55m single deck)
+    const boardGeo = new THREE.BoxGeometry(0.32, 0.035, 1.55);
+    const boardTipGeo = new THREE.BoxGeometry(0.32, 0.03, 0.22);
+    const boardMesh = new THREE.Mesh(boardGeo, boardMat);
+    const boardNose = new THREE.Mesh(boardTipGeo, boardMat);
+    boardNose.position.set(0, 0.035, -0.85);
+    boardNose.rotation.x = 0.35;
+    const boardTail = new THREE.Mesh(boardTipGeo, boardMat);
+    boardTail.position.set(0, 0.035, 0.85);
+    boardTail.rotation.x = -0.35;
+
+    const bindingMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
+    const bindingGeo = new THREE.BoxGeometry(0.18, 0.05, 0.26);
+    const bindFront = new THREE.Mesh(bindingGeo, bindingMat);
+    bindFront.position.set(0, 0.04, -0.32);
+    bindFront.rotation.y = 0.26;
+    const bindBack = new THREE.Mesh(bindingGeo, bindingMat);
+    bindBack.position.set(0, 0.04, 0.32);
+    bindBack.rotation.y = -0.10;
+
+    this.snowboardGroup.add(boardMesh, boardNose, boardTail, bindFront, bindBack);
+    this.snowboardGroup.position.y = -this.cfg.sphereRadius + 0.02;
+    this.snowboardGroup.visible = false;
+    this.visualRoot.add(this.snowboardGroup);
 
     // 2. Character Rig (Parallel Alpine Ski Stance)
     this.hipsGroup.position.set(0, 0.55, 0);
@@ -864,23 +897,12 @@ export class Skier {
     const surfaceType = terrainSample ? terrainSample.surfaceType : 'POWDER';
     this.gmaPhysics.update(dt, inputState, groundElevation, this.smoothNormal, surfaceType);
 
-    // 4. Sync Rapier RigidBody
-    this.rigidBody.setTranslation(
-      {
-        x: this.gmaPhysics.position.x,
-        y: this.gmaPhysics.position.y + this.cfg.sphereRadius,
-        z: this.gmaPhysics.position.z
-      },
-      true
-    );
-    this.rigidBody.setLinvel(
-      {
-        x: this.gmaPhysics.velocity.x,
-        y: this.gmaPhysics.velocity.y,
-        z: this.gmaPhysics.velocity.z
-      },
-      true
-    );
+    // 4. Sync Rapier Kinematic Collider Translation (zero double-integration jitter)
+    this.rigidBody.setNextKinematicTranslation({
+      x: this.gmaPhysics.position.x,
+      y: this.gmaPhysics.position.y + this.cfg.sphereRadius,
+      z: this.gmaPhysics.position.z
+    });
 
     // 5. Update Cached State
     this.yaw = this.gmaPhysics.currentHeadingAngle;
@@ -934,8 +956,11 @@ export class Skier {
    * Call once per render frame to sync visuals and procedural character animation.
    */
   public renderUpdate(dt: number, input: BoarderInput): void {
-    const pos = this.rigidBody.translation();
-    this.root.position.set(pos.x, pos.y, pos.z);
+    this.root.position.set(
+      this.gmaPhysics.position.x,
+      this.gmaPhysics.position.y + this.cfg.sphereRadius,
+      this.gmaPhysics.position.z
+    );
 
     // If crashing, ragdoll limbs track the Verlet particles
     if (this.gmaPhysics.state === MovementState.Crashing && this.gmaPhysics.ragdoll.active) {

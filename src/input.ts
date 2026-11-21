@@ -1,31 +1,6 @@
 import { BoarderInput } from './boarder';
 
-export interface VehicleInputs {
-  forward: boolean;
-  backward: boolean;
-  left: boolean;
-  right: boolean;
-  brake: boolean;
-  handbrake?: boolean;
-  lowRange?: boolean;
-  steerAnalog?: number; // -1.0 (full left) to +1.0 (full right)
-  throttleAnalog?: number; // 0.0 to 1.0
-  brakeAnalog?: number; // 0.0 to 1.0
-}
-
 export class UnifiedInputController {
-  public inputs: VehicleInputs = {
-    forward: false,
-    backward: false,
-    left: false,
-    right: false,
-    brake: false,
-    lowRange: false,
-    steerAnalog: 0,
-    throttleAnalog: 0,
-    brakeAnalog: 0
-  };
-
   public onResetRequested?: () => void;
   public onFlyCamToggleRequested?: () => void;
   public onToggleSportRequested?: () => void;
@@ -33,8 +8,8 @@ export class UnifiedInputController {
   public onToggleReverseTurnRequested?: () => void;
 
   private keyState: { [code: string]: boolean } = {};
-  private prevButtonLB: boolean = false;
   private prevBoarderJump: boolean = false;
+  private prevStakeKey: boolean = false;
   private mouseDeltaX: number = 0;
   private mouseDeltaY: number = 0;
   private isPointerActive: boolean = false;
@@ -55,9 +30,7 @@ export class UnifiedInputController {
   private onKeyDown(e: KeyboardEvent): void {
     this.keyState[e.code] = true;
 
-    if (e.code === 'KeyL') {
-      this.inputs.lowRange = !this.inputs.lowRange;
-    } else if (e.code === 'KeyR') {
+    if (e.code === 'KeyR') {
       if (this.onResetRequested) this.onResetRequested();
     } else if (e.code === 'KeyC') {
       if (this.onFlyCamToggleRequested) this.onFlyCamToggleRequested();
@@ -74,87 +47,16 @@ export class UnifiedInputController {
     this.keyState[e.code] = false;
   }
 
-  public update(): VehicleInputs {
-    // 1. Keyboard baseline: strictly isolate S/ArrowDown (reverse/service brake) from Space (handbrake/park)
-    const kForward = !!(this.keyState['KeyW'] || this.keyState['ArrowUp']);
-    const kBackward = !!(this.keyState['KeyS'] || this.keyState['ArrowDown']);
-    const kLeft = !!(this.keyState['KeyA'] || this.keyState['ArrowLeft']);
-    const kRight = !!(this.keyState['KeyD'] || this.keyState['ArrowRight']);
-    const kHandbrake = !!this.keyState['Space'];
-
-    let steer = 0;
-    if (kLeft) steer -= 1.0;
-    if (kRight) steer += 1.0;
-
-    let throttle = kForward ? 1.0 : 0.0;
-    let reverseOrServiceBrake = kBackward ? 1.0 : 0.0;
-    let handbrake = kHandbrake;
-
-    // 2. HTML5 Gamepad API Poll (Xbox / PlayStation / Generic Standard Gamepads)
-    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-    for (const gp of gamepads) {
-      if (!gp || !gp.connected) continue;
-
-      // Smooth Steering with Left Stick X (axes[0])
-      const stickX = gp.axes[0] ?? 0;
-      if (Math.abs(stickX) > 0.05) {
-        // Deadzone compensation + progressive cubic curve for fine trail control
-        const sign = Math.sign(stickX);
-        const normX = (Math.abs(stickX) - 0.05) / 0.95;
-        steer = sign * (0.65 * normX + 0.35 * Math.pow(normX, 2.5));
-      }
-
-      // RT is W (accelerate forward): buttons[7] analog trigger
-      const rtValue = gp.buttons[7] ? gp.buttons[7].value : 0;
-      if (rtValue > 0.05) {
-        throttle = Math.max(throttle, rtValue);
-      }
-
-      // LT is S (service brake forward, reverse backward): buttons[6] analog trigger
-      const ltValue = gp.buttons[6] ? gp.buttons[6].value : 0;
-      if (ltValue > 0.05) {
-        reverseOrServiceBrake = Math.max(reverseOrServiceBrake, ltValue);
-      }
-
-      // RB is Handbrake: Right Bumper (buttons[5])
-      if (gp.buttons[5]?.pressed) {
-        handbrake = true;
-      }
-
-      // LB is High/Low Range shift toggle: Left Bumper (buttons[4])
-      const btnLB = !!gp.buttons[4]?.pressed;
-      if (btnLB && !this.prevButtonLB) {
-        this.inputs.lowRange = !this.inputs.lowRange;
-      }
-      this.prevButtonLB = btnLB;
-
-      // Reset vehicle on Select / Back / View button (buttons[8])
-      if (gp.buttons[8]?.pressed) {
-        if (this.onResetRequested) this.onResetRequested();
-      }
-
-      // Explicitly no camera control on Right Stick (axes[2], axes[3] ignored)
-      break;
-    }
-
-    this.inputs.forward = throttle > 0.05;
-    this.inputs.backward = reverseOrServiceBrake > 0.05 && !this.inputs.forward;
-    this.inputs.left = steer < -0.05;
-    this.inputs.right = steer > 0.05;
-    this.inputs.brake = handbrake;
-    this.inputs.steerAnalog = steer;
-    this.inputs.throttleAnalog = throttle;
-    this.inputs.brakeAnalog = reverseOrServiceBrake;
-
-    return this.inputs;
+  public update(): void {
+    // Called once per frame in main loop to sample frame inputs
   }
 
   public getBoarderInputs(): BoarderInput {
+    const kW = !!(this.keyState['KeyW'] || this.keyState['ArrowUp']);
     const kS = !!(this.keyState['KeyS'] || this.keyState['ArrowDown']);
     const kA = !!(this.keyState['KeyA'] || this.keyState['ArrowLeft']);
     const kD = !!(this.keyState['KeyD'] || this.keyState['ArrowRight']);
-    const kJump = !!this.keyState['Space'];
-    const kGrab = !!(this.keyState['KeyJ']);
+    const kSpace = !!this.keyState['Space'];
     const kSharp = !!(this.keyState['KeyQ'] || this.keyState['ShiftLeft'] || this.keyState['ShiftRight']);
     const kSlide = !!this.keyState['KeyE'];
     const kTackle = !!this.keyState['KeyF'];
@@ -166,12 +68,15 @@ export class UnifiedInputController {
     let left = kA && !bothPressed;
     let right = kD && !bothPressed;
 
-    // Edge-triggered jump (prevents continuous holding from spamming 333 Hz physics ticks)
-    let jump = kJump && !this.prevBoarderJump;
-    this.prevBoarderJump = kJump;
+    // Edge-triggered jump (prevents continuous holding from spamming ticks)
+    let jump = kSpace && !this.prevBoarderJump;
+    this.prevBoarderJump = kSpace;
 
-    let forward = false; // Pure Grand Mountain Adventure: no forward driving throttle
-    let grab = kGrab;
+    // Edge-triggered pole push (W / Up)
+    let forward = kW && !this.prevStakeKey;
+    this.prevStakeKey = kW;
+
+    let grab = false;
     let sharpTurn = kSharp;
     let slideTurn = kSlide;
     let tackle = kTackle;
@@ -180,10 +85,23 @@ export class UnifiedInputController {
     let trickFlipY: number | undefined = undefined;
     let trickRoll: number | undefined = undefined;
 
-    if (left && !right) steerX = -1.0;
-    else if (right && !left) steerX = 1.0;
-    else if (bothPressed) steerX = 0.0;
+    if (left && !right) {
+      steerX = -1.0;
+      trickSpinX = -1.0; // Left spin
+    } else if (right && !left) {
+      steerX = 1.0;
+      trickSpinX = 1.0; // Right spin
+    } else if (bothPressed) {
+      steerX = 0.0;
+    }
 
+    if (kW) {
+      trickFlipY = 1.0; // Frontflip
+    } else if (kS && !bothPressed) {
+      trickFlipY = -1.0; // Backflip
+    }
+
+    // HTML5 Gamepad API Poll (Xbox / DualShock / Switch Pro)
     const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
     for (const gp of gamepads) {
       if (!gp || !gp.connected) continue;
@@ -199,18 +117,32 @@ export class UnifiedInputController {
       const triggerR = (gp.buttons[7]?.value ?? 0) > 0.2;
       const triggerL = (gp.buttons[6]?.value ?? 0) > 0.2;
 
-      if (triggerR) slideTurn = true; // Right trigger for slide turn drift
-      if (triggerL || (gp.buttons[1]?.pressed ?? false) || stickY > 0.3) brake = true; // Left trigger / down for snowplow brake
-      if (gp.buttons[0]?.pressed) jump = true;
-      if (gp.buttons[1]?.pressed) slideTurn = true; // B button: Slide turn
-      if (gp.buttons[2]?.pressed) sharpTurn = true; // X button: Sharp turn
-      if (gp.buttons[3]?.pressed) tackle = true;    // Y button: Shoulder tackle / Pole slap
-      if (gp.buttons[4]?.pressed || gp.buttons[5]?.pressed) grab = true;
+      // GMA controller triggers & buttons:
+      // RT = Sharp carve / drift trigger
+      // LT = Snowplow brake
+      if (triggerR) slideTurn = true;
+      if (triggerL || (gp.buttons[1]?.pressed ?? false) || stickY > 0.35) brake = true;
+      if (gp.buttons[0]?.pressed) jump = true;       // A button
+      if (gp.buttons[1]?.pressed) slideTurn = true;  // B button
+      if (gp.buttons[2]?.pressed) sharpTurn = true;  // X button
+      if (gp.buttons[3]?.pressed) tackle = true;     // Y button
+      if (gp.buttons[4]?.pressed || gp.buttons[5]?.pressed) grab = true; // LB / RB
 
+      // Right Stick (Tricks in Air)
       const rStickX = gp.axes[2] ?? 0;
       const rStickY = gp.axes[3] ?? 0;
       if (Math.abs(rStickX) > 0.1) trickSpinX = rStickX;
       if (Math.abs(rStickY) > 0.1) trickFlipY = -rStickY;
+
+      // Quick hotkeys on D-pad:
+      // D-Pad Up: Toggle Sport (Skis <-> Snowboard)
+      if (gp.buttons[12]?.pressed && this.onToggleSportRequested) {
+        this.onToggleSportRequested();
+      }
+      // D-Pad Down: Reset/Respawn
+      if (gp.buttons[13]?.pressed && this.onResetRequested) {
+        this.onResetRequested();
+      }
       break;
     }
 
@@ -243,7 +175,7 @@ export class UnifiedInputController {
       this.mouseDeltaY = 0;
     }
 
-    // Controller Right Stick (axes[2] = yaw, axes[3] = pitch)
+    // Controller Right Stick Look when grounded
     const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
     for (const gp of gamepads) {
       if (!gp || !gp.connected) continue;
@@ -302,7 +234,6 @@ export class UnifiedInputController {
     if (kArrDown) pitchDelta += 1.0;
     if (kArrUp) pitchDelta -= 1.0;
 
-    // Mouse drag contribution
     yawDelta -= this.mouseDeltaX * 0.05;
     pitchDelta -= this.mouseDeltaY * 0.05;
     this.mouseDeltaX = 0;

@@ -262,7 +262,10 @@ class Game {
     const speed = this.player.speedKmh.toFixed(1);
     const altitude = pos.y.toFixed(1);
 
-    const sportName = `ALPINE SKIS (${this.player.gmaPhysics.hasTwintips ? 'Twin-Tip Freestyle' : 'Traditional Directional'})`;
+    const isSnowboard = this.player.gmaPhysics.sport === 'Snowboard';
+    const sportName = isSnowboard
+      ? 'FREESTYLE SNOWBOARD (Twin-Tip Deck)'
+      : `ALPINE SKIS (${this.player.gmaPhysics.hasTwintips ? 'Twin-Tip Freestyle' : 'Traditional Directional'})`;
 
     const isSwitch = this.player.gmaPhysics.isSwitchRiding();
     const switchBadge = isSwitch ? '<span style="color:#a855f7;font-weight:bold;margin-left:6px;">[SWITCH]</span>' : '';
@@ -317,11 +320,11 @@ class Game {
       ${carveBar}
       <div>Score: <strong style="color:#4ade80;">${trickEng.totalScore} pts</strong> ${trickEng.currentMultiplier > 1 ? `<span style="color:#facc15;font-weight:bold;">[${trickEng.currentMultiplier}x Combo]</span>` : ''}</div>
       <div style="margin-top:6px;border-top:1px dashed rgba(255,255,255,0.15);padding-top:4px;font-size:11px;color:#cbd5e1;">
-        <strong>GRAND MOUNTAIN ADVENTURE SKI CONTROLS:</strong><br />
-        • <strong>A/D / Stick</strong>: Steer & Skate Wiggle (Poles plant L/R to gain momentum) | <strong>S / LT</strong>: Snowplow Brake<br />
-        • <strong>Q / Shift / X</strong>: Sharp Carve (50°) | <strong>E / B / RT</strong>: Slide Turn Drift (+2m/s) | <strong>Space / A</strong>: Jump (4m/s pop)<br />
-        • <strong>T / G</strong>: Twintip Ski Toggle | <strong>Z</strong>: Switch Invert | <strong>F</strong>: Pole Slap / Tackle<br />
-        • <strong>1-6</strong>: Peaks Teleport | <strong>C</strong>: Fly-Cam | <strong>R</strong>: Reset at Summit
+        <strong>GRAND MOUNTAIN ADVENTURE CONTROLS:</strong><br />
+        • <strong>A / D (Left / Right)</strong>: Carve (Hard steer enters <strong>Sharp Carve</strong>, rapid counter-flick triggers <strong>Slide Drift</strong>)<br />
+        • <strong>Hold A + D (or S)</strong>: <strong>Snowplow Brake</strong> (or <strong>Hockey Drift Stop</strong> when cornering)<br />
+        • <strong>Double-Tap A / D (or W)</strong>: <strong>Double-Pole Push</strong> on flats | <strong>Space / Gamepad A</strong>: <strong>Jump Pop</strong><br />
+        • <strong>In Air</strong>: <strong>A / D</strong> Spins, <strong>W / S</strong> Front/Back Flips | <strong>G</strong>: Skis / Snowboard | <strong>T</strong>: Twintip Toggle | <strong>1-6</strong>: Peaks
       </div>
     `;
 

@@ -25,8 +25,16 @@ export interface ProcessedControls {
 
 export class ControlsProcessor {
   public reverseTurn: boolean = false;
-  private lastStakeTapTime: number = 0.0;
+
+  // Staking double-tap state
+  private lastStakeTapTime: number = 999.0;
   private wasStakePressed: boolean = false;
+
+  // Dual tap timing for jump
+  private lastLeftPressTime: number = 999.0;
+  private lastRightPressTime: number = 999.0;
+  private wasLeftPressed: boolean = false;
+  private wasRightPressed: boolean = false;
 
   constructor() {}
 
@@ -52,25 +60,50 @@ export class ControlsProcessor {
       outSteer = -outSteer;
     }
 
-    // 3. Modifiers & Triggers
-    const outSharp = rawInput.sharpTurn;
-    const outSlide = rawInput.slideTurn;
-    const outJump = rawInput.jump;
-    const outBrake = rawInput.brake;
-    const outTackle = rawInput.slapTackle;
+    // 3. GMA Gesture Recognizer (Pure Left/Right emergent mechanics)
+    const absSteer = Math.abs(outSteer);
 
-    // 4. Staking gesture (double-tap or explicit stake button)
-    let outStake = rawInput.stakePole;
     this.lastStakeTapTime += dt;
+    this.lastLeftPressTime += dt;
+    this.lastRightPressTime += dt;
 
-    const isTapEdge = rawInput.stakePole && !this.wasStakePressed;
-    if (isTapEdge) {
+    const isLeftPressed = rawSteer < -0.2;
+    const isRightPressed = rawSteer > 0.2;
+    const leftEdge = isLeftPressed && !this.wasLeftPressed;
+    const rightEdge = isRightPressed && !this.wasRightPressed;
+
+    if (leftEdge) this.lastLeftPressTime = 0.0;
+    if (rightEdge) this.lastRightPressTime = 0.0;
+
+    // A. Emergent Jump from Simultaneous Left + Right Tap (within 0.08s)
+    let emergentJump = false;
+    if ((leftEdge && this.lastRightPressTime < 0.08) || (rightEdge && this.lastLeftPressTime < 0.08)) {
+      emergentJump = true;
+    }
+
+    // B. Actions & Modifiers matching GMA Controls.cpp
+    const brakeWhileTurning = rawInput.brake && absSteer > 0.20;
+
+    // C. Emergent Staking (Double-tap Left or Right on flats)
+    let emergentStake = false;
+    if (leftEdge || rightEdge || (rawInput.stakePole && !this.wasStakePressed)) {
       if (this.lastStakeTapTime < 0.35) { // gap_time ~ 0.3s
-        outStake = true;
+        emergentStake = true;
       }
       this.lastStakeTapTime = 0.0;
     }
+
     this.wasStakePressed = rawInput.stakePole;
+    this.wasLeftPressed = isLeftPressed;
+    this.wasRightPressed = isRightPressed;
+
+    // 4. Consolidate Actions
+    const outSharp = rawInput.sharpTurn;
+    const outSlide = rawInput.slideTurn || brakeWhileTurning;
+    const outBrake = rawInput.brake && !brakeWhileTurning;
+    const outJump = rawInput.jump || emergentJump;
+    const outStake = rawInput.stakePole || emergentStake;
+    const outTackle = rawInput.slapTackle;
 
     return {
       steer: outSteer,
