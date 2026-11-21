@@ -120,6 +120,13 @@ export interface PlayerConfig {
   backward_friction: number;
   time_on_rough_ground_before_crash: number;
 
+  // Water Skiing
+  water_velocity_friction_x: number;
+  water_velocity_friction_z: number;
+  water_spring_k: number;
+  water_max_depth: number;
+  water_min_velocity: number;
+
   // Inclination dampening filters
   inclination_dampening_extra: number;
   inclination_dampening_regular: number;
@@ -236,6 +243,12 @@ export function createDefaultPlayerConfig(): PlayerConfig {
     backward_max_velocity: 12.0,
     backward_friction: 15.0,
     time_on_rough_ground_before_crash: 3.0,
+
+    water_velocity_friction_x: 0.57,
+    water_velocity_friction_z: 0.60,
+    water_spring_k: 0.035,
+    water_max_depth: -2.0,
+    water_min_velocity: 2.0,
 
     inclination_dampening_extra: 10000000,
     inclination_dampening_regular: 50000,

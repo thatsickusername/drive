@@ -55,11 +55,11 @@ export class AlpineMassif {
     const skirtTriangles = N * 4 * 2;
     const totalTriangles = gridTriangles + skirtTriangles;
 
-    const colorPiste = new THREE.Color(0xf4f8ff);
-    const colorPowder = new THREE.Color(0xeef3f8);
-    const colorSnowShadow = new THREE.Color(0xdce7f2); // Cooler leeward rim & wind-lip shadow tint
-    const colorRock = new THREE.Color(0x6e5c52);
-    const colorIce = new THREE.Color(0x7da3b8);
+    const colorPiste = new THREE.Color(0xffffff); // Groomed corduroy snow (crisp clean white track)
+    const colorPowder = new THREE.Color(0xcbe0f5); // Off-piste natural powder snow (distinct cool alpine blue-tinted)
+    const colorSnowShadow = new THREE.Color(0xb0cbdf); // Deep powder leeward shade & wind-lip shadow
+    const colorRock = new THREE.Color(0x38302a); // Dark exposed rugged granite bedrock
+    const colorIce = new THREE.Color(0x5288a3); // Glacial frozen lake blue ice
     const sunDir = new THREE.Vector3(160, 120, 90).normalize();
 
     // 6x6 chunks: cx in [-3, -2, -1, 0, 1, 2], cz in [-3, -2, -1, 0, 1, 2]
@@ -101,28 +101,31 @@ export class AlpineMassif {
             normals[pIdx + 1] = sample.normal.y;
             normals[pIdx + 2] = sample.normal.z;
 
-            // Vertex Color blending (Alvdalen natural snow-dominant alpine biome)
+            // Vertex Color blending (Clear visual distinction: PISTE, POWDER, ROCK, ICE)
             if (wy <= 0.5) {
               tempColor.copy(colorIce);
-            } else if (sample.slopeDeg > 42.0) {
-              const rockBlend = Math.min(1.0, (sample.slopeDeg - 42.0) / 8.0);
-              tempColor.copy(colorPowder).lerp(colorRock, rockBlend);
-            } else if (sample.surfaceType === 'PISTE') {
-              const blend = Math.max(0, Math.min(1, 1.0 - sample.pisteDist / 32.0));
+            } else if (sample.surfaceType === 'ROCK' || sample.slopeDeg > 38.0) {
+              const rockBlend = Math.min(1.0, Math.max(0.0, (sample.slopeDeg - 36.0) / 10.0));
+              tempColor.copy(colorPowder).lerp(colorRock, Math.max(0.70, rockBlend));
+            } else if (sample.surfaceType === 'PISTE' || sample.pisteDist < 26.0) {
+              const blend = Math.max(0, Math.min(1, 1.0 - sample.pisteDist / 26.0));
               tempColor.copy(colorPowder).lerp(colorPiste, blend);
+              // Subtle corduroy grooming ridge micro-shading
+              const corduroy = (Math.sin(wx * 2.2 + wz * 0.5) * 0.5 + 0.5) * 0.025 * blend;
+              tempColor.addScalar(corduroy);
             } else {
               tempColor.copy(colorPowder);
-              // Rim/horizon contrast on convex crests & leeward shadow tinting on wind lips
+              // Leeward shadow tinting on wind lips and convex powder rolls
               const nDotSun = sample.normal.x * sunDir.x + sample.normal.y * sunDir.y + sample.normal.z * sunDir.z;
               if (nDotSun < 0.35) {
                 const leewardFactor = Math.max(0, (0.35 - nDotSun) / 0.65);
-                tempColor.lerp(colorSnowShadow, leewardFactor * 0.45);
+                tempColor.lerp(colorSnowShadow, leewardFactor * 0.55);
               }
-              // Fall-line subtle wind-scoured normal micro-contrast
-              const windScour = Math.sin(wx * 0.45 + wz * 0.18) * 0.012;
+              // Fall-line subtle wind-scoured micro-contrast
+              const windScour = Math.sin(wx * 0.45 + wz * 0.18) * 0.015;
               tempColor.r = Math.min(1.0, Math.max(0.0, tempColor.r + windScour));
               tempColor.g = Math.min(1.0, Math.max(0.0, tempColor.g + windScour));
-              tempColor.b = Math.min(1.0, Math.max(0.0, tempColor.b + windScour * 1.25));
+              tempColor.b = Math.min(1.0, Math.max(0.0, tempColor.b + windScour * 1.3));
             }
 
             colors[pIdx + 0] = tempColor.r;

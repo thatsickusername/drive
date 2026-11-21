@@ -9,6 +9,7 @@ import {
 import { TrickScoringSystem, LandingQuality } from './TrickScoring';
 import { VerletRagdollSolver } from './VerletRagdoll';
 import { ControlsProcessor, InputState } from './ControlsProcessor';
+import { SurfaceType } from '../world/alpineHeightfield';
 
 const RAD2DEG = 180.0 / Math.PI;
 const GRAVITY = 9.81;
@@ -74,6 +75,7 @@ export class GmaPlayerPhysics {
 
   // Ragdoll recovery timer
   public crashRecoveryTimer: number = 0;
+  private prevJumpPressed: boolean = false;
 
   constructor(sport: SportType = SportType.Skis, hasTwintips: boolean = true) {
     this.sport = sport;
@@ -163,7 +165,7 @@ export class GmaPlayerPhysics {
     rawInput: InputState,
     groundHeight: number,
     groundNormal: THREE.Vector3,
-    isRoughGround: boolean = false
+    surfaceType: SurfaceType = 'POWDER'
   ): void {
     this.groundNormal.copy(groundNormal).normalize();
 
@@ -207,13 +209,13 @@ export class GmaPlayerPhysics {
         rawInput.trickFlipY,
         rawInput.trickRoll,
         groundHeight,
-        isRoughGround
+        surfaceType
       );
       this.subStepAccumulator -= subDt;
     }
 
     // Maintain ground contact elevation with snowdepth spring absorption when not airborne
-    if (this.state !== MovementState.Airborne) {
+    if (this.state !== MovementState.Airborne && this.state !== MovementState.WaterSkiing) {
       this.position.y = groundHeight + this.snowDepthPos;
     }
   }
@@ -230,10 +232,18 @@ export class GmaPlayerPhysics {
     flipInput: number,
     rollInput: number,
     groundHeight: number,
-    isRoughGround: boolean = false
+    surfaceType: SurfaceType = 'POWDER'
   ): void {
-    const groundedTolerance = (this.state === MovementState.Airborne) ? 0.12 : 0.40;
-    const onGround = this.position.y <= groundHeight + groundedTolerance;
+    // Water skiing check (GMA: when player enters water surface at y <= 0.0)
+    if (this.position.y <= 0.0 && groundHeight <= 0.0) {
+      this.updateWaterPhysics(dt, 0.0);
+      return;
+    }
+
+    // Cannot land while ascending upward in a jump (vy > 0.1) or during the initial takeoff window (airTime < 0.12s)
+    const isAscending = this.velocity.y > 0.1 || (this.state === MovementState.Airborne && this.airTime < 0.12);
+    const groundedTolerance = (this.state === MovementState.Airborne) ? 0.08 : 0.40;
+    const onGround = !isAscending && (this.position.y <= groundHeight + groundedTolerance);
 
     if (onGround) {
       if (this.state === MovementState.Airborne) {
@@ -306,13 +316,14 @@ export class GmaPlayerPhysics {
         stakePressed,
         tacklePressed,
         groundHeight,
-        isRoughGround
+        surfaceType
       );
     } else {
       this.state = MovementState.Airborne;
       this.airTime += dt;
       this.updateAirbornePhysics(dt, steerInput, flipInput, rollInput);
     }
+    this.prevJumpPressed = jumpPressed;
   }
 
   private updateGroundPhysics(
@@ -325,8 +336,9 @@ export class GmaPlayerPhysics {
     stakePressed: boolean,
     tacklePressed: boolean,
     groundHeight: number,
-    isRoughGround: boolean = false
+    surfaceType: SurfaceType = 'POWDER'
   ): void {
+    const isRoughGround = surfaceType === 'ROCK';
     // 0. Rough Ground Crash Timer
     if (isRoughGround) {
       this.roughGroundTimer += dt;
@@ -338,9 +350,26 @@ export class GmaPlayerPhysics {
       this.roughGroundTimer = 0.0;
     }
 
+    // Material-dependent properties (materials.yaml)
+    let materialFriction = 0.2; // Default Snow_Any_Normal
+    let depthOffset = -0.1;
+    if (surfaceType === 'PISTE') {
+      materialFriction = 0.1; // Snow_Any_Pist_Fast: 0.1
+      depthOffset = -0.05;
+    } else if (surfaceType === 'POWDER') {
+      materialFriction = 0.3; // Snow_Any_Powder: 0.3
+      depthOffset = -0.25; // Sinks into powder
+    } else if (surfaceType === 'ICE') {
+      materialFriction = 0.1; // Soft_Ice: 0.1
+      depthOffset = -0.05;
+    } else if (surfaceType === 'ROCK') {
+      materialFriction = 10.0; // Soft_Stone: 10.0
+      depthOffset = 0.0;
+    }
+
     // 1. Snowdepth spring suspension model
     // Spring constant: k = 20.0, Spring pull: 1.0, Velocity damping: 0.99, Position damping: 0.95
-    const targetElevation = groundHeight;
+    const targetElevation = groundHeight + depthOffset;
     const compression = targetElevation - (this.position.y - this.snowDepthPos);
     this.snowDepthVel += compression * this.config.snowdepth_vel_transfer * dt;
     const springForce = -this.config.snowdepth_spring_constant * this.snowDepthPos * this.config.snowdepth_spring_pull;
@@ -348,7 +377,7 @@ export class GmaPlayerPhysics {
     this.snowDepthVel *= Math.pow(this.config.snowdepth_vel_damp, dt / 0.003);
     this.snowDepthPos += this.snowDepthVel * dt;
     this.snowDepthPos *= Math.pow(this.config.snowdepth_pos_damp, dt / 0.003);
-    this.snowDepthPos = THREE.MathUtils.clamp(this.snowDepthPos, -0.35, 0.35);
+    this.snowDepthPos = THREE.MathUtils.clamp(this.snowDepthPos, -0.45, 0.35);
 
     // Apply ground contact elevation with snowdepth absorption
     this.position.y = groundHeight + this.snowDepthPos;
@@ -359,7 +388,7 @@ export class GmaPlayerPhysics {
     const curSpeed = this.velocity.length();
 
     if (this.state === MovementState.Standing || curSpeed < this.config.maxStandingVelocity) {
-      if (stakePressed || jumpPressed) {
+      if (stakePressed) {
         this.state = MovementState.Skiing;
         // Pushes player forward with standingToSkiingPushVelocity (3.0 m/s = 10.8 km/h)
         this.velocity.addScaledVector(this.forwardDir, this.config.standingToSkiingPushVelocity);
@@ -368,7 +397,7 @@ export class GmaPlayerPhysics {
       } else {
         this.state = MovementState.Standing;
       }
-    } else if (curSpeed < 0.2 && absSteer <= 0.05 && !jumpPressed && !stakePressed) {
+    } else if (curSpeed < 0.2 && absSteer <= 0.05 && !stakePressed) {
       this.state = MovementState.Standing;
     }
 
@@ -430,21 +459,19 @@ export class GmaPlayerPhysics {
         driftFriction = this.config.drift_velocity_slideturn.evaluate(normalizedSpeed) * this.config.drift_penalty_slideturn;
         this.currentDriftTime += dt;
 
-        // Slide turn boost at 0.5s mark (+2.0 m/s burst)
+        // Authentic GMA slide turn boost at 0.5s mark (+2.0 m/s forward burst)
         this.slideTurnBoostTimer += dt;
-        if (this.slideTurnBoostTimer >= this.config.slideturn_boost_timepoint) {
+        if (this.slideTurnBoostTimer >= this.config.slideturn_boost_timepoint && !this.slideTurnBoostTriggered) {
           this.velocity.addScaledVector(this.forwardDir, this.config.slideturn_boost_velocity);
-          this.slideTurnBoostTimer = 0.0;
+          this.slideTurnBoostTriggered = true;
         }
 
-        // Drift duration milestone bonuses
+        // Track drift duration milestones (awarded upon drift completion)
         const milestones = this.config.speedboost_drift_durations;
         if (
           this.driftMilestoneIndex < milestones.length &&
           this.currentDriftTime >= milestones[this.driftMilestoneIndex]
         ) {
-          const boostAdd = this.config.speedboost_drift_boosts[this.driftMilestoneIndex];
-          this.velocity.multiplyScalar(1.0 + boostAdd * 0.25);
           this.driftMilestoneIndex++;
         }
         break;
@@ -457,11 +484,18 @@ export class GmaPlayerPhysics {
         driftFriction = this.config.drift_velocity_overturn.evaluate(normalizedSpeed) * this.config.drift_penalty_overturn;
         break;
       }
-      default:
+      default: {
+        if (this.currentDriftTime > 0.0 && this.driftMilestoneIndex > 0) {
+          // Reward completed drift with milestone speedboost multiplier
+          const boostAdd = this.config.speedboost_drift_boosts[this.driftMilestoneIndex - 1];
+          this.velocity.multiplyScalar(1.0 + boostAdd * 0.20);
+        }
         this.slideTurnBoostTimer = 0.0;
+        this.slideTurnBoostTriggered = false;
         this.currentDriftTime = 0.0;
         this.driftMilestoneIndex = 0;
         break;
+      }
     }
 
     // 4. Update Heading with Heading Cap
@@ -541,41 +575,19 @@ export class GmaPlayerPhysics {
       effectiveFriction += this.config.breaking_power; // 2.5
     }
 
-    // Backward Riding Cap: Maximum backward speed is capped at 12 m/s with a friction of 15.0
+    // Backward Riding: Maximum backward speed is capped at 12 m/s with a friction of 15.0
     if (isSwitch) {
       effectiveFriction += this.config.backward_friction; // 15.0
     }
 
-    // Calibrated ground friction and drift drag (GMA base rate + drift drag scaling)
-    const baseFrictionRate = 0.18; // Calibrated snow glide drag (replaces 0.018)
-    const driftDrag = driftFriction * 25.0; // Scaled drift drag
-    const brakeFriction = brakePressed ? this.config.breaking_power * 1.2 : 0.0;
-    const switchFriction = (isSwitch && this.sport === SportType.Skis && !this.hasTwintips) ? 0.35 : 0.0;
-    const backwardFriction = isSwitch ? 0.30 : 0.0;
-    const totalFriction = (effectiveFriction * baseFrictionRate) + driftDrag + brakeFriction + switchFriction + backwardFriction;
+    // Authentic GMA total ground friction formula (PlayerPhysics.cpp:222-224 & materials.yaml)
+    const totalFriction = (effectiveFriction * materialFriction) + (driftFriction * 100.0);
     const damping = Math.exp(-totalFriction * dt);
     this.velocity.multiplyScalar(damping);
 
-    // Quadratic aerodynamic drag (enforces realistic terminal velocity ~32 m/s / 115 km/h on steep slopes)
-    const curSpeedGround = this.velocity.length();
-    if (curSpeedGround > 2.0) {
-      const aeroDragForce = 0.00075 * curSpeedGround * curSpeedGround;
-      const aeroFactor = Math.max(0.0, 1.0 - (aeroDragForce / curSpeedGround) * dt);
-      this.velocity.multiplyScalar(aeroFactor);
-    }
-
-    // Coulomb static rest lockout: prevents micro-drifting when stationary on gentle slopes
-    if (curSpeedGround < 0.15 && !jumpPressed && !stakePressed && absSteer <= 0.05) {
-      const downslopeForce = this._gParallel.length();
-      if (downslopeForce < 1.2) { // static friction threshold (~7 deg)
-        this.velocity.set(0, 0, 0);
-        this.state = MovementState.Standing;
-      }
-    }
-
-    // Hard backward speed clamp
+    // Hard backward speed clamp (player.collissions.backward.max_velocity: 12.0 m/s)
     if (isSwitch && this.velocity.length() > this.config.backward_max_velocity) {
-      this.velocity.setLength(this.config.backward_max_velocity); // 12 m/s
+      this.velocity.setLength(this.config.backward_max_velocity);
     }
 
     // 7. Align Velocity with Forward Ski/Board Direction (Edge Bite / Carving Grip)
@@ -585,15 +597,15 @@ export class GmaPlayerPhysics {
       const grip = (this.currentTurnType === TurnType.SlideTurn) ? 0.85 : 0.98;
       const targetDir = isSwitch ? this.forwardDir.clone().negate() : this.forwardDir.clone();
       const newVelDir = velDir.multiplyScalar(1.0 - grip).add(targetDir.multiplyScalar(grip)).normalize();
-      // Slight kinetic dissipation from ski edge displacement during carving
-      const carveBleed = (this.currentTurnType !== TurnType.None) ? Math.min(0.035, absSteer * 0.02) : 0.0;
-      this.velocity.copy(newVelDir).multiplyScalar(alignSpeed * (1.0 - carveBleed * dt));
+      this.velocity.copy(newVelDir).multiplyScalar(alignSpeed);
     }
 
-    // 8. Jump Execution
-    if (jumpPressed) {
-      this.velocity.y += this.config.jump_strength; // 4.0 m/s
+    // 8. Jump Execution (strictly edge-triggered one-shot impulse)
+    const isJumpTriggered = jumpPressed && !this.prevJumpPressed;
+    if (isJumpTriggered) {
+      this.velocity.y = Math.max(this.velocity.y, 0.0) + this.config.jump_strength; // +4.0 m/s
       this.state = MovementState.Airborne;
+      this.airTime = 0.0;
       if (this.currentTurnType === TurnType.SharpTurn) {
         this.sharpTurnSpinBoostActive = true;
       }
@@ -726,6 +738,33 @@ export class GmaPlayerPhysics {
     } else {
       // Skis pole slap has reach and works at any speed
       this.velocity.multiplyScalar(this.config.speedboost_npc_slapped);
+    }
+  }
+
+  /**
+   * Water skiing & hydroplaning dynamics (GMA player.yaml:120-123 & PlayerPhysics.cpp:281-303)
+   */
+  private updateWaterPhysics(dt: number, waterLevel: number = 0.0): void {
+    this.state = MovementState.WaterSkiing;
+
+    const depth = waterLevel - this.position.y;
+    if (depth > Math.abs(this.config.water_max_depth)) {
+      this.triggerCrash('Sank beneath water skiing limit (-2.0m)');
+      return;
+    }
+
+    // Buoyancy spring force
+    const buoyancy = depth * this.config.water_spring_k * 100.0;
+    this.velocity.y += (buoyancy - GRAVITY) * dt;
+
+    // Water surface friction drag
+    this.velocity.x *= (1.0 - this.config.water_velocity_friction_x * dt);
+    this.velocity.z *= (1.0 - this.config.water_velocity_friction_z * dt);
+
+    this.position.addScaledVector(this.velocity, dt);
+
+    if (this.velocity.length() < this.config.water_min_velocity && depth > 0.5) {
+      this.triggerCrash('Loss of hydroplaning velocity in water');
     }
   }
 }

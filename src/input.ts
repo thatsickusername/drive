@@ -34,6 +34,7 @@ export class UnifiedInputController {
 
   private keyState: { [code: string]: boolean } = {};
   private prevButtonLB: boolean = false;
+  private prevBoarderJump: boolean = false;
   private mouseDeltaX: number = 0;
   private mouseDeltaY: number = 0;
   private isPointerActive: boolean = false;
@@ -158,11 +159,18 @@ export class UnifiedInputController {
     const kSlide = !!this.keyState['KeyE'];
     const kTackle = !!this.keyState['KeyF'];
 
+    // Authentic GMA dual-control emergent behaviors (Left + Right):
+    // 1. Both Left and Right held simultaneously -> Snowplow Brake!
+    const bothPressed = kA && kD;
+    let brake = kS || bothPressed;
+    let left = kA && !bothPressed;
+    let right = kD && !bothPressed;
+
+    // Edge-triggered jump (prevents continuous holding from spamming 333 Hz physics ticks)
+    let jump = kJump && !this.prevBoarderJump;
+    this.prevBoarderJump = kJump;
+
     let forward = false; // Pure Grand Mountain Adventure: no forward driving throttle
-    let brake = kS;
-    let left = kA;
-    let right = kD;
-    let jump = kJump;
     let grab = kGrab;
     let sharpTurn = kSharp;
     let slideTurn = kSlide;
@@ -174,6 +182,7 @@ export class UnifiedInputController {
 
     if (left && !right) steerX = -1.0;
     else if (right && !left) steerX = 1.0;
+    else if (bothPressed) steerX = 0.0;
 
     const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
     for (const gp of gamepads) {

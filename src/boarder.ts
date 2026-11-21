@@ -390,25 +390,25 @@ export interface BoarderConfig {
 const DEFAULT_CONFIG: BoarderConfig = {
   mass: 75,
   sphereRadius: 0.45,
-  gravity: 14.5,
+  gravity: 9.81,               // Authentic GMA standard gravity (9.81 m/s^2)
   sidecutRadius: 8.2,          // Authentic Grand Mountain Adventure ~8m sidecut
-  baseFriction: 0.018,         // Slick, fast glide on groomed snow
-  powderFriction: 0.040,
+  baseFriction: 0.1,           // Authentic GMA groomed snow (Snow_Any_Pist_Fast: 0.1)
+  powderFriction: 0.3,         // Authentic GMA powder snow (Snow_Any_Powder: 0.3)
   edgeGrip: 12.0,
   gripTransfer: 0.85,          // High edge grip transfer during carve
   driftAngleThreshold: 0.645,  // ~37 degrees slip angle threshold in radians
-  carveSpeedBleed: 0.45,
-  brakeDrag: 9.0,
-  airDrag: 0.008,
+  carveSpeedBleed: 0.0,        // Non-dissipative clean edge carving in authentic GMA
+  brakeDrag: 2.5,              // Authentic GMA player.breaking.power: 2.5
+  airDrag: 0.006,              // Authentic GMA player.air_friction: 0.006
   tuckAirDrag: 0.004,
   pushAccel: 4.5,
   maxPushSpeed: 5.5,
-  turnRate: 3.0,
-  maxPumpBoost: 2.5,           // Boost impulse magnitude on rhythmic edge transition
+  turnRate: 5.0,               // Standard GMA turn rate curve base
+  maxPumpBoost: 2.0,           // Authentic GMA slide turn burst (+2.0 m/s)
   maxPumpSpeed: 14.0,          // Soft speed cap for rhythm pumping
   chargeRate: 2.4,             // Edge-pressure charge buildup rate during deep turns
-  jumpImpulseMin: 5.8,
-  jumpImpulseMax: 9.2,
+  jumpImpulseMin: 4.0,         // Authentic GMA player.jump_strenght: 4.0 m/s
+  jumpImpulseMax: 4.0,         // Authentic GMA player.jump_strenght: 4.0 m/s
 };
 
 export class Skier {
@@ -861,8 +861,8 @@ export class Skier {
     };
 
     // 3. Step 333.3 Hz GMA Player Physics
-    const isRoughGround = terrainSample ? terrainSample.surfaceType === 'ROCK' : false;
-    this.gmaPhysics.update(dt, inputState, groundElevation, this.smoothNormal, isRoughGround);
+    const surfaceType = terrainSample ? terrainSample.surfaceType : 'POWDER';
+    this.gmaPhysics.update(dt, inputState, groundElevation, this.smoothNormal, surfaceType);
 
     // 4. Sync Rapier RigidBody
     this.rigidBody.setTranslation(

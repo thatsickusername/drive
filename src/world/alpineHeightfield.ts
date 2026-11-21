@@ -137,11 +137,30 @@ export class AlpineHeightfield {
     const normal = new THREE.Vector3(hL - hR, 2.0 * eps, hD - hU).normalize();
     const slopeDeg = Math.acos(Math.min(1.0, Math.max(0.0, normal.y))) * (180.0 / Math.PI);
 
+    // Continuous Alvdalen Piste Networks (GMA groomed runs)
+    // 1. Central Groomed Expressway (valley centerline)
+    const centralPisteX = Math.sin(z * 0.0025) * 90.0;
+    const distCentral = Math.abs(x - centralPisteX);
+
+    // 2. West Flank Scenic Run
+    const westPisteX = -340.0 + Math.cos(z * 0.0032) * 80.0;
+    const distWest = Math.abs(x - westPisteX);
+
+    // 3. East Bowl Slalom Run
+    const eastPisteX = 340.0 + Math.sin(z * 0.0035) * 75.0;
+    const distEast = Math.abs(x - eastPisteX);
+
+    const pisteDist = Math.min(distCentral, distWest, distEast);
+    const isWithinPisteBoundary = (z >= -1050.0 && z <= 830.0);
+    const isPiste = isWithinPisteBoundary && (pisteDist < 26.0);
+
     let surfaceType: SurfaceType = 'POWDER';
     if (height <= 0.5) {
       surfaceType = 'ICE';
-    } else if (slopeDeg > 46.0) {
+    } else if (slopeDeg > 38.0) {
       surfaceType = 'ROCK';
+    } else if (isPiste) {
+      surfaceType = 'PISTE';
     } else {
       surfaceType = 'POWDER';
     }
@@ -149,7 +168,7 @@ export class AlpineHeightfield {
     return {
       height,
       surfaceType,
-      pisteDist: 999.0,
+      pisteDist,
       normal,
       slopeDeg
     };
