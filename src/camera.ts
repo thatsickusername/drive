@@ -61,7 +61,7 @@ export class DynamicCameraDirector {
     this.camera = camera;
     this.camera.fov = this.settings.fov;
     this.camera.near = GMACameraConfig.nearFar[0]; // 5.0m
-    this.camera.far = 1200.0; // Ensure entire mountain massif remains visible
+    this.camera.far = 3000.0; // Ensure entire mountain massif and sky dome remain visible
     this.camera.updateProjectionMatrix();
   }
 

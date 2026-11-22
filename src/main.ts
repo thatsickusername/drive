@@ -96,10 +96,14 @@ class Game {
       else if (e.code === 'Digit6') this.teleportTo(this.locations.halfpipe);
       else if (e.code === 'KeyV') this.cameraDirector.togglePerspectiveMode();
       else if (e.code === 'KeyO') this.cameraTuner.toggle();
+      else if (e.code === 'KeyH') this.toggleHUD();
     });
 
     // 8. Setup HUD & Camera Tuner Overlay
     this.setupHUD();
+    if (window.location.search.includes('nohud')) {
+      this.toggleHUD();
+    }
     this.cameraTuner = new CameraTunerOverlay(this.cameraDirector);
 
     // 9. Start Game Loop
@@ -233,15 +237,28 @@ class Game {
     }
 
     // 2. Update HUD (at 30Hz)
-    if (currentTime - this.lastHudUpdateTime >= 33) {
+    if (this.isHudVisible && currentTime - this.lastHudUpdateTime >= 33) {
       this.lastHudUpdateTime = currentTime;
       this.updateHUD();
     }
 
-    // 3. Render Scene
+    // 3. Update Day-Time Lighting, SkyDome, Snow Shimmer and Sparkles
+    const timeSec = currentTime * 0.001;
+    this.renderer.updateLighting(timeSec, this.player.mesh.position, this.renderer.camera.position);
+    this.massif.update(timeSec, this.renderer.camera.position);
+
+    // 4. Render Scene
     this.renderer.render();
 
     requestAnimationFrame(this.loop.bind(this));
+  }
+
+  private isHudVisible = true;
+  private toggleHUD(): void {
+    this.isHudVisible = !this.isHudVisible;
+    if (this.hudElement) {
+      this.hudElement.style.display = this.isHudVisible ? 'block' : 'none';
+    }
   }
 
   private updateHUD(): void {

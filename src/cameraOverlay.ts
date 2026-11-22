@@ -6,7 +6,7 @@ export class CameraTunerOverlay {
   private settings: CameraSettings;
   private panelElement!: HTMLElement;
   private toggleBtnElement!: HTMLElement;
-  private isVisible: boolean = true;
+  private isVisible: boolean = false;
 
   constructor(director: DynamicCameraDirector) {
     this.director = director;
@@ -42,7 +42,7 @@ export class CameraTunerOverlay {
       cursor: pointer;
       z-index: 200;
       box-shadow: 0 4px 16px rgba(0,0,0,0.4);
-      display: none;
+      display: block;
       transition: all 0.15s ease;
     `;
     this.toggleBtnElement.addEventListener('mouseenter', () => {
@@ -76,6 +76,7 @@ export class CameraTunerOverlay {
       z-index: 200;
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
       user-select: none;
+      display: none;
     `;
 
     this.panelElement.innerHTML = `

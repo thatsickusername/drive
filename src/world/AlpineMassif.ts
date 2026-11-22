@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { AlpineHeightfield, TerrainSample } from './alpineHeightfield';
+import { createSnowMaterial } from './SnowMaterial';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 export class AlpineMassif {
   public group: THREE.Group;
@@ -17,6 +19,7 @@ export class AlpineMassif {
   public readonly chunksAcross = 6;
 
   private terrainMaterial: THREE.MeshStandardMaterial;
+  public readonly sunDir = new THREE.Vector3(-190, 130, -50).normalize();
 
   constructor(
     private scene: THREE.Scene,
@@ -28,12 +31,10 @@ export class AlpineMassif {
 
     this.heightfield = new AlpineHeightfield();
 
-    this.terrainMaterial = new THREE.MeshStandardMaterial({
-      vertexColors: true,
-      roughness: 0.85,
-      metalness: 0.04,
-      flatShading: false,
-      side: THREE.FrontSide
+    this.terrainMaterial = createSnowMaterial({
+      sunDir: this.sunDir,
+      sunColor: new THREE.Color(0xffefe2),
+      shadowColor: new THREE.Color(0x94a6cf)
     });
 
     this.generateMassif();
@@ -56,11 +57,11 @@ export class AlpineMassif {
     const totalTriangles = gridTriangles + skirtTriangles;
 
     const colorPiste = new THREE.Color(0xffffff); // Groomed corduroy snow (crisp clean white track)
-    const colorPowder = new THREE.Color(0xcbe0f5); // Off-piste natural powder snow (distinct cool alpine blue-tinted)
-    const colorSnowShadow = new THREE.Color(0xb0cbdf); // Deep powder leeward shade & wind-lip shadow
-    const colorRock = new THREE.Color(0x38302a); // Dark exposed rugged granite bedrock
-    const colorIce = new THREE.Color(0x5288a3); // Glacial frozen lake blue ice
-    const sunDir = new THREE.Vector3(160, 120, 90).normalize();
+    const colorPowder = new THREE.Color(0xfcf6f2); // Off-piste natural powder snow (warm creamy peach-tinted white)
+    const colorSnowShadow = new THREE.Color(0x94a6cf); // Serene periwinkle lavender leeward shade
+    const colorRock = new THREE.Color(0x423832); // Warm exposed rugged granite bedrock
+    const colorIce = new THREE.Color(0x709ab8); // Glacial frozen lake blue ice
+    const sunDir = this.sunDir;
 
     // 6x6 chunks: cx in [-3, -2, -1, 0, 1, 2], cz in [-3, -2, -1, 0, 1, 2]
     for (let cx = -3; cx <= 2; cx++) {
@@ -257,40 +258,68 @@ export class AlpineMassif {
     this.group.add(this.iceMesh);
   }
 
-  // Spawn 14m - 24m tall alpine pine trees (roughly 10x player height to sell real mountain scale)
-  private spawnInstancedPines(): void {
-    // Build stylized alpine pine geometry: 3 tiered foliage cones + trunk
-    const pineGroup = new THREE.Group();
+  private createSnowyPineGeometry(): THREE.BufferGeometry {
+    const parts: THREE.BufferGeometry[] = [];
 
     // Trunk
-    const trunkGeom = new THREE.CylinderGeometry(0.35, 0.6, 4.0, 5);
+    const trunkGeom = new THREE.CylinderGeometry(0.35, 0.65, 4.0, 6);
     trunkGeom.translate(0, 2.0, 0);
+    const trunkCount = trunkGeom.attributes.position.count;
+    const trunkColors = new Float32Array(trunkCount * 3);
+    for (let i = 0; i < trunkCount; i++) {
+      trunkColors[i * 3 + 0] = 0.22;
+      trunkColors[i * 3 + 1] = 0.16;
+      trunkColors[i * 3 + 2] = 0.12;
+    }
+    trunkGeom.setAttribute('color', new THREE.BufferAttribute(trunkColors, 3));
+    parts.push(trunkGeom);
 
-    // Foliage cones (16m tall overall)
-    const cone1Geom = new THREE.ConeGeometry(4.2, 7.5, 6);
-    cone1Geom.translate(0, 6.5, 0);
+    // 3 tiered stylized foliage cones with thick white snow caps
+    const tiers = [
+      { radius: 4.5, height: 7.2, y: 5.8 },
+      { radius: 3.5, height: 6.2, y: 9.6 },
+      { radius: 2.3, height: 5.2, y: 13.5 }
+    ];
 
-    const cone2Geom = new THREE.ConeGeometry(3.2, 6.5, 6);
-    cone2Geom.translate(0, 10.5, 0);
+    for (const tier of tiers) {
+      const coneGeom = new THREE.ConeGeometry(tier.radius, tier.height, 6, 2);
+      coneGeom.translate(0, tier.y, 0);
+      const pos = coneGeom.attributes.position;
+      const count = pos.count;
+      const colors = new Float32Array(count * 3);
 
-    const cone3Geom = new THREE.ConeGeometry(2.0, 5.0, 6);
-    cone3Geom.translate(0, 14.2, 0);
+      for (let i = 0; i < count; i++) {
+        const py = pos.getY(i);
+        // Upper 62% of each cone tier is covered in thick snow
+        if (py > tier.y - tier.height * 0.12) {
+          colors[i * 3 + 0] = 0.98;
+          colors[i * 3 + 1] = 0.98;
+          colors[i * 3 + 2] = 1.0;
+        } else {
+          // Dark alpine evergreen needles underneath
+          colors[i * 3 + 0] = 0.10;
+          colors[i * 3 + 1] = 0.19;
+          colors[i * 3 + 2] = 0.14;
+        }
+      }
 
-    // Combine into single BufferGeometry
-    const trunkMesh = new THREE.Mesh(trunkGeom);
-    const c1 = new THREE.Mesh(cone1Geom);
-    const c2 = new THREE.Mesh(cone2Geom);
-    const c3 = new THREE.Mesh(cone3Geom);
-    pineGroup.add(trunkMesh, c1, c2, c3);
+      coneGeom.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      parts.push(coneGeom);
+    }
 
-    // Create a simplified unified tree geometry
-    const treeFoliageGeom = new THREE.ConeGeometry(3.8, 16.0, 6);
-    treeFoliageGeom.translate(0, 9.0, 0);
+    const merged = mergeGeometries(parts, false);
+    for (const p of parts) p.dispose();
+    return merged || new THREE.ConeGeometry(3.8, 16.0, 6);
+  }
+
+  // Spawn 14m - 24m tall alpine pine trees (roughly 10x player height to sell real mountain scale)
+  private spawnInstancedPines(): void {
+    const treeFoliageGeom = this.createSnowyPineGeometry();
 
     const treeMaterial = new THREE.MeshStandardMaterial({
-      color: 0x1a3325, // Deep winter alpine evergreen
-      roughness: 0.75,
-      metalness: 0.05
+      vertexColors: true,
+      roughness: 0.82,
+      metalness: 0.03
     });
 
     const maxTrees = 1200;
@@ -300,6 +329,54 @@ export class AlpineMassif {
 
     const dummy = new THREE.Object3D();
     let treeCount = 0;
+
+    // 1. Curated stand of snowy pines along the right ridge shoulder (matching acceptance criteria 1)
+    const canyonRightPines = [
+      // Row 1 (inner crest along the right slope)
+      { x: -228, z: -232, s: 0.85 },
+      { x: -224, z: -218, s: 0.82 },
+      { x: -220, z: -204, s: 0.80 },
+      { x: -216, z: -190, s: 0.82 },
+      { x: -212, z: -176, s: 0.78 },
+      { x: -208, z: -162, s: 0.76 },
+      { x: -204, z: -148, s: 0.74 },
+      // Row 2 (outer crest along the right slope)
+      { x: -238, z: -228, s: 0.86 },
+      { x: -234, z: -214, s: 0.84 },
+      { x: -230, z: -200, s: 0.82 },
+      { x: -226, z: -186, s: 0.80 },
+      { x: -222, z: -172, s: 0.78 },
+      { x: -218, z: -158, s: 0.76 },
+      { x: -214, z: -144, s: 0.74 },
+      // Left shoulder sparse trees on mid-slope (matching reference)
+      { x: -164, z: -230, s: 0.65 },
+      { x: -168, z: -218, s: 0.68 },
+      { x: -172, z: -206, s: 0.64 },
+      { x: -176, z: -194, s: 0.60 },
+      // Distant ridge crest pines
+      { x: -80, z: -160, s: 0.70 },
+      { x: -68, z: -148, s: 0.68 },
+      { x: -55, z: -135, s: 0.72 },
+      { x: -42, z: -122, s: 0.70 },
+      { x: -30, z: -110, s: 0.68 },
+      { x: -18, z: -98, s: 0.65 },
+      // Distant summit crest pines
+      { x: -160, z: -380, s: 0.55 },
+      { x: -150, z: -375, s: 0.58 },
+      { x: -140, z: -370, s: 0.52 },
+      { x: -130, z: -365, s: 0.56 },
+      { x: -120, z: -360, s: 0.54 }
+    ];
+
+    for (const p of canyonRightPines) {
+      if (treeCount >= maxTrees) break;
+      const sample = this.heightfield.sampleTerrain(p.x, p.z);
+      dummy.position.set(p.x, sample.height - 0.4, p.z);
+      dummy.rotation.y = Math.sin(p.x * 2.1 + p.z * 4.3) * Math.PI;
+      dummy.scale.set(p.s * 0.95, p.s * 1.05, p.s * 0.95);
+      dummy.updateMatrix();
+      this.treeInstancedMesh.setMatrixAt(treeCount++, dummy.matrix);
+    }
 
     // Deterministic organic grove clustering (natural pine stands instead of grid lines)
     const groveCount = 55;
@@ -313,6 +390,10 @@ export class AlpineMassif {
       const gDist = 180.0 + Math.sqrt(g / groveCount) * 820.0;
       const gcx = Math.cos(gAngle) * gDist;
       const gcz = -350.0 + (g / groveCount) * 1150.0 + (Math.sin(g * 7.1) * 90.0);
+
+      // Exclude canyon overlook area around spawn 4 so curated trees define the scene cleanly
+      const distToSpawn4 = Math.hypot(gcx - (-190.0), gcz - (-245.0));
+      if (distToSpawn4 < 200.0) continue;
 
       // Check grove center validity
       const centerSample = this.heightfield.sampleTerrain(gcx, gcz);
@@ -336,6 +417,8 @@ export class AlpineMassif {
         const subDist = Math.sqrt((t + 0.5) / treesPerGrove) * groveRadius;
         const tx = gcx + Math.cos(subAngle) * subDist;
         const tz = gcz + Math.sin(subAngle) * subDist;
+
+        if (Math.hypot(tx - (-190.0), tz - (-245.0)) < 180.0) continue;
 
         const sample = this.heightfield.sampleTerrain(tx, tz);
 
@@ -395,5 +478,11 @@ export class AlpineMassif {
     }
 
     this.scene.remove(this.group);
+  }
+
+  public update(time: number, cameraPos: THREE.Vector3): void {
+    if (this.terrainMaterial && this.terrainMaterial.userData && this.terrainMaterial.userData.update) {
+      this.terrainMaterial.userData.update(time, this.sunDir, cameraPos);
+    }
   }
 }

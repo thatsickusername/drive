@@ -81,19 +81,14 @@ export interface CameraSettings {
 export const defaultCameraSettings: CameraSettings = {
   mode: 'BEHIND',              // Default behind chase camera
   fov: 60.0,
-  behindDistance: 10,        // User custom zoom distance
-  // [NEW - commented out for testing]
-  // behindPitch: 22.0,           // Lower resting angle (deg)
-  // behindMinPitch: 8.0,         // Lower angle limit
-  // behindMaxPitch: 28.0,        // Strict upper pitch cap (deg)
-  // [OLD - reverted for testing]
-  behindPitch: 32.5,           // User custom resting angle (deg)
+  behindDistance: 8.4,         // Optimal distance matching acceptance criteria
+  behindPitch: 22.5,           // Optimal low cinematic chase pitch (deg)
   behindMinPitch: 10.0,        // Lower angle limit
   behindMaxPitch: 45.0,        // Upper angle limit
-  behindLookAheadDist: 4.5,    // User custom look-ahead lead (m)
+  behindLookAheadDist: 4.8,    // Look-ahead lead (m)
   behindLookAheadHeight: 1.4,  // Look-ahead target height (m)
-  behindFollowSpeed: 2.5,      // User custom heading smoothing speed
-  topdownDistance: 38.0,       // User custom topdown zoom (m)
-  topdownPitch: 48.0,          // User custom topdown pitch (deg)
+  behindFollowSpeed: 2.5,      // Heading smoothing speed
+  topdownDistance: 38.0,       // Topdown zoom (m)
+  topdownPitch: 48.0,          // Topdown pitch (deg)
   mouseSensitivity: 1.0,
 };

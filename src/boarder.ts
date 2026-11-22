@@ -514,6 +514,11 @@ export class Skier {
     this.root = new THREE.Group();
     this.root.add(this.visualRoot);
     this.buildCharacterMesh();
+    this.root.traverse((c) => {
+      if ((c as THREE.Mesh).isMesh) {
+        c.castShadow = true;
+      }
+    });
     scene.add(this.root);
 
     // 3. Build Snow Spray Particle System & Trail Ribbon

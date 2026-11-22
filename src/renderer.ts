@@ -1,21 +1,27 @@
 import * as THREE from 'three';
+import { SkyDome } from './world/SkyDome';
+import { AirborneSparkles } from './world/AirborneSparkles';
 
 export class Renderer {
   public scene: THREE.Scene;
   public camera: THREE.PerspectiveCamera;
   public renderer: THREE.WebGLRenderer;
   public dirLight: THREE.DirectionalLight;
+  public skyDome: SkyDome;
+  public sparkles: AirborneSparkles;
+  public readonly sunDir = new THREE.Vector3(-190, 130, -50).normalize();
 
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xdcecf8); // Crisp alpine winter sky
-    this.scene.fog = new THREE.Fog(0xdcecf8, 150, 900);
+    // Warm morning horizon peach background & soft atmospheric fog
+    this.scene.background = new THREE.Color(0xfde2d4);
+    this.scene.fog = new THREE.Fog(0xfbd8cd, 140, 1100);
 
     this.camera = new THREE.PerspectiveCamera(
       60,
       window.innerWidth / window.innerHeight,
       0.1,
-      2000
+      3000
     );
     this.camera.position.set(0, 10, -20);
 
@@ -28,33 +34,58 @@ export class Renderer {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.12;
 
-    // Low-angle warm directional sun (#fff1d6)
-    this.dirLight = new THREE.DirectionalLight(0xfff1d6, 1.35);
-    this.dirLight.position.set(160, 120, 90);
+    // Golden-peach morning sun (#fff0e4) positioned to cast forward-left shadows across the slope
+    this.dirLight = new THREE.DirectionalLight(0xfff0e4, 2.0);
+    this.dirLight.position.set(-190, 130, -50);
     this.dirLight.castShadow = true;
     this.dirLight.shadow.mapSize.width = 2048;
     this.dirLight.shadow.mapSize.height = 2048;
     this.dirLight.shadow.camera.near = 1;
     this.dirLight.shadow.camera.far = 450;
-    const shadowD = 120;
+    const shadowD = 100;
     this.dirLight.shadow.camera.left = -shadowD;
     this.dirLight.shadow.camera.right = shadowD;
     this.dirLight.shadow.camera.top = shadowD;
     this.dirLight.shadow.camera.bottom = -shadowD;
-    this.dirLight.shadow.bias = -0.0004;
+    this.dirLight.shadow.bias = -0.0002;
     this.scene.add(this.dirLight);
+    this.scene.add(this.dirLight.target);
 
-    // Cool blue hemisphere light (#6ea8e5) for crisp alpine blue shadow fill
-    const hemiLight = new THREE.HemisphereLight(0x6ea8e5, 0x7a94ab, 0.70);
+    // Serene periwinkle-lavender sky (#8698ca) and soft peach ground bounce (#fed8cc)
+    const hemiLight = new THREE.HemisphereLight(0x8698ca, 0xfed8cc, 0.90);
     this.scene.add(hemiLight);
 
-    // Subtle leeward rim fill light to pop kickers, wind lips and convex crests from 40-60m
-    const fillLight = new THREE.DirectionalLight(0xb8cce0, 0.28);
-    fillLight.position.set(-140, 90, -80);
+    // Warm subtle fill light
+    const fillLight = new THREE.DirectionalLight(0xeac8be, 0.16);
+    fillLight.position.set(130, 80, 80);
     this.scene.add(fillLight);
 
+    // Stylized gradient SkyDome & floating diamond sparkles
+    this.skyDome = new SkyDome();
+    this.scene.add(this.skyDome.mesh);
+
+    this.sparkles = new AirborneSparkles();
+    this.scene.add(this.sparkles.points);
+
     window.addEventListener('resize', this.onWindowResize.bind(this));
+  }
+
+  public updateLighting(time: number, targetPos: THREE.Vector3, cameraPos: THREE.Vector3): void {
+    // Keep high-resolution shadow map centered on player
+    this.dirLight.target.position.copy(targetPos);
+    this.dirLight.position.set(
+      targetPos.x - 190,
+      targetPos.y + 130,
+      targetPos.z - 50
+    );
+    this.dirLight.target.updateMatrixWorld();
+    this.dirLight.updateMatrixWorld();
+
+    this.skyDome.update(time, cameraPos);
+    this.sparkles.update(time, targetPos);
   }
 
   private onWindowResize(): void {
