@@ -23,3 +23,9 @@
 
 ## 4. Compaction & Token Defense
 - If a terminal output exceeds 50 lines, stop further command chaining, summarize the failure trace, and await input instead of retrying automatically.
+
+## 5. Vision-Guided Verification Loop
+- **Visual Acceptance Rule:** For UI/visual tasks or when reference assets exist in `vision/reference/<target_name>.<ext>`:
+  1. Execute `node vision/capture.mjs --target <target_name>` (auto-generates `<target_name>_v<N>.png` and mirrors to `<target_name>_latest.png`).
+  2. Call `read_file` on `vision/screenshots/<target_name>_latest.png` (and the reference in `vision/reference/`).
+  3. Visually cross-check layout, elements, contrast, and alignment before completing the task.
