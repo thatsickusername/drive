@@ -101,4 +101,8 @@ export class AirborneSparkles {
     this.material.uniforms.uTime.value = time;
     this.material.uniforms.uCenter.value.copy(center);
   }
+
+  public setColor(color: THREE.Color): void {
+    this.material.uniforms.uColor.value.copy(color);
+  }
 }

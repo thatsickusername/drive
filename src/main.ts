@@ -18,6 +18,7 @@ class Game {
 
   private hudElement!: HTMLElement;
   private trickBannerElement!: HTMLElement;
+  private lightingToggleElement!: HTMLElement;
   private lastTime: number = 0;
   private lastHudUpdateTime: number = 0;
 
@@ -97,13 +98,20 @@ class Game {
       else if (e.code === 'KeyV') this.cameraDirector.togglePerspectiveMode();
       else if (e.code === 'KeyO') this.cameraTuner.toggle();
       else if (e.code === 'KeyH') this.toggleHUD();
+      else if (e.code === 'KeyL' || e.code === 'KeyN') this.toggleLighting();
     });
 
-    // 8. Setup HUD & Camera Tuner Overlay
+    // 8. Setup HUD, Lighting Toggle Switch & Camera Tuner Overlay
     this.setupHUD();
+    this.setupLightingToggle();
     if (window.location.search.includes('nohud')) {
       this.toggleHUD();
     }
+    if (window.location.search.includes('night') || window.location.search.includes('lighting=night')) {
+      this.renderer.setLightingMode('night', true);
+      this.updateLightingToggleUI();
+    }
+    (window as any).game = this;
     this.cameraTuner = new CameraTunerOverlay(this.cameraDirector);
 
     // 9. Start Game Loop
@@ -242,10 +250,16 @@ class Game {
       this.updateHUD();
     }
 
-    // 3. Update Day-Time Lighting, SkyDome, Snow Shimmer and Sparkles
+    // 3. Update Day/Night Lighting, SkyDome, Snow Shimmer and Sparkles
     const timeSec = currentTime * 0.001;
-    this.renderer.updateLighting(timeSec, this.player.mesh.position, this.renderer.camera.position);
-    this.massif.update(timeSec, this.renderer.camera.position);
+    this.renderer.updateLighting(timeSec, this.player.mesh.position, this.renderer.camera.position, delta);
+    this.massif.update(
+      timeSec,
+      this.renderer.camera.position,
+      this.renderer.nightFactor,
+      this.renderer.currentSunColor,
+      this.renderer.currentShadowColor
+    );
 
     // 4. Render Scene
     this.renderer.render();
@@ -253,11 +267,111 @@ class Game {
     requestAnimationFrame(this.loop.bind(this));
   }
 
+  private setupLightingToggle(): void {
+    const existing = document.getElementById('lighting-toggle-container');
+    if (existing) existing.remove();
+
+    this.lightingToggleElement = document.createElement('div');
+    this.lightingToggleElement.id = 'lighting-toggle-container';
+    this.lightingToggleElement.style.cssText = `
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(15, 23, 42, 0.82);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 24px;
+      padding: 6px 14px;
+      cursor: pointer;
+      user-select: none;
+      z-index: 1000;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.40);
+      transition: all 0.25s ease;
+      font-family: 'Segoe UI', Roboto, sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      color: #e2e8f0;
+    `;
+
+    this.lightingToggleElement.innerHTML = `
+      <div id="toggle-track" style="
+        position: relative;
+        width: 44px;
+        height: 24px;
+        background: #334155;
+        border-radius: 12px;
+        transition: background 0.3s ease;
+      ">
+        <div id="toggle-thumb" style="
+          position: absolute;
+          top: 2px;
+          left: 2px;
+          width: 20px;
+          height: 20px;
+          background: #f8fafc;
+          border-radius: 50%;
+          transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+          box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+        "></div>
+      </div>
+      <span id="toggle-label" style="min-width: 65px; letter-spacing: 0.2px;">☀️ Day</span>
+      <span style="font-size: 10px; opacity: 0.6; padding: 2px 6px; background: rgba(255,255,255,0.12); border-radius: 6px;">L</span>
+    `;
+
+    this.lightingToggleElement.addEventListener('click', () => {
+      this.toggleLighting();
+    });
+
+    this.lightingToggleElement.addEventListener('mouseenter', () => {
+      this.lightingToggleElement.style.borderColor = 'rgba(255, 255, 255, 0.45)';
+      this.lightingToggleElement.style.transform = 'translateY(-1px)';
+    });
+
+    this.lightingToggleElement.addEventListener('mouseleave', () => {
+      this.lightingToggleElement.style.borderColor = 'rgba(255, 255, 255, 0.22)';
+      this.lightingToggleElement.style.transform = 'translateY(0)';
+    });
+
+    document.body.appendChild(this.lightingToggleElement);
+    this.updateLightingToggleUI();
+  }
+
+  public toggleLighting(): void {
+    this.renderer.toggleLightingMode();
+    this.updateLightingToggleUI();
+  }
+
+  public updateLightingToggleUI(): void {
+    const isNight = this.renderer.isNightMode;
+    const track = document.getElementById('toggle-track');
+    const thumb = document.getElementById('toggle-thumb');
+    const label = document.getElementById('toggle-label');
+    if (track && thumb && label) {
+      if (isNight) {
+        track.style.background = '#2563eb';
+        thumb.style.transform = 'translateX(20px)';
+        thumb.style.background = '#e0f2fe';
+        label.innerHTML = '🌙 Night';
+      } else {
+        track.style.background = '#334155';
+        thumb.style.transform = 'translateX(0px)';
+        thumb.style.background = '#f8fafc';
+        label.innerHTML = '☀️ Day';
+      }
+    }
+  }
+
   private isHudVisible = true;
   private toggleHUD(): void {
     this.isHudVisible = !this.isHudVisible;
     if (this.hudElement) {
       this.hudElement.style.display = this.isHudVisible ? 'block' : 'none';
+    }
+    if (this.lightingToggleElement) {
+      this.lightingToggleElement.style.display = this.isHudVisible ? 'flex' : 'none';
     }
   }
 

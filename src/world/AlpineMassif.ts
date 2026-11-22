@@ -480,9 +480,15 @@ export class AlpineMassif {
     this.scene.remove(this.group);
   }
 
-  public update(time: number, cameraPos: THREE.Vector3): void {
+  public update(
+    time: number,
+    cameraPos: THREE.Vector3,
+    nightFactor: number = 0.0,
+    sunColor?: THREE.Color,
+    shadowColor?: THREE.Color
+  ): void {
     if (this.terrainMaterial && this.terrainMaterial.userData && this.terrainMaterial.userData.update) {
-      this.terrainMaterial.userData.update(time, this.sunDir, cameraPos);
+      this.terrainMaterial.userData.update(time, this.sunDir, cameraPos, nightFactor, sunColor, shadowColor);
     }
   }
 }

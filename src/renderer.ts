@@ -7,15 +7,42 @@ export class Renderer {
   public camera: THREE.PerspectiveCamera;
   public renderer: THREE.WebGLRenderer;
   public dirLight: THREE.DirectionalLight;
+  public hemiLight: THREE.HemisphereLight;
+  public fillLight: THREE.DirectionalLight;
   public skyDome: SkyDome;
   public sparkles: AirborneSparkles;
   public readonly sunDir = new THREE.Vector3(-190, 130, -50).normalize();
 
+  public isNightMode: boolean = false;
+  public nightFactor: number = 0.0;
+  private targetNightFactor: number = 0.0;
+
+  // Day Lighting Palette (Acceptance Criteria 1)
+  public readonly daySunColor = new THREE.Color(0xfff6ec);
+  public readonly dayShadowColor = new THREE.Color(0x9ca9cb);
+  public readonly dayHemiSky = new THREE.Color(0x9eb3dc);
+  public readonly dayHemiGround = new THREE.Color(0xfceee5);
+  public readonly dayFog = new THREE.Color(0xf8ebe6);
+  public readonly dayBg = new THREE.Color(0xf6eef3);
+
+  // Night Lighting Palette (Acceptance Criteria 2 - Soft silvery moonlight)
+  public readonly nightMoonColor = new THREE.Color(0xd0e2ff);
+  public readonly nightShadowColor = new THREE.Color(0x42547a);
+  public readonly nightHemiSky = new THREE.Color(0x283a62);
+  public readonly nightHemiGround = new THREE.Color(0x485c82);
+  public readonly nightFog = new THREE.Color(0x36486e);
+  public readonly nightBg = new THREE.Color(0x192744);
+
+  public readonly currentSunColor = new THREE.Color();
+  public readonly currentShadowColor = new THREE.Color();
+
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
-    // Soft pastel daytime alpine background & atmospheric fog
     this.scene.background = new THREE.Color(0xf6eef3);
     this.scene.fog = new THREE.Fog(0xf8ebe6, 180, 1500);
+
+    this.currentSunColor.copy(this.daySunColor);
+    this.currentShadowColor.copy(this.dayShadowColor);
 
     this.camera = new THREE.PerspectiveCamera(
       60,
@@ -37,7 +64,7 @@ export class Renderer {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
 
-    // Soft warm daytime sun (#fff6ec) positioned to cast forward-left shadows across the slope
+    // Directional celestial light (Sun by day, Moon by night)
     this.dirLight = new THREE.DirectionalLight(0xfff6ec, 2.05);
     this.dirLight.position.set(-190, 130, -50);
     this.dirLight.castShadow = true;
@@ -54,14 +81,14 @@ export class Renderer {
     this.scene.add(this.dirLight);
     this.scene.add(this.dirLight.target);
 
-    // Soft pastel periwinkle sky (#9eb3dc) and pale champagne bounce (#fceee5)
-    const hemiLight = new THREE.HemisphereLight(0x9eb3dc, 0xfceee5, 0.88);
-    this.scene.add(hemiLight);
+    // Ambient hemisphere light
+    this.hemiLight = new THREE.HemisphereLight(0x9eb3dc, 0xfceee5, 0.88);
+    this.scene.add(this.hemiLight);
 
     // Subtle neutral fill light
-    const fillLight = new THREE.DirectionalLight(0xdedbe0, 0.12);
-    fillLight.position.set(130, 80, 80);
-    this.scene.add(fillLight);
+    this.fillLight = new THREE.DirectionalLight(0xdedbe0, 0.12);
+    this.fillLight.position.set(130, 80, 80);
+    this.scene.add(this.fillLight);
 
     // Stylized gradient SkyDome & floating diamond sparkles
     this.skyDome = new SkyDome();
@@ -73,7 +100,51 @@ export class Renderer {
     window.addEventListener('resize', this.onWindowResize.bind(this));
   }
 
-  public updateLighting(time: number, targetPos: THREE.Vector3, cameraPos: THREE.Vector3): void {
+  public setLightingMode(mode: 'day' | 'night', instant: boolean = false): void {
+    this.isNightMode = mode === 'night';
+    this.targetNightFactor = this.isNightMode ? 1.0 : 0.0;
+    if (instant) {
+      this.nightFactor = this.targetNightFactor;
+      this.applyLightingLerp(this.nightFactor);
+    }
+  }
+
+  public toggleLightingMode(): 'day' | 'night' {
+    this.setLightingMode(this.isNightMode ? 'day' : 'night');
+    return this.isNightMode ? 'night' : 'day';
+  }
+
+  public applyLightingLerp(f: number): void {
+    this.currentSunColor.lerpColors(this.daySunColor, this.nightMoonColor, f);
+    this.currentShadowColor.lerpColors(this.dayShadowColor, this.nightShadowColor, f);
+
+    this.dirLight.color.copy(this.currentSunColor);
+    this.dirLight.intensity = THREE.MathUtils.lerp(2.05, 1.62, f);
+
+    this.hemiLight.color.lerpColors(this.dayHemiSky, this.nightHemiSky, f);
+    this.hemiLight.groundColor.lerpColors(this.dayHemiGround, this.nightHemiGround, f);
+    this.hemiLight.intensity = THREE.MathUtils.lerp(0.88, 0.82, f);
+
+    this.fillLight.color.lerpColors(new THREE.Color(0xdedbe0), new THREE.Color(0x304260), f);
+    this.fillLight.intensity = THREE.MathUtils.lerp(0.12, 0.10, f);
+
+    this.scene.background = (new THREE.Color().copy(this.dayBg)).lerp(this.nightBg, f);
+    if (this.scene.fog instanceof THREE.Fog) {
+      this.scene.fog.color.lerpColors(this.dayFog, this.nightFog, f);
+      this.scene.fog.near = THREE.MathUtils.lerp(180, 130, f);
+      this.scene.fog.far = THREE.MathUtils.lerp(1500, 1420, f);
+    }
+    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.08, 1.04, f);
+    this.skyDome.setNightFactor(f);
+    this.sparkles.setColor(new THREE.Color(0xffeedd).lerp(new THREE.Color(0xcbe0ff), f));
+  }
+
+  public updateLighting(time: number, targetPos: THREE.Vector3, cameraPos: THREE.Vector3, delta: number = 0.016): void {
+    if (Math.abs(this.nightFactor - this.targetNightFactor) > 0.0005) {
+      this.nightFactor = THREE.MathUtils.damp(this.nightFactor, this.targetNightFactor, 7.5, delta);
+      this.applyLightingLerp(this.nightFactor);
+    }
+
     // Keep high-resolution shadow map centered on player
     this.dirLight.target.position.copy(targetPos);
     this.dirLight.position.set(

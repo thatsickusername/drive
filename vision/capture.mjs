@@ -125,17 +125,24 @@ async function run() {
     const page = await context.newPage();
     page.on('console', msg => console.log('[browser]', msg.type(), msg.text()));
     page.on('pageerror', err => console.error('[browser error]', err));
-    console.log('[vision] Navigating to http://localhost:5173?nohud=1...');
-    await page.goto('http://localhost:5173?nohud=1', { waitUntil: 'networkidle' });
+    const isNight = target.includes('2') || scenario.includes('night') || getArg('lighting') === 'night';
+    const navUrl = `http://localhost:5173?nohud=1${isNight ? '&lighting=night' : ''}`;
+    console.log(`[vision] Navigating to ${navUrl}...`);
+    await page.goto(navUrl, { waitUntil: 'networkidle' });
 
     await page.waitForSelector('#game-canvas', { timeout: 10000 });
     console.log('[vision] Canvas loaded. Waiting for 3D scene initialization...');
-    await page.evaluate(() => {
+    await page.evaluate((night) => {
       const btn = document.getElementById('camera-tuner-toggle-btn');
       if (btn) btn.style.display = 'none';
       const hud = document.getElementById('hud');
       if (hud) hud.style.display = 'none';
-    });
+      const toggle = document.getElementById('lighting-toggle-container');
+      if (toggle) toggle.style.display = 'none';
+      if (night && window.game) {
+        window.game.renderer.setLightingMode('night', true);
+      }
+    }, isNight);
     await page.waitForTimeout(1500);
 
     // Apply scenario

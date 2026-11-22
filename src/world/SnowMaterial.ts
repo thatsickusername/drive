@@ -16,7 +16,8 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
     uSunDir: { value: sunDir.clone() },
     uSunColor: { value: sunColor.clone() },
     uShadowColor: { value: shadowColor.clone() },
-    uCameraPos: { value: new THREE.Vector3() }
+    uCameraPos: { value: new THREE.Vector3() },
+    uNightFactor: { value: 0.0 }
   };
 
   const material = new THREE.MeshStandardMaterial({
@@ -33,6 +34,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
     shader.uniforms.uSunColor = uniforms.uSunColor;
     shader.uniforms.uShadowColor = uniforms.uShadowColor;
     shader.uniforms.uCameraPos = uniforms.uCameraPos;
+    shader.uniforms.uNightFactor = uniforms.uNightFactor;
 
     // 1. Vertex Shader: export world position & world normal
     shader.vertexShader = shader.vertexShader.replace(
@@ -63,6 +65,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       uniform vec3 uSunColor;
       uniform vec3 uShadowColor;
       uniform vec3 uCameraPos;
+      uniform float uNightFactor;
 
       varying vec3 vWorldPosition;
       varying vec3 vWorldNormal;
@@ -102,8 +105,12 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       float grainHash = fract(sin(dot(floor(vWorldPosition * 24.0), vec3(12.9898, 78.233, 45.164))) * 43758.5453);
       float powderGrain = (grainHash - 0.5) * 0.045 * nearFade;
 
-      // Luminous, warm pastel daytime snow tone (soft warm ivory/cream)
-      vec3 pastelSnow = vec3(0.996, 0.982, 0.970);
+      // Day vs Night Snow Albedo:
+      // Day: Soft warm ivory/cream
+      // Night: Serene silvery moonlit snow with subtle dusky blue undertone
+      vec3 daySnow = vec3(0.996, 0.982, 0.970);
+      vec3 nightSnow = vec3(0.88, 0.93, 0.99);
+      vec3 pastelSnow = mix(daySnow, nightSnow, uNightFactor);
       diffuseColor.rgb = mix(diffuseColor.rgb, pastelSnow + vec3(powderGrain + sastrugiPattern * 0.035), isSnow * 0.70);
       `
     );
@@ -115,7 +122,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       #include <lights_fragment_end>
 
       if (isSnow > 0.5) {
-        // Direct sun illumination / shadow factor
+        // Direct sun/moon illumination / shadow factor
         float shadowFactor = clamp((reflectedLight.directDiffuse.r + reflectedLight.directDiffuse.g + reflectedLight.directDiffuse.b) * 1.6, 0.0, 1.0);
 
         // Directional sastrugi surface gradient:
@@ -141,11 +148,15 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
         vec3 rimColor = mix(uShadowColor * 1.15, uSunColor * 1.08, shadowFactor);
         reflectedLight.indirectDiffuse += rimSheen * rimColor * 0.32;
 
-        // 2. Subsurface Scattering Terminator (Soft pastel peach, subtle and refined)
+        // 2. Subsurface Scattering Terminator:
+        // Day: Soft pastel peach-cream
+        // Night: Cool dusky indigo-blue
         float worldNdotL = dot(vWorldNormal, uSunDir);
         float sss = smoothstep(-0.30, 0.10, worldNdotL) * smoothstep(0.42, 0.10, worldNdotL);
-        vec3 sssColor = vec3(0.98, 0.82, 0.75);
-        reflectedLight.directDiffuse += sss * sssColor * 0.15 * shadowFactor;
+        vec3 daySss = vec3(0.98, 0.82, 0.75);
+        vec3 nightSss = vec3(0.50, 0.62, 0.84);
+        vec3 sssColor = mix(daySss, nightSss, uNightFactor);
+        reflectedLight.directDiffuse += sss * sssColor * mix(0.15, 0.09, uNightFactor) * shadowFactor;
 
         // 3. Snow Shimmer / Specular & Forward-Scatter Diamond Glints
         vec3 camToFrag = normalize(vWorldPosition - uCameraPos);
@@ -193,7 +204,10 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
         float sparkle3 = spec3 * point3 * step(0.64, rnd3.z) * 8.0;
 
         float totalSparkle = (sparkle1 + sparkle2 + sparkle3) * shadowFactor * distFade;
-        vec3 sparkleColor = vec3(3.6, 3.4, 3.2) * totalSparkle;
+        // Day warm crystalline sparkle vs Night silvery moonlight diamond glints
+        vec3 daySparkle = vec3(3.6, 3.4, 3.2);
+        vec3 nightSparkle = vec3(4.5, 5.0, 5.8);
+        vec3 sparkleColor = mix(daySparkle, nightSparkle, uNightFactor) * totalSparkle;
 
         reflectedLight.directSpecular += sparkleColor;
       }
@@ -203,10 +217,13 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
 
   material.userData = {
     uniforms,
-    update(time: number, sunDirection: THREE.Vector3, cameraPos: THREE.Vector3) {
+    update(time: number, sunDirection: THREE.Vector3, cameraPos: THREE.Vector3, nightFactor: number = 0.0, sunColor?: THREE.Color, shadowColor?: THREE.Color) {
       uniforms.uTime.value = time;
       uniforms.uSunDir.value.copy(sunDirection);
       uniforms.uCameraPos.value.copy(cameraPos);
+      uniforms.uNightFactor.value = nightFactor;
+      if (sunColor) uniforms.uSunColor.value.copy(sunColor);
+      if (shadowColor) uniforms.uShadowColor.value.copy(shadowColor);
     }
   };
 
