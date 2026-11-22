@@ -8,7 +8,7 @@ export const GMACameraConfig = {
   nearFar: [0.2, 1200.0] as [number, number],
   playerScreenY: 0.15,
   offsetDistMul: 0.999,
-  
+
   // Angle limits (in degrees)
   degreeRange: [38.0, 80.0] as [number, number],
   degreeRangeHotseat: [34.0, 50.0] as [number, number],
@@ -81,7 +81,7 @@ export interface CameraSettings {
 export const defaultCameraSettings: CameraSettings = {
   mode: 'BEHIND',              // Default behind chase camera
   fov: 60.0,
-  behindDistance: 12.5,        // User custom zoom distance
+  behindDistance: 10,        // User custom zoom distance
   // [NEW - commented out for testing]
   // behindPitch: 22.0,           // Lower resting angle (deg)
   // behindMinPitch: 8.0,         // Lower angle limit
