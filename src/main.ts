@@ -256,6 +256,7 @@ class Game {
     this.massif.update(
       timeSec,
       this.renderer.camera.position,
+      this.player.mesh.position,
       this.renderer.nightFactor,
       this.renderer.currentSunColor,
       this.renderer.currentShadowColor

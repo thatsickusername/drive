@@ -475,12 +475,13 @@ export class AlpineMassif {
   public update(
     time: number,
     cameraPos: THREE.Vector3,
+    playerPos?: THREE.Vector3,
     nightFactor: number = 0.0,
     sunColor?: THREE.Color,
     shadowColor?: THREE.Color
   ): void {
     if (this.terrainMaterial && this.terrainMaterial.userData && this.terrainMaterial.userData.update) {
-      this.terrainMaterial.userData.update(time, this.sunDir, cameraPos, nightFactor, sunColor, shadowColor);
+      this.terrainMaterial.userData.update(time, this.sunDir, cameraPos, playerPos, nightFactor, sunColor, shadowColor);
     }
   }
 }

@@ -17,6 +17,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
     uSunColor: { value: sunColor.clone() },
     uShadowColor: { value: shadowColor.clone() },
     uCameraPos: { value: new THREE.Vector3() },
+    uPlayerPos: { value: new THREE.Vector3() },
     uNightFactor: { value: 0.0 }
   };
 
@@ -34,6 +35,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
     shader.uniforms.uSunColor = uniforms.uSunColor;
     shader.uniforms.uShadowColor = uniforms.uShadowColor;
     shader.uniforms.uCameraPos = uniforms.uCameraPos;
+    shader.uniforms.uPlayerPos = uniforms.uPlayerPos;
     shader.uniforms.uNightFactor = uniforms.uNightFactor;
 
     // 1. Vertex Shader: export world position & world normal
@@ -65,6 +67,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       uniform vec3 uSunColor;
       uniform vec3 uShadowColor;
       uniform vec3 uCameraPos;
+      uniform vec3 uPlayerPos;
       uniform float uNightFactor;
 
       varying vec3 vWorldPosition;
@@ -218,7 +221,9 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
 
       if (isSnow > 0.5) {
         // Direct sun/moon illumination / shadow factor
-        float shadowFactor = clamp((reflectedLight.directDiffuse.r + reflectedLight.directDiffuse.g + reflectedLight.directDiffuse.b) * 1.6, 0.0, 1.0);
+        // Softly clamps to 0 inside cast shadows (trees) while keeping full retroreflection on open slopes
+        float directDiffuseSum = reflectedLight.directDiffuse.r + reflectedLight.directDiffuse.g + reflectedLight.directDiffuse.b;
+        float shadowFactor = smoothstep(0.06, 0.20, directDiffuseSum);
 
         // Sculptural 3D wind-drift lighting: gentle, varied sculptural sastrugi relief
         float lightMod = sastrugiVal * mix(0.40, 0.30, uNightFactor);
@@ -247,57 +252,66 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
         reflectedLight.directDiffuse += sss * sssColor * mix(0.15, 0.09, uNightFactor) * shadowFactor;
 
         // 3. Snow Shimmer / Specular & Forward-Scatter Diamond Glints
-        vec3 camToFrag = normalize(vWorldPosition - uCameraPos);
-        vec3 viewDirWorld = -camToFrag;
-        vec3 halfVecWorld = normalize(viewDirWorld + uSunDir);
-        vec3 forwardScatterDir = normalize(-viewDirWorld + uSunDir);
+        // Active under direct celestial light and gently decaying over distance into a soft velvety finish
+        if (shadowFactor > 0.001) {
+          vec3 camToFrag = normalize(vWorldPosition - uCameraPos);
+          vec3 viewDirWorld = -camToFrag;
+          vec3 halfVecWorld = normalize(viewDirWorld + uSunDir);
+          vec3 forwardScatterDir = normalize(-viewDirWorld + uSunDir);
 
-        // Distance attenuation for sparkles
-        float distFade = 1.0 - smoothstep(5.0, 180.0, distToCam);
+          // Smooth gradual distance attenuation (quadratic ease-out, zero hard cutoff)
+          // 8m (near player): 100% -> 20m: ~30% -> 28m: ~8% -> 35m (~20m ahead of player): strictly 0%
+          float d = clamp((distToCam - 8.0) / 27.0, 0.0, 1.0);
+          float distFade = (1.0 - d) * (1.0 - d);
 
-        // Octave 1: Dense micro-glitter with pinpoint radial falloff inside crystal cell
-        vec3 p1 = vWorldPosition * 24.0;
-        vec3 cell1 = floor(p1);
-        vec3 fract1 = fract(p1) - vec3(0.5);
-        vec3 rnd1 = hash33(cell1);
-        vec3 facetNorm1 = normalize(vWorldNormal + (rnd1 - 0.5) * 3.8);
-        float spec1 = max(
-          pow(max(0.0, dot(facetNorm1, halfVecWorld)), 90.0),
-          pow(max(0.0, dot(facetNorm1, forwardScatterDir)), 60.0) * 0.75
-        );
-        float point1 = 1.0 - smoothstep(0.0, 0.40, length(fract1));
-        float sparkle1 = spec1 * point1 * step(0.68, rnd1.x) * 12.0;
+          // Big diamond glints fade slightly faster to keep midground clean
+          float dBig = clamp((distToCam - 8.0) / 16.0, 0.0, 1.0);
+          float bigDotFade = (1.0 - dBig) * (1.0 - dBig);
 
-        // Octave 2: Bright diamond glints with sharp crystalline highlight
-        vec3 p2 = vWorldPosition * 8.5;
-        vec3 cell2 = floor(p2);
-        vec3 fract2 = fract(p2) - vec3(0.5);
-        vec3 rnd2 = hash33(cell2);
-        vec3 facetNorm2 = normalize(vWorldNormal + (rnd2 - 0.5) * 2.8);
-        float spec2 = max(
-          pow(max(0.0, dot(facetNorm2, halfVecWorld)), 60.0),
-          pow(max(0.0, dot(facetNorm2, forwardScatterDir)), 45.0) * 0.85
-        );
-        float point2 = 1.0 - smoothstep(0.0, 0.36, length(fract2));
-        float sparkle2 = spec2 * point2 * step(0.75, rnd2.y) * 24.0;
+          // Octave 1: Dense micro-glitter with pinpoint radial falloff inside crystal cell
+          vec3 p1 = vWorldPosition * 24.0;
+          vec3 cell1 = floor(p1);
+          vec3 fract1 = fract(p1) - vec3(0.5);
+          vec3 rnd1 = hash33(cell1);
+          vec3 facetNorm1 = normalize(vWorldNormal + (rnd1 - 0.5) * 3.8);
+          float spec1 = max(
+            pow(max(0.0, dot(facetNorm1, halfVecWorld)), 90.0),
+            pow(max(0.0, dot(facetNorm1, forwardScatterDir)), 60.0) * 0.75
+          );
+          float point1 = 1.0 - smoothstep(0.0, 0.40, length(fract1));
+          float sparkle1 = spec1 * point1 * step(0.68, rnd1.x) * 12.0 * distFade;
 
-        // Octave 3: Ultra-fine surface crystalline dust
-        vec3 p3 = vWorldPosition * 55.0;
-        vec3 cell3 = floor(p3);
-        vec3 fract3 = fract(p3) - vec3(0.5);
-        vec3 rnd3 = hash33(cell3);
-        vec3 facetNorm3 = normalize(vWorldNormal + (rnd3 - 0.5) * 4.2);
-        float spec3 = pow(max(0.0, dot(facetNorm3, halfVecWorld)), 130.0);
-        float point3 = 1.0 - smoothstep(0.0, 0.44, length(fract3));
-        float sparkle3 = spec3 * point3 * step(0.64, rnd3.z) * 8.0;
+          // Octave 2: Bright diamond glints with sharp crystalline highlight
+          vec3 p2 = vWorldPosition * 8.5;
+          vec3 cell2 = floor(p2);
+          vec3 fract2 = fract(p2) - vec3(0.5);
+          vec3 rnd2 = hash33(cell2);
+          vec3 facetNorm2 = normalize(vWorldNormal + (rnd2 - 0.5) * 2.8);
+          float spec2 = max(
+            pow(max(0.0, dot(facetNorm2, halfVecWorld)), 60.0),
+            pow(max(0.0, dot(facetNorm2, forwardScatterDir)), 45.0) * 0.85
+          );
+          float point2 = 1.0 - smoothstep(0.0, 0.36, length(fract2));
+          float sparkle2 = spec2 * point2 * step(0.75, rnd2.y) * 24.0 * bigDotFade;
 
-        float totalSparkle = (sparkle1 + sparkle2 + sparkle3) * shadowFactor * distFade;
-        // Day warm crystalline sparkle vs Night silvery moonlight diamond glints
-        vec3 daySparkle = vec3(3.6, 3.4, 3.2);
-        vec3 nightSparkle = vec3(4.5, 5.0, 5.8);
-        vec3 sparkleColor = mix(daySparkle, nightSparkle, uNightFactor) * totalSparkle;
+          // Octave 3: Ultra-fine surface crystalline dust
+          vec3 p3 = vWorldPosition * 55.0;
+          vec3 cell3 = floor(p3);
+          vec3 fract3 = fract(p3) - vec3(0.5);
+          vec3 rnd3 = hash33(cell3);
+          vec3 facetNorm3 = normalize(vWorldNormal + (rnd3 - 0.5) * 4.2);
+          float spec3 = pow(max(0.0, dot(facetNorm3, halfVecWorld)), 130.0);
+          float point3 = 1.0 - smoothstep(0.0, 0.44, length(fract3));
+          float sparkle3 = spec3 * point3 * step(0.64, rnd3.z) * 8.0 * distFade;
 
-        reflectedLight.directSpecular += sparkleColor;
+          float totalSparkle = (sparkle1 + sparkle2 + sparkle3) * shadowFactor;
+          // Day warm crystalline sparkle vs Night silvery moonlight diamond glints
+          vec3 daySparkle = vec3(3.6, 3.4, 3.2);
+          vec3 nightSparkle = vec3(4.5, 5.0, 5.8);
+          vec3 sparkleColor = mix(daySparkle, nightSparkle, uNightFactor) * totalSparkle;
+
+          reflectedLight.directSpecular += sparkleColor;
+        }
       }
       `
     );
@@ -305,10 +319,11 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
 
   material.userData = {
     uniforms,
-    update(time: number, sunDirection: THREE.Vector3, cameraPos: THREE.Vector3, nightFactor: number = 0.0, sunColor?: THREE.Color, shadowColor?: THREE.Color) {
+    update(time: number, sunDirection: THREE.Vector3, cameraPos: THREE.Vector3, playerPos?: THREE.Vector3, nightFactor: number = 0.0, sunColor?: THREE.Color, shadowColor?: THREE.Color) {
       uniforms.uTime.value = time;
       uniforms.uSunDir.value.copy(sunDirection);
       uniforms.uCameraPos.value.copy(cameraPos);
+      if (playerPos) uniforms.uPlayerPos.value.copy(playerPos);
       uniforms.uNightFactor.value = nightFactor;
       if (sunColor) uniforms.uSunColor.value.copy(sunColor);
       if (shadowColor) uniforms.uShadowColor.value.copy(shadowColor);
