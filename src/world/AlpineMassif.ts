@@ -33,8 +33,8 @@ export class AlpineMassif {
 
     this.terrainMaterial = createSnowMaterial({
       sunDir: this.sunDir,
-      sunColor: new THREE.Color(0xffefe2),
-      shadowColor: new THREE.Color(0x94a6cf)
+      sunColor: new THREE.Color(0xfff6ec),
+      shadowColor: new THREE.Color(0x9ca9cb)
     });
 
     this.generateMassif();
@@ -57,10 +57,10 @@ export class AlpineMassif {
     const totalTriangles = gridTriangles + skirtTriangles;
 
     const colorPiste = new THREE.Color(0xffffff); // Groomed corduroy snow (crisp clean white track)
-    const colorPowder = new THREE.Color(0xfcf6f2); // Off-piste natural powder snow (warm creamy peach-tinted white)
-    const colorSnowShadow = new THREE.Color(0x94a6cf); // Serene periwinkle lavender leeward shade
-    const colorRock = new THREE.Color(0x423832); // Warm exposed rugged granite bedrock
-    const colorIce = new THREE.Color(0x709ab8); // Glacial frozen lake blue ice
+    const colorPowder = new THREE.Color(0xfef9f6); // Off-piste natural powder snow (soft pastel white)
+    const colorSnowShadow = new THREE.Color(0x9ca9cb); // Serene periwinkle lavender leeward shade
+    const colorRock = new THREE.Color(0x443a34); // Warm exposed rugged granite bedrock
+    const colorIce = new THREE.Color(0x729ab8); // Glacial frozen lake blue ice
     const sunDir = this.sunDir;
 
     // 6x6 chunks: cx in [-3, -2, -1, 0, 1, 2], cz in [-3, -2, -1, 0, 1, 2]

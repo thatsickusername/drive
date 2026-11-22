@@ -123,6 +123,8 @@ async function run() {
     });
 
     const page = await context.newPage();
+    page.on('console', msg => console.log('[browser]', msg.type(), msg.text()));
+    page.on('pageerror', err => console.error('[browser error]', err));
     console.log('[vision] Navigating to http://localhost:5173?nohud=1...');
     await page.goto('http://localhost:5173?nohud=1', { waitUntil: 'networkidle' });
 

@@ -13,9 +13,9 @@ export class Renderer {
 
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
-    // Warm morning horizon peach background & soft atmospheric fog
-    this.scene.background = new THREE.Color(0xfde2d4);
-    this.scene.fog = new THREE.Fog(0xfbd8cd, 140, 1100);
+    // Soft pastel daytime alpine background & atmospheric fog
+    this.scene.background = new THREE.Color(0xf6eef3);
+    this.scene.fog = new THREE.Fog(0xf8ebe6, 180, 1500);
 
     this.camera = new THREE.PerspectiveCamera(
       60,
@@ -35,10 +35,10 @@ export class Renderer {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.toneMappingExposure = 1.08;
 
-    // Golden-peach morning sun (#fff0e4) positioned to cast forward-left shadows across the slope
-    this.dirLight = new THREE.DirectionalLight(0xfff0e4, 2.0);
+    // Soft warm daytime sun (#fff6ec) positioned to cast forward-left shadows across the slope
+    this.dirLight = new THREE.DirectionalLight(0xfff6ec, 2.05);
     this.dirLight.position.set(-190, 130, -50);
     this.dirLight.castShadow = true;
     this.dirLight.shadow.mapSize.width = 2048;
@@ -54,12 +54,12 @@ export class Renderer {
     this.scene.add(this.dirLight);
     this.scene.add(this.dirLight.target);
 
-    // Serene periwinkle-lavender sky (#8698ca) and soft peach ground bounce (#fed8cc)
-    const hemiLight = new THREE.HemisphereLight(0x8698ca, 0xfed8cc, 0.90);
+    // Soft pastel periwinkle sky (#9eb3dc) and pale champagne bounce (#fceee5)
+    const hemiLight = new THREE.HemisphereLight(0x9eb3dc, 0xfceee5, 0.88);
     this.scene.add(hemiLight);
 
-    // Warm subtle fill light
-    const fillLight = new THREE.DirectionalLight(0xeac8be, 0.16);
+    // Subtle neutral fill light
+    const fillLight = new THREE.DirectionalLight(0xdedbe0, 0.12);
     fillLight.position.set(130, 80, 80);
     this.scene.add(fillLight);
 
