@@ -95,7 +95,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       `
     );
 
-    // Powdery granular micro-grain texture (Distance LOD optimized)
+    // Powdery granular micro-grain texture & organic wind-drift contours (Distance LOD optimized)
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <color_fragment>',
       /* glsl */ `
@@ -105,9 +105,36 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       // Distance LOD evaluation for snow micro-structure optimization
       float distToCam = length(vWorldPosition - uCameraPos);
       float nearFade = smoothstep(75.0, 10.0, distToCam);   // Fine crystalline powder grains (< 75m)
-      float midFade = smoothstep(220.0, 30.0, distToCam);   // Soft nuanced wind-drift contours (< 220m)
+      float midFade = smoothstep(240.0, 25.0, distToCam);   // Soft wind-drift contours (< 240m)
 
-      // High-frequency granular snow powder texture (crystalline powder grains)
+      // 1. Organic wind-drift contour field (continuous multi-scale sculpted sastrugi & snow dunes)
+      // Wind direction aligned diagonally across the ski runs
+      float uWind = vWorldPosition.x * 0.707 - vWorldPosition.z * 0.707;
+      float vWind = vWorldPosition.x * 0.707 + vWorldPosition.z * 0.707;
+
+      // Low-frequency continuous 2D noise warp so contours curve organically across the slopes
+      vec2 warp = vec2(
+        noise2D(vec2(uWind, vWind) * 0.12),
+        noise2D(vec2(uWind, vWind) * 0.12 + vec2(5.4, 2.1))
+      ) * 2.2;
+      float uw = uWind + warp.x;
+      float vw = vWind + warp.y;
+
+      // Octave 1: Nuanced sastrugi ripples (~3.5m wavelength)
+      float ripple = sin(uw * 1.80 + sin(vw * 0.40) * 1.3);
+      // Octave 2: Medium wind-drift waves (~7.5m wavelength)
+      float wave = sin(uw * 0.85 + vw * 0.28 + noise2D(vec2(uw, vw) * 0.35) * 1.6);
+      // Octave 3: Broad rolling dunes (~18m wavelength)
+      float dune = sin(uw * 0.35 + sin(vw * 0.12) * 1.2);
+
+      // Continuous composite drift field
+      float rawDrift = ripple * 0.45 + wave * 0.35 + dune * 0.20;
+
+      // Visible, nuanced contour relief with distance LOD
+      float driftNoise = rawDrift * midFade;
+      float driftAlbedo = driftNoise * 0.045;
+
+      // 2. High-frequency granular snow powder texture (crystalline powder grains)
       float grainHash = fract(sin(dot(floor(vWorldPosition * 24.0), vec3(12.9898, 78.233, 45.164))) * 43758.5453);
       float powderGrain = (grainHash - 0.5) * 0.045 * nearFade;
 
@@ -117,11 +144,11 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       vec3 daySnow = vec3(0.996, 0.982, 0.970);
       vec3 nightSnow = vec3(0.94, 0.965, 0.995);
       vec3 pastelSnow = mix(daySnow, nightSnow, uNightFactor);
-      diffuseColor.rgb = mix(diffuseColor.rgb, pastelSnow + vec3(powderGrain), isSnow * 0.70);
+      diffuseColor.rgb = mix(diffuseColor.rgb, pastelSnow + vec3(powderGrain + driftAlbedo), isSnow * 0.75);
       `
     );
 
-    // Shading enhancements: Nuanced organic wind-drift, granular powder contrast, velvet rim, SSS, and diamond shimmer
+    // Shading enhancements: Pronounced organic wind-drift, granular powder contrast, velvet rim, SSS, and diamond shimmer
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <lights_fragment_end>',
       /* glsl */ `
@@ -131,14 +158,10 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
         // Direct sun/moon illumination / shadow factor
         float shadowFactor = clamp((reflectedLight.directDiffuse.r + reflectedLight.directDiffuse.g + reflectedLight.directDiffuse.b) * 1.6, 0.0, 1.0);
 
-        // Subtle, nuanced wind-brushed snow contours (organic 2D drift, eliminating harsh stripes/lines)
-        vec2 windUV = vec2(vWorldPosition.x * 0.045 + vWorldPosition.z * 0.025, vWorldPosition.z * 0.045 - vWorldPosition.x * 0.025);
-        float windDrift = (noise2D(windUV) * 0.65 + noise2D(windUV * 2.2 + vec2(1.3, 0.7)) * 0.35 - 0.5) * midFade;
-
-        // Gentle, soft luminance modulation (±3.5% subtle natural variation, no lines)
-        float driftMod = windDrift * mix(0.07, 0.04, uNightFactor);
-        reflectedLight.directDiffuse += driftMod * reflectedLight.directDiffuse * shadowFactor;
-        reflectedLight.indirectDiffuse += (-driftMod) * 0.03 * uShadowColor;
+        // Pronounced organic wind-drift shading: visible soft sculptural snow contours and sastrugi
+        float driftMod = driftNoise * mix(0.42, 0.32, uNightFactor);
+        reflectedLight.directDiffuse *= clamp(1.0 + driftMod * 0.95, 0.20, 1.50);
+        reflectedLight.indirectDiffuse *= clamp(1.0 - driftMod * 0.40, 0.60, 1.35);
 
         // Granular powder micro-contrast: fine crystalline relief up close (< 75m)
         reflectedLight.directDiffuse += powderGrain * 4.2 * reflectedLight.directDiffuse * shadowFactor;
