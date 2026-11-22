@@ -25,13 +25,13 @@ export class Renderer {
   public readonly dayFog = new THREE.Color(0xf8ebe6);
   public readonly dayBg = new THREE.Color(0xf6eef3);
 
-  // Night Lighting Palette (Acceptance Criteria 2 - Soft silvery moonlight)
-  public readonly nightMoonColor = new THREE.Color(0xd0e2ff);
-  public readonly nightShadowColor = new THREE.Color(0x42547a);
-  public readonly nightHemiSky = new THREE.Color(0x283a62);
-  public readonly nightHemiGround = new THREE.Color(0x485c82);
-  public readonly nightFog = new THREE.Color(0x36486e);
-  public readonly nightBg = new THREE.Color(0x192744);
+  // Night Lighting Palette (Acceptance Criteria 2 - Soft pastel night glow)
+  public readonly nightMoonColor = new THREE.Color(0xf0f4ff);
+  public readonly nightShadowColor = new THREE.Color(0x727ca8);
+  public readonly nightHemiSky = new THREE.Color(0x44527e);
+  public readonly nightHemiGround = new THREE.Color(0x7a84ac);
+  public readonly nightFog = new THREE.Color(0x627098);
+  public readonly nightBg = new THREE.Color(0x2d3a5a);
 
   public readonly currentSunColor = new THREE.Color();
   public readonly currentShadowColor = new THREE.Color();
@@ -119,22 +119,22 @@ export class Renderer {
     this.currentShadowColor.lerpColors(this.dayShadowColor, this.nightShadowColor, f);
 
     this.dirLight.color.copy(this.currentSunColor);
-    this.dirLight.intensity = THREE.MathUtils.lerp(2.05, 1.62, f);
+    this.dirLight.intensity = THREE.MathUtils.lerp(2.05, 1.42, f);
 
     this.hemiLight.color.lerpColors(this.dayHemiSky, this.nightHemiSky, f);
     this.hemiLight.groundColor.lerpColors(this.dayHemiGround, this.nightHemiGround, f);
-    this.hemiLight.intensity = THREE.MathUtils.lerp(0.88, 0.82, f);
+    this.hemiLight.intensity = THREE.MathUtils.lerp(0.88, 1.02, f);
 
-    this.fillLight.color.lerpColors(new THREE.Color(0xdedbe0), new THREE.Color(0x304260), f);
-    this.fillLight.intensity = THREE.MathUtils.lerp(0.12, 0.10, f);
+    this.fillLight.color.lerpColors(new THREE.Color(0xdedbe0), new THREE.Color(0x52668c), f);
+    this.fillLight.intensity = THREE.MathUtils.lerp(0.12, 0.16, f);
 
     this.scene.background = (new THREE.Color().copy(this.dayBg)).lerp(this.nightBg, f);
     if (this.scene.fog instanceof THREE.Fog) {
       this.scene.fog.color.lerpColors(this.dayFog, this.nightFog, f);
-      this.scene.fog.near = THREE.MathUtils.lerp(180, 130, f);
-      this.scene.fog.far = THREE.MathUtils.lerp(1500, 1420, f);
+      this.scene.fog.near = THREE.MathUtils.lerp(180, 95, f);
+      this.scene.fog.far = THREE.MathUtils.lerp(1500, 1220, f);
     }
-    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.08, 1.04, f);
+    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.08, 1.06, f);
     this.skyDome.setNightFactor(f);
     this.sparkles.setColor(new THREE.Color(0xffeedd).lerp(new THREE.Color(0xcbe0ff), f));
   }

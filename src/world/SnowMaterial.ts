@@ -107,9 +107,9 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
 
       // Day vs Night Snow Albedo:
       // Day: Soft warm ivory/cream
-      // Night: Serene silvery moonlit snow with subtle dusky blue undertone
+      // Night: Serene soft pastel silvery moonlit snow
       vec3 daySnow = vec3(0.996, 0.982, 0.970);
-      vec3 nightSnow = vec3(0.88, 0.93, 0.99);
+      vec3 nightSnow = vec3(0.94, 0.965, 0.995);
       vec3 pastelSnow = mix(daySnow, nightSnow, uNightFactor);
       diffuseColor.rgb = mix(diffuseColor.rgb, pastelSnow + vec3(powderGrain + sastrugiPattern * 0.035), isSnow * 0.70);
       `
@@ -132,11 +132,13 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
         float sastrugiShade = clamp(dU * sunAlign * 1.4, -0.65, 0.65);
 
         // Windswept sastrugi lighting modulation:
-        // Windward crests catch warm direct sun; leeward troughs dip into soft cool lavender shade
+        // Soft pastel modulation without harsh dark contrast
+        float sastrugiWeight = mix(0.42, 0.24, uNightFactor);
+        float leewardWeight = mix(0.32, 0.18, uNightFactor);
         if (sastrugiShade > 0.0) {
-          reflectedLight.directDiffuse += sastrugiShade * 0.42 * uSunColor * shadowFactor;
+          reflectedLight.directDiffuse += sastrugiShade * sastrugiWeight * uSunColor * shadowFactor;
         } else {
-          reflectedLight.indirectDiffuse += (-sastrugiShade) * 0.32 * uShadowColor;
+          reflectedLight.indirectDiffuse += (-sastrugiShade) * leewardWeight * uShadowColor;
         }
 
         // Granular powder micro-contrast: fine crystalline relief up close (< 75m)
@@ -150,11 +152,11 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
 
         // 2. Subsurface Scattering Terminator:
         // Day: Soft pastel peach-cream
-        // Night: Cool dusky indigo-blue
+        // Night: Soft pastel lavender-blue glow
         float worldNdotL = dot(vWorldNormal, uSunDir);
         float sss = smoothstep(-0.30, 0.10, worldNdotL) * smoothstep(0.42, 0.10, worldNdotL);
         vec3 daySss = vec3(0.98, 0.82, 0.75);
-        vec3 nightSss = vec3(0.50, 0.62, 0.84);
+        vec3 nightSss = vec3(0.70, 0.78, 0.95);
         vec3 sssColor = mix(daySss, nightSss, uNightFactor);
         reflectedLight.directDiffuse += sss * sssColor * mix(0.15, 0.09, uNightFactor) * shadowFactor;
 

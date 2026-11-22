@@ -15,12 +15,12 @@ export class SkyDome {
       uCloudColor1: { value: new THREE.Color(0xf0d8ce) },   // Pastel warm peach cloud band
       uCloudColor2: { value: new THREE.Color(0xfff4ed) },   // Pastel cream cloud highlight
 
-      // Night Palette (Matching acceptance criteria 2)
-      uNightZenithColor: { value: new THREE.Color(0x182542) },  // Deep midnight sapphire indigo
-      uNightMidColor: { value: new THREE.Color(0x28385a) },     // Muted steel midnight blue
-      uNightHorizonColor: { value: new THREE.Color(0x42547a) }, // Hazy dusky valley blue
-      uNightCloudColor1: { value: new THREE.Color(0x202b40) },  // Dark slate nocturnal cloud
-      uNightCloudColor2: { value: new THREE.Color(0x30405c) },  // Soft night cloud rim
+      // Night Palette (Matching acceptance criteria 2 - Soft pastel night)
+      uNightZenithColor: { value: new THREE.Color(0x283656) },  // Soft pastel midnight navy
+      uNightMidColor: { value: new THREE.Color(0x42527a) },     // Soft pastel slate blue
+      uNightHorizonColor: { value: new THREE.Color(0x6e7ca2) }, // Luminous pastel valley mist
+      uNightCloudColor1: { value: new THREE.Color(0x3a486c) },  // Soft nocturnal cloud
+      uNightCloudColor2: { value: new THREE.Color(0x52628a) },  // Soft night cloud rim
       uMoonDir: { value: new THREE.Vector3(0.58, 0.22, 0.77).normalize() }, // Upper-left moon in night sky (perfectly aligned with left crest)
       uNightFactor: { value: 0.0 },                             // 0 = Day, 1 = Night
       uTime: { value: 0.0 }
@@ -114,13 +114,14 @@ export class SkyDome {
           float moonDot = dot(dir, normalize(uMoonDir));
           if (moonDot > 0.0) {
             float moonDisk = smoothstep(0.9984, 0.9993, moonDot);
-            float halo1 = pow(moonDot, 160.0) * 0.90;
-            float halo2 = pow(moonDot, 40.0) * 0.40;
-            float halo3 = pow(moonDot, 12.0) * 0.18;
-            float totalHalo = (halo1 + halo2 + halo3);
+            float halo1 = pow(moonDot, 140.0) * 0.85;
+            float halo2 = pow(moonDot, 32.0) * 0.40;
+            float halo3 = pow(moonDot, 8.0) * 0.18;
+            float halo4 = pow(moonDot, 2.0) * 0.08;
+            float totalHalo = (halo1 + halo2 + halo3 + halo4);
 
-            vec3 moonDiskCol = vec3(1.0, 0.99, 0.96) * moonDisk * 4.2;
-            vec3 moonHaloCol = vec3(0.70, 0.82, 1.0) * totalHalo * 0.75;
+            vec3 moonDiskCol = vec3(1.0, 0.99, 0.97) * moonDisk * 3.8;
+            vec3 moonHaloCol = vec3(0.76, 0.86, 1.0) * totalHalo * 0.65;
             sky += (moonDiskCol + moonHaloCol) * uNightFactor;
           }
 
