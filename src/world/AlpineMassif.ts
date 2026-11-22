@@ -111,22 +111,14 @@ export class AlpineMassif {
             } else if (sample.surfaceType === 'PISTE' || sample.pisteDist < 26.0) {
               const blend = Math.max(0, Math.min(1, 1.0 - sample.pisteDist / 26.0));
               tempColor.copy(colorPowder).lerp(colorPiste, blend);
-              // Subtle corduroy grooming ridge micro-shading
-              const corduroy = (Math.sin(wx * 2.2 + wz * 0.5) * 0.5 + 0.5) * 0.025 * blend;
-              tempColor.addScalar(corduroy);
             } else {
               tempColor.copy(colorPowder);
-              // Leeward shadow tinting on wind lips and convex powder rolls
+              // Subtle leeward shadow tinting on deep hollows
               const nDotSun = sample.normal.x * sunDir.x + sample.normal.y * sunDir.y + sample.normal.z * sunDir.z;
-              if (nDotSun < 0.35) {
-                const leewardFactor = Math.max(0, (0.35 - nDotSun) / 0.65);
-                tempColor.lerp(colorSnowShadow, leewardFactor * 0.55);
+              if (nDotSun < 0.25) {
+                const leewardFactor = Math.max(0, (0.25 - nDotSun) / 0.75);
+                tempColor.lerp(colorSnowShadow, leewardFactor * 0.25);
               }
-              // Fall-line subtle wind-scoured micro-contrast
-              const windScour = Math.sin(wx * 0.45 + wz * 0.18) * 0.015;
-              tempColor.r = Math.min(1.0, Math.max(0.0, tempColor.r + windScour));
-              tempColor.g = Math.min(1.0, Math.max(0.0, tempColor.g + windScour));
-              tempColor.b = Math.min(1.0, Math.max(0.0, tempColor.b + windScour * 1.3));
             }
 
             colors[pIdx + 0] = tempColor.r;
