@@ -102,8 +102,8 @@ export class ControlsProcessor {
     const outSlide = rawInput.slideTurn || brakeWhileTurning;
     const outBrake = rawInput.brake && !brakeWhileTurning;
     const outJump = rawInput.jump || emergentJump;
-    // Explicit edge-triggered pole plant on turn initiation (A or D press) or double-tap
-    const outStake = rawInput.stakePole || emergentStake || leftEdge || rightEdge;
+    // Staking is forward propulsion (W / push key) or emergent double-tap on flats
+    const outStake = rawInput.stakePole || emergentStake;
     const outTackle = rawInput.slapTackle;
 
     return {

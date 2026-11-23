@@ -81,10 +81,14 @@ class SnowAudio {
     }
   }
 
+  private lastPolePlantTime = 0;
+
   public playPolePlant(): void {
     if (!this.initialized || !this.ctx) return;
     try {
       const now = this.ctx.currentTime;
+      if (now - this.lastPolePlantTime < 0.22) return;
+      this.lastPolePlantTime = now;
       // Procedural hardpack snow pole jab click: short crisp transient noise click
       const sampleCount = Math.floor(this.ctx.sampleRate * 0.035);
       const buffer = this.ctx.createBuffer(1, sampleCount, this.ctx.sampleRate);
