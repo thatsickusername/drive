@@ -607,6 +607,7 @@ export class Skier {
   private buildCharacterMesh(): void {
     this.skierCharacter = buildSkierCharacter(PALETTES.coral);
     this.animator = new SkierAnimator(this.skierCharacter);
+    this.animator.onPolePlantAudio = () => this.audio.playPolePlant();
     this.skierCharacter.root.position.y = -this.cfg.sphereRadius + 0.02;
     this.visualRoot.add(this.skierCharacter.root);
   }
@@ -839,7 +840,7 @@ export class Skier {
       this.visualRoot.quaternion.slerp(this._targetQuat, Math.min(1, dt * 16));
 
       // 2. Snow depth suspension absorption
-      this.skierCharacter.root.position.y = -this.cfg.sphereRadius + 0.02 - this.gmaPhysics.snowDepthPos * 0.4;
+      this.skierCharacter.root.position.y = -this.cfg.sphereRadius + 0.02;
 
       // 3. Dynamic Procedural Animation Update (Idle glide vs Alpine Carving + Pole Plants)
       this.animator.update({
@@ -849,7 +850,9 @@ export class Skier {
         isGrounded: this.isGrounded,
         isStaking: this.gmaPhysics.isStaking,
         isDrifting: this.isDrifting,
-        tuck: !!input.forward && this.speed > 8
+        tuck: !!input.forward && this.speed > 8,
+        inputLeft: !!input.left || (input.steerX !== undefined && input.steerX < -0.25),
+        inputRight: !!input.right || (input.steerX !== undefined && input.steerX > 0.25)
       });
 
       // 4. Staking Sound Trigger

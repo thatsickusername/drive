@@ -846,13 +846,21 @@ export interface SkierAnimParams {
   isStaking: boolean;
   isDrifting?: boolean;
   tuck?: boolean;
+  inputLeft?: boolean;
+  inputRight?: boolean;
 }
 
 export class SkierAnimator {
   private skier: SkierCharacter;
   private animTime = 0;
-  private carvePhase = 0;
   private carveBlend = 0; // 0 = idle, 1 = carve
+
+  // Dedicated deterministic instant pole plant state
+  private activePlantSide: 'left' | 'right' | 'none' = 'none';
+  private plantTimer = 0.0;
+  private prevTurnKey: 'left' | 'right' | 'none' = 'none';
+  private audioPlayedForCurrentStroke = false;
+  public onPolePlantAudio?: () => void;
 
   private jointNames = [
     'hips', 'spine', 'neck', 'head',
@@ -863,9 +871,8 @@ export class SkierAnimator {
   ];
 
   private targets: Record<string, { rx: number; ry: number; rz: number }> = {};
-  private hipPosTarget = { x: 0, z: 0 };
-  private tmpWorld = new THREE.Vector3();
-  private invRootMatrix = new THREE.Matrix4();
+  private hipPosTarget = { x: 0, y: 0.82, z: 0 };
+  private hipY = 0.82;
 
   constructor(skier: SkierCharacter) {
     this.skier = skier;
@@ -881,67 +888,67 @@ export class SkierAnimator {
       this.targets[name].rz = 0;
     });
     this.hipPosTarget.x = 0;
+    this.hipPosTarget.y = 0.82;
     this.hipPosTarget.z = 0;
   }
 
-  private phasePulse(angle: number, center: number, width: number): number {
-    const d = Math.atan2(Math.sin(angle - center), Math.cos(angle - center));
-    const x = d / width;
-    return Math.exp(-x * x);
-  }
-
   public groundCharacter() {
-    this.skier.root.updateMatrixWorld(true);
-    this.invRootMatrix.copy(this.skier.root.matrixWorld).invert();
-
-    let minY = Infinity;
-    for (let i = 0; i < this.skier.footContacts.length; i++) {
-      this.skier.footContacts[i].getWorldPosition(this.tmpWorld);
-      this.tmpWorld.applyMatrix4(this.invRootMatrix);
-      if (this.tmpWorld.y < minY) minY = this.tmpWorld.y;
-    }
-
-    if (Number.isFinite(minY)) {
-      this.skier.joints.hips.position.y -= minY;
-    }
+    // Stable analytical grounding: hips are already positioned stably so skis sit flush on snow
   }
 
   public update(params: SkierAnimParams): void {
     const clampedDt = Math.min(params.dt, 0.05);
     this.animTime += clampedDt;
 
-    // leanAngle: -1 (left) to +1 (right). In character local space (+Z forward in HTML, rotated PI):
-    // turnDir: +1 = Left Carve, -1 = Right Carve
-    const turnDir = -params.leanAngle;
+    // Detect instantaneous key/stick turn direction
+    let currentKey: 'left' | 'right' | 'none' = 'none';
+    if (params.inputLeft || -params.leanAngle > 0.15) {
+      currentKey = 'left';
+    } else if (params.inputRight || -params.leanAngle < -0.15) {
+      currentKey = 'right';
+    }
+
+    // Trigger instant 0th-frame carving & pole plant when A or D is pressed
+    if (currentKey === 'left' && this.prevTurnKey !== 'left') {
+      this.activePlantSide = 'left';
+      this.plantTimer = 0.0;
+      this.audioPlayedForCurrentStroke = false;
+      this.carveBlend = Math.max(this.carveBlend, 0.85); // Instant 0th frame carve engagement
+    } else if (currentKey === 'right' && this.prevTurnKey !== 'right') {
+      this.activePlantSide = 'right';
+      this.plantTimer = 0.0;
+      this.audioPlayedForCurrentStroke = false;
+      this.carveBlend = Math.max(this.carveBlend, 0.85); // Instant 0th frame carve engagement
+    } else if (currentKey === 'none') {
+      if (this.plantTimer > 0.65) {
+        this.activePlantSide = 'none';
+      }
+    }
+    this.prevTurnKey = currentKey;
+
+    // Calculate effective turn signal: +1 = Left Carve, -1 = Right Carve
+    const targetTurnDir = currentKey === 'left' ? 1.0 : (currentKey === 'right' ? -1.0 : -params.leanAngle);
+    const turnDir = THREE.MathUtils.clamp(targetTurnDir, -1.0, 1.0);
     const steerEffort = Math.abs(turnDir);
 
-    // Carve blend target based on steering effort and forward speed
-    const isCarving = steerEffort > 0.05 && params.isGrounded;
-    const speedScale = THREE.MathUtils.clamp(params.speed / 2.5, 0.45, 1.0);
-    const targetBlend = isCarving ? THREE.MathUtils.clamp(steerEffort * speedScale * 1.25, 0.0, 1.0) : 0.0;
-    this.carveBlend = THREE.MathUtils.damp(this.carveBlend, targetBlend, 10.0, clampedDt);
-
-    // Advance carve pole planting phase when actively turning
-    if (steerEffort > 0.10) {
-      this.carvePhase += clampedDt * (2.8 + params.speed * 0.12);
-    }
+    const isCarving = (currentKey !== 'none' || steerEffort > 0.08) && params.isGrounded;
+    const targetBlend = isCarving ? 1.0 : 0.0;
+    this.carveBlend = THREE.MathUtils.damp(this.carveBlend, targetBlend, currentKey !== 'none' ? 24.0 : 8.0, clampedDt);
 
     this.clearTargets();
 
-    // 1. Evaluate Idle Stance (Cruising & Breathing)
-    const bounce = Math.sin(this.animTime * 2.6);
+    // 1. Evaluate Idle Stance (Cruising & Breathing) - gentle, smooth
     const breath = Math.sin(this.animTime * 1.45);
     const sway = Math.sin(this.animTime * 0.85);
     const scan = Math.sin(this.animTime * 0.65) + 0.35 * Math.sin(this.animTime * 1.3 + 0.5);
 
-    // Idle Base Targets
     const idleHipX = 0.025 * sway;
-    const idleHipZ = 0.008 * bounce;
-    const idleHipsRx = 0.06 + 0.015 * bounce;
+    const idleHipZ = 0.0;
+    const idleHipsRx = 0.06;
     const idleHipsRy = 0.025 * sway;
     const idleHipsRz = -0.032 * sway;
 
-    const idleSpineRx = 0.17 + 0.024 * breath + 0.012 * bounce + (params.tuck ? 0.18 : 0);
+    const idleSpineRx = 0.17 + 0.024 * breath + (params.tuck ? 0.18 : 0);
     const idleSpineRy = -0.02 * sway + 0.025 * Math.sin(this.animTime * 0.85 + 0.7);
     const idleSpineRz = 0.024 * sway;
 
@@ -953,21 +960,57 @@ export class SkierAnimator {
     const idleHeadRy = 0.08 * scan;
     const idleHeadRz = -0.015 * Math.sin(this.animTime * 0.65);
 
-    const idleLThigh = -0.28 - 0.045 * bounce - 0.02 * sway - (params.tuck ? 0.12 : 0);
-    const idleLShin = 0.24 + 0.038 * bounce + 0.015 * sway + (params.tuck ? 0.10 : 0);
-    const idleRThigh = -0.28 - 0.045 * bounce + 0.02 * sway - (params.tuck ? 0.12 : 0);
-    const idleRShin = 0.24 + 0.038 * bounce - 0.015 * sway + (params.tuck ? 0.10 : 0);
+    const idleLThigh = -0.28 - 0.02 * sway - (params.tuck ? 0.12 : 0);
+    const idleLShin = 0.24 + 0.015 * sway + (params.tuck ? 0.10 : 0);
+    const idleRThigh = -0.28 + 0.02 * sway - (params.tuck ? 0.12 : 0);
+    const idleRShin = 0.24 - 0.015 * sway + (params.tuck ? 0.10 : 0);
 
     // 2. Evaluate Dynamic Alpine Carving Targets
-    const s = THREE.MathUtils.clamp(turnDir, -1, 1);
+    const s = turnDir;
     const p = s * s;
     const leftTurn = Math.max(0, s);
     const rightTurn = Math.max(0, -s);
 
-    const leftReach = this.phasePulse(this.carvePhase, 0.55, 0.52) * leftTurn;
-    const leftPush = this.phasePulse(this.carvePhase, 1.95, 0.68) * leftTurn;
-    const rightReach = this.phasePulse(this.carvePhase, Math.PI + 0.55, 0.52) * rightTurn;
-    const rightPush = this.phasePulse(this.carvePhase, Math.PI + 1.95, 0.68) * rightTurn;
+    // Instant deterministic pole plant progression from 0th frame
+    let leftReach = 0;
+    let leftPush = 0;
+    let rightReach = 0;
+    let rightPush = 0;
+
+    if (this.activePlantSide !== 'none') {
+      this.plantTimer += clampedDt;
+      const t = this.plantTimer;
+
+      // Stroke phase 1: Instant Forward Reach & Plant (0.0s to 0.32s)
+      let reachVal = 0;
+      if (t <= 0.32) {
+        reachVal = Math.sin((t / 0.32) * Math.PI);
+        if (t >= 0.12 && !this.audioPlayedForCurrentStroke) {
+          if (this.onPolePlantAudio) this.onPolePlantAudio();
+          this.audioPlayedForCurrentStroke = true;
+        }
+      }
+
+      // Stroke phase 2: Push-Through Past Hip (0.22s to 0.64s)
+      let pushVal = 0;
+      if (t >= 0.22 && t <= 0.64) {
+        pushVal = Math.sin(((t - 0.22) / 0.42) * Math.PI);
+      }
+
+      if (this.activePlantSide === 'left') {
+        leftReach = reachVal;
+        leftPush = pushVal;
+      } else if (this.activePlantSide === 'right') {
+        rightReach = reachVal;
+        rightPush = pushVal;
+      }
+
+      // Sustained turn: rhythmic re-plant after 1.5s
+      if (t > 1.5 && currentKey === this.activePlantSide) {
+        this.plantTimer = 0.0;
+        this.audioPlayedForCurrentStroke = false;
+      }
+    }
 
     const carveHipX = 0.16 * s;
     const carveHipZ = 0.03 * p;
@@ -998,6 +1041,11 @@ export class SkierAnimator {
     const cb = this.carveBlend;
     this.hipPosTarget.x = THREE.MathUtils.lerp(idleHipX, carveHipX, cb);
     this.hipPosTarget.z = THREE.MathUtils.lerp(idleHipZ, carveHipZ, cb);
+
+    // Stable analytical hip height: smooth crouch with knee flexion, zero vertical jitter
+    const crouchDrop = 0.035 * p + (params.tuck ? 0.08 : 0);
+    this.hipPosTarget.y = 0.82 - crouchDrop;
+    this.hipY = THREE.MathUtils.damp(this.hipY, this.hipPosTarget.y, 14.0, clampedDt);
 
     this.targets.hips.rx = THREE.MathUtils.lerp(idleHipsRx, carveHipsRx, cb);
     this.targets.hips.ry = THREE.MathUtils.lerp(idleHipsRy, carveHipsRy, cb);
@@ -1031,38 +1079,76 @@ export class SkierAnimator {
     this.targets.rightAnkle.rx = -rShin;
     this.targets.rightAnkle.rz = THREE.MathUtils.lerp(0, 0.04 * s, cb);
 
-    // 4. Arms & Pole Plants (Idle trailing tuck vs Carving reach & push)
+    // 4. Arms & Pole Plants (Idle trailing tuck vs Carving asymmetric plant & balance)
     const idleLShoulderRz = -1.22 + 0.022 * breath;
-    const idleLShoulderRx = -0.10 - 0.020 * bounce;
+    const idleLShoulderRx = -0.10;
     const idleLShoulderRy = 0.08 + 0.015 * sway;
-    const idleLElbowRy = -0.82 - 0.025 * bounce;
+    const idleLElbowRy = -0.82;
     const idleLElbowRz = 0.15;
     const idleLWristRx = 1.60 + 0.035 * breath;
     const idleLWristRz = -0.45;
 
     const idleRShoulderRz = 1.22 - 0.022 * breath;
-    const idleRShoulderRx = -0.10 - 0.020 * bounce;
+    const idleRShoulderRx = -0.10;
     const idleRShoulderRy = -0.08 + 0.015 * sway;
-    const idleRElbowRy = 0.82 + 0.025 * bounce;
+    const idleRElbowRy = 0.82;
     const idleRElbowRz = -0.15;
     const idleRWristRx = 1.60 + 0.035 * breath;
     const idleRWristRz = 0.45;
 
-    const carveLShoulderRz = -1.16 + 0.16 * leftReach - 0.08 * leftPush - 0.06 * rightTurn;
-    const carveLShoulderRx = -0.10 - 0.52 * leftReach + 0.56 * leftPush;
-    const carveLShoulderRy = 0.08 - 0.14 * leftReach + 0.12 * leftPush;
-    const carveLElbowRy = -0.78 - 0.18 * leftReach + 0.52 * leftPush;
-    const carveLElbowRz = 0.14 + 0.05 * p;
-    const carveLWristRx = 1.56 - 0.52 * leftReach + 0.18 * leftPush;
-    const carveLWristRz = -0.45 + 0.62 * leftReach - 0.12 * leftPush;
+    let carveLShoulderRz: number;
+    let carveLShoulderRx: number;
+    let carveLShoulderRy: number;
+    let carveLElbowRy: number;
+    let carveLElbowRz: number;
+    let carveLWristRx: number;
+    let carveLWristRz: number;
 
-    const carveRShoulderRz = 1.16 - 0.16 * rightReach + 0.08 * rightPush + 0.06 * leftTurn;
-    const carveRShoulderRx = -0.10 - 0.52 * rightReach + 0.56 * rightPush;
-    const carveRShoulderRy = -0.08 + 0.14 * rightReach - 0.12 * rightPush;
-    const carveRElbowRy = 0.78 + 0.18 * rightReach - 0.52 * rightPush;
-    const carveRElbowRz = -0.14 - 0.05 * p;
-    const carveRWristRx = 1.56 - 0.52 * rightReach + 0.18 * rightPush;
-    const carveRWristRz = 0.45 - 0.62 * rightReach + 0.12 * rightPush;
+    let carveRShoulderRz: number;
+    let carveRShoulderRx: number;
+    let carveRShoulderRy: number;
+    let carveRElbowRy: number;
+    let carveRElbowRz: number;
+    let carveRWristRx: number;
+    let carveRWristRz: number;
+
+    if (s >= 0) {
+      // LEFT TURN: Left arm is active plant; Right arm is outside forward balance (NOT pushed back!)
+      carveLShoulderRz = -1.16 + 0.18 * leftReach - 0.08 * leftPush;
+      carveLShoulderRx = -0.10 - 0.55 * leftReach + 0.58 * leftPush;
+      carveLShoulderRy = 0.08 - 0.16 * leftReach + 0.12 * leftPush;
+      carveLElbowRy = -0.78 - 0.20 * leftReach + 0.50 * leftPush;
+      carveLElbowRz = 0.14 + 0.05 * p;
+      carveLWristRx = 1.56 - 0.95 * leftReach + 0.18 * leftPush;
+      carveLWristRz = -0.45 + 0.62 * leftReach - 0.12 * leftPush;
+
+      // Right arm stays forward/lateral in an athletic balance stance (NOT pushed back!)
+      carveRShoulderRz = 1.05;
+      carveRShoulderRx = -0.25;
+      carveRShoulderRy = -0.15;
+      carveRElbowRy = 0.55;
+      carveRElbowRz = -0.12;
+      carveRWristRx = 0.65; // Forward athletic angle, basket low and ready
+      carveRWristRz = 0.20;
+    } else {
+      // RIGHT TURN: Right arm is active plant; Left arm is outside forward balance (NOT pushed back!)
+      carveRShoulderRz = 1.16 - 0.18 * rightReach + 0.08 * rightPush;
+      carveRShoulderRx = -0.10 - 0.55 * rightReach + 0.58 * rightPush;
+      carveRShoulderRy = -0.08 + 0.16 * rightReach - 0.12 * rightPush;
+      carveRElbowRy = 0.78 + 0.20 * rightReach - 0.50 * rightPush;
+      carveRElbowRz = -0.14 - 0.05 * p;
+      carveRWristRx = 1.56 - 0.95 * rightReach + 0.18 * rightPush;
+      carveRWristRz = 0.45 - 0.62 * rightReach + 0.12 * rightPush;
+
+      // Left arm stays forward/lateral in an athletic balance stance (NOT pushed back!)
+      carveLShoulderRz = -1.05;
+      carveLShoulderRx = -0.25;
+      carveLShoulderRy = 0.15;
+      carveLElbowRy = -0.55;
+      carveLElbowRz = 0.12;
+      carveLWristRx = 0.65; // Forward athletic angle, basket low and ready
+      carveLWristRz = -0.20;
+    }
 
     this.targets.leftShoulder.rz = THREE.MathUtils.lerp(idleLShoulderRz, carveLShoulderRz, cb);
     this.targets.leftShoulder.rx = THREE.MathUtils.lerp(idleLShoulderRx, carveLShoulderRx, cb);
@@ -1093,7 +1179,6 @@ export class SkierAnimator {
 
     // 6. Special Overrides: Airborne Flight Stance
     if (!params.isGrounded) {
-      // Spread arms wider for flight stability and tuck knees
       this.targets.leftShoulder.rz = -1.42;
       this.targets.rightShoulder.rz = 1.42;
       this.targets.leftShoulder.rx = -0.22;
@@ -1104,7 +1189,14 @@ export class SkierAnimator {
       this.targets.rightHip.rx = -0.42;
     }
 
-    // 7. Exponential Damping towards target orientations
+    // 7. Special Overrides: Drift Hockey Stop
+    if (params.isDrifting && params.isGrounded) {
+      this.targets.spine.rx += 0.08;
+      this.targets.leftKnee.rx += 0.12;
+      this.targets.rightKnee.rx += 0.12;
+    }
+
+    // 8. Exponential Damping towards targets
     const blendRate = 1 - Math.exp(-12.0 * clampedDt);
 
     this.jointNames.forEach((name) => {
@@ -1117,11 +1209,9 @@ export class SkierAnimator {
       }
     });
 
-    const hips = this.skier.joints.hips;
-    hips.position.x += (this.hipPosTarget.x - hips.position.x) * blendRate;
-    hips.position.z += (this.hipPosTarget.z - hips.position.z) * blendRate;
-
-    // Grounding: Keep lowest ski point planted on y = 0
-    this.groundCharacter();
+    // Apply stable damped hips (zero vertical 60Hz matrix oscillation)
+    this.skier.joints.hips.position.y = this.hipY;
+    this.skier.joints.hips.position.x += (this.hipPosTarget.x - this.skier.joints.hips.position.x) * blendRate;
+    this.skier.joints.hips.position.z += (this.hipPosTarget.z - this.skier.joints.hips.position.z) * blendRate;
   }
 }

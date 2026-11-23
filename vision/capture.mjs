@@ -153,7 +153,8 @@ async function run() {
       const key = scenario.includes('right') ? 'KeyD' : 'KeyA';
       console.log(`[vision] Holding ${key} for dynamic carving turn...`);
       await page.keyboard.down(key);
-      await page.waitForTimeout(1600);
+      const holdDuration = scenario.includes('plant') ? 350 : 1600;
+      await page.waitForTimeout(holdDuration);
     } else if (scenario === 'teleport_4' || scenario.includes('4')) {
       console.log('[vision] Executing scenario: Teleport to spawn 4 (canyon)...');
       await page.keyboard.press('Digit4');
