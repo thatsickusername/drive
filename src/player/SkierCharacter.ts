@@ -595,16 +595,22 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     spine.add(shoulder);
     joints[`${prefix}Shoulder`] = shoulder;
 
+    // Smooth rounded low-poly deltoid puff to create natural athletic shoulders without sharp points
+    const deltoidGeo = new THREE.SphereGeometry(0.092, 10, 8);
+    deltoidGeo.scale(1.0, 0.88, 0.95);
+    const deltoidMesh = enableShadows(new THREE.Mesh(deltoidGeo, materials.jacket));
+    deltoidMesh.position.set(side * 0.015, -0.010, 0);
+    shoulder.add(deltoidMesh);
+
     const upperRings: LoftRing[] = [
-      { pos: side * -0.068, r1: 0.096, r2: 0.112, offsetA: 0.004 },
-      { pos: side * 0.012, r1: 0.088, r2: 0.098, offsetA: 0.000 },
-      { pos: side * 0.082, r1: 0.078, r2: 0.084, offsetA: 0.000 },
-      { pos: side * 0.152, r1: 0.086, r2: 0.090, offsetA: 0.000 },
-      { pos: side * 0.222, r1: 0.076, r2: 0.080, offsetA: 0.000 },
-      { pos: side * 0.292, r1: 0.082, r2: 0.086, offsetA: 0.000 }
+      { pos: side * 0.020, r1: 0.088, r2: 0.094, offsetA: -0.005 },
+      { pos: side * 0.080, r1: 0.082, r2: 0.088, offsetA: -0.004 },
+      { pos: side * 0.150, r1: 0.078, r2: 0.084, offsetA: -0.002 },
+      { pos: side * 0.220, r1: 0.076, r2: 0.080, offsetA: 0.000 },
+      { pos: side * 0.288, r1: 0.080, r2: 0.084, offsetA: 0.000 }
     ];
     if (side < 0) upperRings.reverse();
-    const upperArmGeo = createLoftedGeometry(upperRings, 8, 'x', true, true);
+    const upperArmGeo = createLoftedGeometry(upperRings, 8, 'x', false, false);
     shoulder.add(enableShadows(new THREE.Mesh(upperArmGeo, materials.jacket)));
 
     const elbow = new THREE.Group();
