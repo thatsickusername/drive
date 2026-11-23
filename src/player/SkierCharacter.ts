@@ -1113,7 +1113,7 @@ export class SkierAnimator {
     let carveRWristRz: number;
 
     if (s >= 0) {
-      // LEFT TURN: Left arm is active plant; Right arm is outside forward balance (NOT pushed back!)
+      // LEFT TURN: Left arm is active plant; Right arm remains strictly in idle animation
       carveLShoulderRz = -1.16 + 0.18 * leftReach - 0.08 * leftPush;
       carveLShoulderRx = -0.10 - 0.55 * leftReach + 0.58 * leftPush;
       carveLShoulderRy = 0.08 - 0.16 * leftReach + 0.12 * leftPush;
@@ -1122,16 +1122,16 @@ export class SkierAnimator {
       carveLWristRx = 1.56 - 0.95 * leftReach + 0.18 * leftPush;
       carveLWristRz = -0.45 + 0.62 * leftReach - 0.12 * leftPush;
 
-      // Right arm stays forward/lateral in an athletic balance stance (NOT pushed back!)
-      carveRShoulderRz = 1.05;
-      carveRShoulderRx = -0.25;
-      carveRShoulderRy = -0.15;
-      carveRElbowRy = 0.55;
-      carveRElbowRz = -0.12;
-      carveRWristRx = 0.65; // Forward athletic angle, basket low and ready
-      carveRWristRz = 0.20;
+      // Right arm stays in idle animation (no new carve animation applied)
+      carveRShoulderRz = idleRShoulderRz;
+      carveRShoulderRx = idleRShoulderRx;
+      carveRShoulderRy = idleRShoulderRy;
+      carveRElbowRy = idleRElbowRy;
+      carveRElbowRz = idleRElbowRz;
+      carveRWristRx = idleRWristRx;
+      carveRWristRz = idleRWristRz;
     } else {
-      // RIGHT TURN: Right arm is active plant; Left arm is outside forward balance (NOT pushed back!)
+      // RIGHT TURN: Right arm is active plant; Left arm remains strictly in idle animation
       carveRShoulderRz = 1.16 - 0.18 * rightReach + 0.08 * rightPush;
       carveRShoulderRx = -0.10 - 0.55 * rightReach + 0.58 * rightPush;
       carveRShoulderRy = -0.08 + 0.16 * rightReach - 0.12 * rightPush;
@@ -1140,14 +1140,14 @@ export class SkierAnimator {
       carveRWristRx = 1.56 - 0.95 * rightReach + 0.18 * rightPush;
       carveRWristRz = 0.45 - 0.62 * rightReach + 0.12 * rightPush;
 
-      // Left arm stays forward/lateral in an athletic balance stance (NOT pushed back!)
-      carveLShoulderRz = -1.05;
-      carveLShoulderRx = -0.25;
-      carveLShoulderRy = 0.15;
-      carveLElbowRy = -0.55;
-      carveLElbowRz = 0.12;
-      carveLWristRx = 0.65; // Forward athletic angle, basket low and ready
-      carveLWristRz = -0.20;
+      // Left arm stays in idle animation (no new carve animation applied)
+      carveLShoulderRz = idleLShoulderRz;
+      carveLShoulderRx = idleLShoulderRx;
+      carveLShoulderRy = idleLShoulderRy;
+      carveLElbowRy = idleLElbowRy;
+      carveLElbowRz = idleLElbowRz;
+      carveLWristRx = idleLWristRx;
+      carveLWristRz = idleLWristRz;
     }
 
     this.targets.leftShoulder.rz = THREE.MathUtils.lerp(idleLShoulderRz, carveLShoulderRz, cb);
