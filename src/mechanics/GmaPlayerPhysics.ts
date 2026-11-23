@@ -366,16 +366,16 @@ export class GmaPlayerPhysics {
 
     // Material-dependent properties (materials.yaml)
     let materialFriction = 0.2; // Default Snow_Any_Normal
-    let depthOffset = -0.1;
+    let depthOffset = 0.0;
     if (surfaceType === 'PISTE') {
       materialFriction = 0.1; // Snow_Any_Pist_Fast: 0.1
-      depthOffset = -0.05;
+      depthOffset = 0.0;
     } else if (surfaceType === 'POWDER') {
       materialFriction = 0.3; // Snow_Any_Powder: 0.3
-      depthOffset = -0.25; // Sinks into powder
+      depthOffset = 0.0;
     } else if (surfaceType === 'ICE') {
       materialFriction = 0.1; // Soft_Ice: 0.1
-      depthOffset = -0.05;
+      depthOffset = 0.0;
     } else if (surfaceType === 'ROCK') {
       materialFriction = 10.0; // Soft_Stone: 10.0
       depthOffset = 0.0;

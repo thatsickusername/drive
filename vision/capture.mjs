@@ -156,10 +156,18 @@ async function run() {
       const holdDuration = scenario.includes('plant') ? 350 : 1600;
       await page.waitForTimeout(holdDuration);
     } else if (scenario === 'teleport_4' || scenario.includes('4')) {
-      console.log('[vision] Executing scenario: Teleport to spawn 4 (canyon)...');
+      console.log('[vision] Executing scenario: Teleport to spawn 4 (canyon) and slide down...');
       await page.keyboard.press('Digit4');
-      // Allow skier to drop/glide slightly forward as seen in reference image
-      await page.waitForTimeout(2500);
+      // Wait for player to slide down slope 4
+      await page.waitForTimeout(3000);
+    } else if (scenario.includes('trail') || scenario.includes('acceptance')) {
+      console.log('[vision] Executing scenario: Teleport to spawn 2 (West Peak) and carve right matching acceptance criteria...');
+      await page.keyboard.press('Digit2');
+      await page.waitForTimeout(1000);
+      await page.keyboard.down('KeyD');
+      await page.waitForTimeout(700);
+      await page.keyboard.up('KeyD');
+      await page.waitForTimeout(2400);
     } else if (scenario.startsWith('teleport_')) {
       const num = scenario.split('_')[1];
       console.log(`[vision] Executing scenario: Teleport to spawn ${num}...`);

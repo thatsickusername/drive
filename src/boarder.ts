@@ -6,6 +6,7 @@ import { SurfaceType, TerrainSample } from './world/alpineHeightfield';
 import { GmaPlayerPhysics } from './mechanics/GmaPlayerPhysics';
 import { SportType, TurnType, MovementState } from './mechanics/GmaConfig';
 import { InputState } from './mechanics/ControlsProcessor';
+import { CarvedSnowTrail } from './world/CarvedSnowTrail';
 
 class SnowAudio {
   private ctx: AudioContext | null = null;
@@ -460,7 +461,7 @@ export class Skier {
 
   // Audio, Trail Ribbon and Particles
   private readonly audio = new SnowAudio();
-  private trailRibbon!: SnowTrailRibbon;
+  private trailRibbon!: CarvedSnowTrail;
   private sprayParticles!: THREE.Points;
   private sprayGeo!: THREE.BufferGeometry;
   private sprayPositions!: Float32Array;
@@ -477,10 +478,14 @@ export class Skier {
   private readonly _rayOriginNose = { x: 0, y: 0, z: 0 };
   private readonly _rayOriginTail = { x: 0, y: 0, z: 0 };
   private readonly _rayDir = { x: 0, y: -1, z: 0 };
-  private readonly _alignQuat = new THREE.Quaternion();
-  private readonly _yawQuat = new THREE.Quaternion();
   private readonly _targetQuat = new THREE.Quaternion();
   private readonly _airEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+  private readonly _basisMatrix = new THREE.Matrix4();
+  private readonly _slopeFwd = new THREE.Vector3();
+  private readonly _negSlopeFwd = new THREE.Vector3();
+  private readonly _contactWorldPos = new THREE.Vector3();
+  private terrainSampler: ((x: number, z: number) => number) | null = null;
+  private groundClearanceOffset = 0.0;
 
   constructor(
     world: RAPIER.World,
@@ -520,7 +525,7 @@ export class Skier {
 
     // 3. Build Snow Spray Particle System & Trail Ribbon
     this.initSnowSpray(scene);
-    this.trailRibbon = new SnowTrailRibbon(scene);
+    this.trailRibbon = new CarvedSnowTrail(scene);
 
     // 4. Setup Audio gesture trigger
     const initAudio = () => {
@@ -814,11 +819,27 @@ export class Skier {
    * Call once per render frame to sync visuals and procedural character animation.
    */
   public renderUpdate(dt: number, input: BoarderInput): void {
-    this.root.position.set(
-      this.gmaPhysics.position.x,
-      this.gmaPhysics.position.y + this.cfg.sphereRadius,
-      this.gmaPhysics.position.z
-    );
+    const trueGroundHeight = this.terrainSampler
+      ? this.terrainSampler(this.gmaPhysics.position.x, this.gmaPhysics.position.z)
+      : this.gmaPhysics.position.y;
+
+    const visualGroundY = this.isGrounded
+      ? Math.max(this.gmaPhysics.position.y - this.gmaPhysics.snowDepthPos, trueGroundHeight)
+      : this.gmaPhysics.position.y;
+
+    if (this.isGrounded) {
+      this.root.position.set(
+        this.gmaPhysics.position.x + this.smoothNormal.x * this.cfg.sphereRadius,
+        visualGroundY + this.smoothNormal.y * this.cfg.sphereRadius,
+        this.gmaPhysics.position.z + this.smoothNormal.z * this.cfg.sphereRadius
+      );
+    } else {
+      this.root.position.set(
+        this.gmaPhysics.position.x,
+        visualGroundY + this.cfg.sphereRadius,
+        this.gmaPhysics.position.z
+      );
+    }
 
     // If crashing, ragdoll limbs track the Verlet particles
     if (this.gmaPhysics.state === MovementState.Crashing && this.gmaPhysics.ragdoll.active) {
@@ -831,22 +852,31 @@ export class Skier {
       }
       this.triggerCrashSpray();
     } else {
-      // 1. Align visualRoot to terrain normal + boarder yaw
-      this._alignQuat.setFromUnitVectors(this._up, this.smoothNormal);
-      this._yawQuat.setFromAxisAngle(this._up, this.yaw);
-      this._targetQuat.multiplyQuaternions(this._alignQuat, this._yawQuat);
+      // 1. Build authentic slope-tangent orthonormal basis (conforms skis 100% to terrain slope)
+      const fwdX = -Math.sin(this.yaw);
+      const fwdZ = -Math.cos(this.yaw);
+      this._forward.set(fwdX, 0, fwdZ).normalize();
+
+      // Right vector level with terrain slope contours
+      this._right.crossVectors(this._forward, this.smoothNormal).normalize();
+
+      // Slope forward vector strictly tangent to terrain slope along travel direction
+      this._slopeFwd.crossVectors(this.smoothNormal, this._right).normalize();
+      this._negSlopeFwd.copy(this._slopeFwd).negate();
+
+      // Right-handed basis for visualRoot where character faces -Z in visualRoot
+      // xAxis = _right, yAxis = smoothNormal, zAxis = _negSlopeFwd
+      this._basisMatrix.makeBasis(this._right, this.smoothNormal, this._negSlopeFwd);
+      this._targetQuat.setFromRotationMatrix(this._basisMatrix);
 
       if (!this.isGrounded) {
         this._airEuler.set(this.gmaPhysics.airPitch, 0, this.gmaPhysics.airRoll);
         const airQ = new THREE.Quaternion().setFromEuler(this._airEuler);
         this._targetQuat.multiply(airQ);
       }
-      this.visualRoot.quaternion.slerp(this._targetQuat, Math.min(1, dt * 16));
+      this.visualRoot.quaternion.slerp(this._targetQuat, Math.min(1, dt * 24));
 
-      // 2. Snow depth suspension absorption
-      this.skierCharacter.root.position.y = -this.cfg.sphereRadius + 0.02;
-
-      // 3. Dynamic Procedural Animation Update (Idle glide vs Alpine Carving + Pole Plants)
+      // 2. Dynamic Procedural Animation Update (Idle glide vs Alpine Carving + Pole Plants)
       this.animator.update({
         dt,
         speed: this.speed,
@@ -858,6 +888,49 @@ export class Skier {
         inputLeft: !!input.left || (input.steerX !== undefined && input.steerX < -0.25),
         inputRight: !!input.right || (input.steerX !== undefined && input.steerX > 0.25)
       });
+
+      // 3. Foot Grounding & Ski Elevation Clamping:
+      // Keep ski boards consistently on top of the powder snow surface (+0.046m above hard pack).
+      // Automatically compensates for hip crouch/tuck drop so feet and skis NEVER sink into the snow.
+      const crouchComp = this.animator.crouchOffset;
+      const baseElev = -this.cfg.sphereRadius + 0.084 + crouchComp;
+      this.skierCharacter.root.position.y = baseElev;
+
+      // 4. Multi-Point Terrain Clearance Clamping:
+      // Checks all 16 contact points of the skis (shovel tips, front edges, mid edges, tails).
+      // If slope pitch or convexity threatens to submerge any portion of the ski board,
+      // dynamically elevate the visual root along the surface normal so skis stay 100% visible and above snow/trails.
+      if (this.isGrounded && this.terrainSampler) {
+        this.skierCharacter.root.updateMatrixWorld(true);
+        let maxPenetration = 0.0;
+        const targetClearance = 0.046; // Ski base stays at least 4.6cm above hard collision terrain
+        const contacts = this.skierCharacter.footContacts;
+
+        for (let i = 0; i < contacts.length; i++) {
+          contacts[i].getWorldPosition(this._contactWorldPos);
+          const localGroundY = this.terrainSampler(this._contactWorldPos.x, this._contactWorldPos.z);
+          const penetration = (localGroundY + targetClearance) - this._contactWorldPos.y;
+          if (penetration > maxPenetration) {
+            maxPenetration = penetration;
+          }
+        }
+
+        const normalY = Math.max(0.25, this.smoothNormal.y);
+        const normPenetration = maxPenetration / normalY;
+
+        if (normPenetration > 0) {
+          // Immediately eliminate penetration along the surface normal
+          this.groundClearanceOffset = Math.max(this.groundClearanceOffset, normPenetration);
+        } else {
+          this.groundClearanceOffset = THREE.MathUtils.damp(
+            this.groundClearanceOffset,
+            0.0,
+            14.0,
+            dt
+          );
+        }
+        this.skierCharacter.root.position.y += this.groundClearanceOffset;
+      }
 
       // 4. Staking Sound Trigger
       if (this.isGrounded && this.gmaPhysics.isStaking) {
@@ -887,6 +960,23 @@ export class Skier {
 
     this.gmaPhysics.trickScoring.updateDisplay(dt);
     this.trickEngine.updateDisplayTimer(dt);
+  }
+
+  public updateTrailLighting(
+    time: number,
+    sunDir: THREE.Vector3,
+    cameraPos: THREE.Vector3,
+    nightFactor: number = 0.0,
+    sunColor?: THREE.Color,
+    shadowColor?: THREE.Color
+  ): void {
+    if (this.trailRibbon) {
+      this.trailRibbon.updateUniforms(time, sunDir, cameraPos, nightFactor, sunColor, shadowColor);
+    }
+  }
+
+  public setTerrainSampler(sampler: (x: number, z: number) => number): void {
+    this.terrainSampler = sampler;
   }
 
   private triggerCrashSpray(): void {

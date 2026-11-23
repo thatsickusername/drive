@@ -238,7 +238,8 @@ export function createFlaredCollarGeometry(): THREE.BufferGeometry {
 }
 
 /**
- * Builds a low-poly alpine carving ski with upturned front shovel tip and twin-tip tail
+ * Builds an authentic alpine carving ski matching reference criteria
+ * Wider powder sidecut, high-contrast racing sidewalls, prominent upturned shovel tips and twin tails
  */
 export function createAlpineSki(
   skiBaseMat: THREE.Material,
@@ -248,38 +249,40 @@ export function createAlpineSki(
 ): THREE.Group {
   const skiGroup = new THREE.Group();
 
-  // Main ski plank (length ~1.48m, centered slightly forward of ankle)
-  const mainGeo = new THREE.BoxGeometry(0.112, 0.016, 1.32);
+  // 1. Main ski plank (length ~1.56m, width 0.142m, thickness 0.034m)
+  const mainGeo = new THREE.BoxGeometry(0.142, 0.034, 1.42);
   const mainMesh = enableShadows(new THREE.Mesh(mainGeo, skiBaseMat));
-  mainMesh.position.set(0, -0.138, 0.08);
+  mainMesh.position.set(0, -0.130, 0.06);
   skiGroup.add(mainMesh);
 
-  // Subtle top accent racing stripe
-  const stripeGeo = new THREE.BoxGeometry(0.068, 0.005, 1.18);
+  // 2. High-visibility top racing cap / graphics layer
+  const stripeGeo = new THREE.BoxGeometry(0.106, 0.010, 1.30);
   const stripeMesh = enableShadows(new THREE.Mesh(stripeGeo, skiAccentMat));
-  stripeMesh.position.set(0, -0.128, 0.08);
+  stripeMesh.position.set(0, -0.111, 0.06);
   skiGroup.add(stripeMesh);
 
-  // Upturned front shovel tip
-  const tipGeo = new THREE.BoxGeometry(0.106, 0.014, 0.22);
+  // 3. Upturned front shovel tip (curves gracefully above powder layer to +0.06m)
+  const tipGeo = new THREE.BoxGeometry(0.136, 0.028, 0.28);
   const tipMesh = enableShadows(new THREE.Mesh(tipGeo, skiAccentMat));
-  tipMesh.position.set(0, -0.106, 0.82);
-  tipMesh.rotation.x = -0.34;
+  tipMesh.position.set(0, -0.092, 0.88);
+  tipMesh.rotation.x = -0.32;
   skiGroup.add(tipMesh);
 
-  // Slight upturned twin-tip tail
-  const tailGeo = new THREE.BoxGeometry(0.104, 0.014, 0.14);
+  // 4. Twin-tip tail (slight upturn above trail surface)
+  const tailGeo = new THREE.BoxGeometry(0.132, 0.026, 0.22);
   const tailMesh = enableShadows(new THREE.Mesh(tailGeo, skiBaseMat));
-  tailMesh.position.set(0, -0.128, -0.63);
-  tailMesh.rotation.x = 0.18;
+  tailMesh.position.set(0, -0.112, -0.73);
+  tailMesh.rotation.x = 0.22;
   skiGroup.add(tailMesh);
 
-  // Toe & heel binding blocks
-  const bindGeo = new THREE.BoxGeometry(0.088, 0.024, 0.075);
-  const toeBind = enableShadows(new THREE.Mesh(bindGeo, bindingMat));
-  toeBind.position.set(0, -0.122, 0.21);
-  const heelBind = enableShadows(new THREE.Mesh(bindGeo, bindingMat));
-  heelBind.position.set(0, -0.122, -0.12);
+  // 5. Alpine DIN toe & heel binding blocks mounted atop plank
+  const toeBindGeo = new THREE.BoxGeometry(0.102, 0.032, 0.088);
+  const toeBind = enableShadows(new THREE.Mesh(toeBindGeo, bindingMat));
+  toeBind.position.set(0, -0.097, 0.22);
+
+  const heelBindGeo = new THREE.BoxGeometry(0.102, 0.032, 0.096);
+  const heelBind = enableShadows(new THREE.Mesh(heelBindGeo, bindingMat));
+  heelBind.position.set(0, -0.097, -0.14);
   skiGroup.add(toeBind, heelBind);
 
   return skiGroup;
@@ -807,13 +810,44 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     ankle.add(ski);
     skis.push(ski);
 
-    // Grounding Contact Probes
+    // Grounding Contact Probes (Tip shovel, Forward edge, Center, Back edge, Tail)
+    const probeTip = new THREE.Object3D();
+    probeTip.position.set(0, -0.147, 0.78);
+    const probeFrontIn = new THREE.Object3D();
+    probeFrontIn.position.set(-0.065, -0.147, 0.42);
+    const probeFrontOut = new THREE.Object3D();
+    probeFrontOut.position.set(0.065, -0.147, 0.42);
     const probeInner = new THREE.Object3D();
-    probeInner.position.set(-0.052, -0.146, 0.04);
+    probeInner.position.set(-0.065, -0.147, 0.02);
     const probeOuter = new THREE.Object3D();
-    probeOuter.position.set(0.052, -0.146, 0.04);
-    ankle.add(probeInner, probeOuter);
-    footContacts.push(probeInner, probeOuter);
+    probeOuter.position.set(0.065, -0.147, 0.02);
+    const probeBackIn = new THREE.Object3D();
+    probeBackIn.position.set(-0.065, -0.147, -0.38);
+    const probeBackOut = new THREE.Object3D();
+    probeBackOut.position.set(0.065, -0.147, -0.38);
+    const probeTail = new THREE.Object3D();
+    probeTail.position.set(0, -0.147, -0.68);
+
+    ankle.add(
+      probeTip,
+      probeFrontIn,
+      probeFrontOut,
+      probeInner,
+      probeOuter,
+      probeBackIn,
+      probeBackOut,
+      probeTail
+    );
+    footContacts.push(
+      probeTip,
+      probeFrontIn,
+      probeFrontOut,
+      probeInner,
+      probeOuter,
+      probeBackIn,
+      probeBackOut,
+      probeTail
+    );
   }
 
   buildLeg(1);
@@ -888,6 +922,10 @@ export class SkierAnimator {
   private targets: Record<string, { rx: number; ry: number; rz: number }> = {};
   private hipPosTarget = { x: 0, y: 0.82, z: 0 };
   private hipY = 0.82;
+
+  public get crouchOffset(): number {
+    return Math.max(0, 0.82 - this.hipY);
+  }
 
   constructor(skier: SkierCharacter) {
     this.skier = skier;

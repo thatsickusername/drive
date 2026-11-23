@@ -66,6 +66,9 @@ class Game {
       spawnPos
     );
     this.player.heading = this.currentSpawn.heading;
+    this.player.setTerrainSampler((x: number, z: number) => {
+      return this.massif.heightfield.sampleTerrain(x, z).height;
+    });
 
     // 6. Initialize Camera Director & Dynamic Terrain Elevation Sampler
     this.cameraDirector = new DynamicCameraDirector(this.renderer.camera);
@@ -257,6 +260,14 @@ class Game {
       timeSec,
       this.renderer.camera.position,
       this.player.mesh.position,
+      this.renderer.nightFactor,
+      this.renderer.currentSunColor,
+      this.renderer.currentShadowColor
+    );
+    this.player.updateTrailLighting(
+      timeSec,
+      this.renderer.sunDir,
+      this.renderer.camera.position,
       this.renderer.nightFactor,
       this.renderer.currentSunColor,
       this.renderer.currentShadowColor
