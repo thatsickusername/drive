@@ -146,7 +146,15 @@ async function run() {
     await page.waitForTimeout(1500);
 
     // Apply scenario
-    if (scenario === 'teleport_4' || scenario.includes('4')) {
+    if (scenario.includes('carve') || scenario.includes('steer')) {
+      console.log('[vision] Executing scenario: Teleport to spawn 1 and hold carve steering...');
+      await page.keyboard.press('Digit1');
+      await page.waitForTimeout(1200);
+      const key = scenario.includes('right') ? 'KeyD' : 'KeyA';
+      console.log(`[vision] Holding ${key} for dynamic carving turn...`);
+      await page.keyboard.down(key);
+      await page.waitForTimeout(1600);
+    } else if (scenario === 'teleport_4' || scenario.includes('4')) {
       console.log('[vision] Executing scenario: Teleport to spawn 4 (canyon)...');
       await page.keyboard.press('Digit4');
       // Allow skier to drop/glide slightly forward as seen in reference image

@@ -1,0 +1,1574 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Minimal Low-Poly Skier — Carving & Idle Animations</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            /* Clean neutral studio backdrop */
+            background: radial-gradient(circle at 50% 42%, #eaecf0 0%, #dcdfe6 60%, #cfd4dc 100%);
+        }
+
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            touch-action: none;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            outline: none;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.74);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.88);
+            box-shadow: 0 8px 30px rgba(30, 50, 75, 0.08);
+        }
+
+        .swatch-btn {
+            transition: transform 0.18s ease, box-shadow 0.18s ease;
+        }
+
+        .swatch-btn:hover {
+            transform: scale(1.12);
+        }
+
+        .swatch-btn.active {
+            box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #1e293b;
+        }
+
+        .anim-btn.active {
+            background-color: #1e293b;
+            color: #ffffff;
+            box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);
+        }
+
+        input[type="range"] {
+            accent-color: #1e293b;
+        }
+    </style>
+
+    <!-- Import map for Three.js ES Modules -->
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+
+<body>
+    <div id="canvas-container"></div>
+
+    <!-- Minimal Top-Left Header -->
+    <div class="fixed top-4 left-4 sm:top-6 sm:left-6 z-10 pointer-events-none">
+        <div class="glass-panel rounded-2xl px-4 py-3 pointer-events-auto">
+            <div class="flex items-center gap-2.5">
+                <span id="physics-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"
+                    title="Rapier Physics Status"></span>
+                <h1 class="text-sm font-semibold tracking-tight text-slate-800">Alpine Skier Rig</h1>
+            </div>
+            <p id="status-text" class="text-[11px] text-slate-500 mt-0.5 font-medium">Initializing Rapier3D...</p>
+            <p id="phase-readout" class="text-[10px] text-slate-500 mt-1 font-medium tracking-wide uppercase">Mode:
+                Alpine Carving</p>
+        </div>
+    </div>
+
+    <!-- Animation Playback Pill (Top-Right) -->
+    <div class="fixed top-4 right-4 sm:top-6 sm:right-6 z-10">
+        <div class="glass-panel rounded-2xl px-3.5 py-2.5 flex items-center gap-3">
+            <button id="btn-play-pause"
+                class="w-7 h-7 rounded-full bg-slate-800 text-white flex items-center justify-center hover:bg-slate-700 active:scale-95 transition cursor-pointer"
+                title="Play / Pause Animation">
+                <svg id="icon-pause" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="6" y="4" width="4" height="16" rx="1"></rect>
+                    <rect x="14" y="4" width="4" height="16" rx="1"></rect>
+                </svg>
+                <svg id="icon-play" class="w-3.5 h-3.5 hidden" viewBox="0 0 24 24" fill="currentColor">
+                    <polygon points="6 4 20 12 6 20 6 4"></polygon>
+                </svg>
+            </button>
+            <div class="flex flex-col">
+                <div class="flex items-center justify-between gap-2">
+                    <span class="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Speed</span>
+                    <span id="speed-label" class="text-[10px] font-semibold text-slate-700 tabular-nums">1.0x</span>
+                </div>
+                <input id="speed-slider" type="range" min="0.2" max="2.0" step="0.1" value="1.0"
+                    class="w-24 h-1.5 cursor-pointer mt-0.5" />
+            </div>
+        </div>
+    </div>
+
+    <!-- Minimal Bottom Control Bar -->
+    <div class="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-10 w-[calc(100%-2rem)] max-w-fit">
+        <div class="glass-panel rounded-full px-3 py-2 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
+            <!-- Animation State Selector -->
+            <div class="flex items-center bg-slate-200/60 rounded-full p-0.5">
+                <button data-anim="carving"
+                    class="anim-btn active px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
+                    Carving
+                </button>
+                <button data-anim="idle"
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
+                    Idle Skiing
+                </button>
+                <button data-anim="tpose"
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
+                    T-Pose
+                </button>
+            </div>
+
+            <!-- Divider -->
+            <div class="w-px h-5 bg-slate-300/70 mx-0.5 hidden sm:block"></div>
+
+            <!-- Toggle Skis -->
+            <button id="btn-skis"
+                class="px-3 py-1.5 rounded-full text-xs font-medium bg-slate-800 text-white active:scale-95 transition cursor-pointer">
+                Skis
+            </button>
+
+            <!-- Toggle Rig Skeleton Overlay -->
+            <button id="btn-rig"
+                class="px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 hover:bg-white/80 active:scale-95 transition flex items-center gap-1.5 cursor-pointer">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="5" r="2"></circle>
+                    <circle cx="12" cy="12" r="2"></circle>
+                    <circle cx="6" cy="12" r="2"></circle>
+                    <circle cx="18" cy="12" r="2"></circle>
+                    <circle cx="9" cy="19" r="2"></circle>
+                    <circle cx="15" cy="19" r="2"></circle>
+                    <line x1="12" y1="7" x2="12" y2="10"></line>
+                    <line x1="8" y1="12" x2="10" y2="12"></line>
+                    <line x1="14" y1="12" x2="16" y2="12"></line>
+                    <line x1="11" y1="14" x2="9.5" y2="17.2"></line>
+                    <line x1="13" y1="14" x2="14.5" y2="17.2"></line>
+                </svg>
+                <span>Rig</span>
+            </button>
+
+            <!-- Test Rapier Physics Drop -->
+            <button id="btn-drop"
+                class="px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 hover:bg-white/80 active:scale-95 transition flex items-center gap-1 cursor-pointer">
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3v14"></path>
+                    <path d="m17 12-5 5-5-5"></path>
+                    <path d="M5 21h14"></path>
+                </svg>
+                <span>Drop</span>
+            </button>
+
+            <!-- Reset Camera -->
+            <button id="btn-reset-cam"
+                class="px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 hover:bg-white/80 active:scale-95 transition cursor-pointer">
+                Reset View
+            </button>
+
+            <!-- Divider -->
+            <div class="w-px h-5 bg-slate-300/70 mx-0.5 hidden sm:block"></div>
+
+            <!-- Minimal Alpine Jacket Colorways -->
+            <div class="flex items-center gap-2 px-1" title="Jacket Colorway">
+                <button data-palette="coral" class="swatch-btn active w-4 h-4 rounded-full bg-[#e4522e] cursor-pointer"
+                    aria-label="Reference Orange"></button>
+                <button data-palette="ochre" class="swatch-btn w-4 h-4 rounded-full bg-[#e6a938] cursor-pointer"
+                    aria-label="Summit Ochre"></button>
+                <button data-palette="glacier" class="swatch-btn w-4 h-4 rounded-full bg-[#3b8ea5] cursor-pointer"
+                    aria-label="Glacier Teal"></button>
+                <button data-palette="pine" class="swatch-btn w-4 h-4 rounded-full bg-[#3f7d58] cursor-pointer"
+                    aria-label="Alpine Pine"></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hint Toast -->
+    <div id="toast"
+        class="fixed bottom-20 left-1/2 -translate-x-1/2 z-10 glass-panel rounded-xl px-3.5 py-2 text-[11px] font-medium text-slate-600 opacity-0 pointer-events-none transition-opacity duration-300">
+        Drag to orbit • Scroll to zoom • Use Speed slider for slow-mo carving inspection
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        /**
+         * ============================================================================
+         * COLOR PALETTES
+         * ============================================================================
+         */
+        const PALETTES = {
+            coral: {
+                jacket: 0xe65632,
+                jacketInner: 0xc44120,
+                beanie: 0x8d959e,
+                beanieCuff: 0x767f89,
+                pomPom: 0x878f98,
+                goggleLens: 0x1c3e66,
+                pants: 0x526477,
+                skiAccent: 0xe65632
+            },
+            ochre: {
+                jacket: 0xe6a938,
+                jacketInner: 0xc48a20,
+                beanie: 0x67717d,
+                beanieCuff: 0x545d68,
+                pomPom: 0x626b76,
+                goggleLens: 0x1e3a5f,
+                pants: 0x455464,
+                skiAccent: 0xe6a938
+            },
+            glacier: {
+                jacket: 0x3b8ea5,
+                jacketInner: 0x2a6d80,
+                beanie: 0xd95d39,
+                beanieCuff: 0xbf4d2c,
+                pomPom: 0xcf5634,
+                goggleLens: 0x182e4a,
+                pants: 0x465566,
+                skiAccent: 0x3b8ea5
+            },
+            pine: {
+                jacket: 0x3f7d58,
+                jacketInner: 0x2d5e41,
+                beanie: 0x8d959e,
+                beanieCuff: 0x767f89,
+                pomPom: 0x848c96,
+                goggleLens: 0x1c3e66,
+                pants: 0x495867,
+                skiAccent: 0x3f7d58
+            }
+        };
+
+        /**
+         * ============================================================================
+         * PROCEDURAL LOW-POLY GEOMETRY & MATERIAL HELPERS
+         * ============================================================================
+         */
+        function createMatteMaterial(color, roughness = 0.88, metalness = 0.02) {
+            return new THREE.MeshStandardMaterial({
+                color,
+                roughness,
+                metalness,
+                flatShading: true
+            });
+        }
+
+        function createLoftedGeometry(rings, radialSegments = 8, axis = 'y', capStart = true, capEnd = true) {
+            const positions = [];
+            const indices = [];
+            const ringCount = rings.length;
+
+            for (let i = 0; i < ringCount; i++) {
+                const { pos, r1, r2, offsetA = 0, offsetB = 0, twist = 0 } = rings[i];
+                for (let j = 0; j < radialSegments; j++) {
+                    const theta = (j / radialSegments) * Math.PI * 2 + twist;
+                    if (axis === 'y') {
+                        const x = offsetA + Math.cos(theta) * r1;
+                        const z = offsetB + Math.sin(theta) * r2;
+                        positions.push(x, pos, z);
+                    } else {
+                        const y = offsetA + Math.sin(theta) * r1;
+                        const z = offsetB + Math.cos(theta) * r2;
+                        positions.push(pos, y, z);
+                    }
+                }
+            }
+
+            for (let i = 0; i < ringCount - 1; i++) {
+                const rowA = i * radialSegments;
+                const rowB = (i + 1) * radialSegments;
+                for (let j = 0; j < radialSegments; j++) {
+                    const nextJ = (j + 1) % radialSegments;
+                    const a = rowA + j;
+                    const b = rowB + j;
+                    const c = rowB + nextJ;
+                    const d = rowA + nextJ;
+                    indices.push(a, b, c);
+                    indices.push(a, c, d);
+                }
+            }
+
+            if (capStart) {
+                const r0 = rings[0];
+                const centerIdx = positions.length / 3;
+                if (axis === 'y') {
+                    positions.push(r0.offsetA || 0, r0.pos, r0.offsetB || 0);
+                } else {
+                    positions.push(r0.pos, r0.offsetA || 0, r0.offsetB || 0);
+                }
+                for (let j = 0; j < radialSegments; j++) {
+                    const nextJ = (j + 1) % radialSegments;
+                    indices.push(centerIdx, j, nextJ);
+                }
+            }
+
+            if (capEnd) {
+                const rLast = rings[ringCount - 1];
+                const lastRow = (ringCount - 1) * radialSegments;
+                const centerIdx = positions.length / 3;
+                if (axis === 'y') {
+                    positions.push(rLast.offsetA || 0, rLast.pos, rLast.offsetB || 0);
+                } else {
+                    positions.push(rLast.pos, rLast.offsetA || 0, rLast.offsetB || 0);
+                }
+                for (let j = 0; j < radialSegments; j++) {
+                    const nextJ = (j + 1) % radialSegments;
+                    indices.push(centerIdx, lastRow + nextJ, lastRow + j);
+                }
+            }
+
+            let geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geo.setIndex(indices);
+            geo = geo.toNonIndexed();
+            geo.computeVertexNormals();
+            return geo;
+        }
+
+        function createFlaredCollarGeometry() {
+            const segs = 12;
+            const startBot = -Math.PI * 0.485;
+            const endBot = Math.PI * 1.485;
+            const startTop = -Math.PI * 0.35;
+            const endTop = Math.PI * 1.35;
+
+            const rBottomIn = 0.088;
+            const rBottomOut = 0.126;
+            const rTopIn = 0.126;
+            const rTopOut = 0.162;
+
+            const positions = [];
+            const indices = [];
+
+            const rings = [];
+            for (let i = 0; i <= segs; i++) {
+                const t = i / segs;
+                const aBot = startBot + t * (endBot - startBot);
+                const aTop = startTop + t * (endTop - startTop);
+
+                const xb = Math.cos(aBot);
+                const zb = -Math.sin(aBot);
+                const xt = Math.cos(aTop);
+                const zt = -Math.sin(aTop);
+
+                const distFromFront = Math.sin(t * Math.PI);
+                const hTop = 0.042 + 0.076 * Math.pow(distFromFront, 0.55);
+                const hBot = -0.012 + 0.014 * distFromFront;
+
+                rings.push({
+                    bo: [xb * rBottomOut, hBot, zb * rBottomOut * 0.94],
+                    to: [xt * rTopOut, hTop, zt * rTopOut * 0.95],
+                    ti: [xt * rTopIn, hTop - 0.005, zt * rTopIn * 0.95],
+                    bi: [xb * rBottomIn, hBot, zb * rBottomIn * 0.94]
+                });
+            }
+
+            for (let i = 0; i <= segs; i++) {
+                positions.push(...rings[i].bo, ...rings[i].to, ...rings[i].ti, ...rings[i].bi);
+            }
+
+            const addQuad = (a, b, c, d) => {
+                indices.push(a, b, c, a, c, d);
+            };
+
+            for (let i = 0; i < segs; i++) {
+                const b0 = i * 4;
+                const b1 = (i + 1) * 4;
+                addQuad(b0 + 0, b1 + 0, b1 + 1, b0 + 1);
+                addQuad(b0 + 1, b1 + 1, b1 + 2, b0 + 2);
+                addQuad(b0 + 2, b1 + 2, b1 + 3, b0 + 3);
+                addQuad(b0 + 3, b1 + 3, b1 + 0, b0 + 0);
+            }
+
+            addQuad(0, 1, 2, 3);
+            const last = segs * 4;
+            addQuad(last + 3, last + 2, last + 1, last + 0);
+
+            let geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geo.setIndex(indices);
+            geo = geo.toNonIndexed();
+            geo.computeVertexNormals();
+            return geo;
+        }
+
+        /**
+         * Builds a sleek low-poly alpine carving ski with upturned tip and binding plate
+         */
+        function createAlpineSki(skiBaseMat, skiAccentMat, bindingMat, enableShadows) {
+            const skiGroup = new THREE.Group();
+
+            // Main ski plank (length ~1.48m, centered slightly forward of ankle)
+            const mainGeo = new THREE.BoxGeometry(0.112, 0.016, 1.32);
+            const mainMesh = enableShadows(new THREE.Mesh(mainGeo, skiBaseMat));
+            mainMesh.position.set(0, -0.138, 0.08);
+            skiGroup.add(mainMesh);
+
+            // Subtle top accent racing stripe
+            const stripeGeo = new THREE.BoxGeometry(0.068, 0.005, 1.18);
+            const stripeMesh = enableShadows(new THREE.Mesh(stripeGeo, skiAccentMat));
+            stripeMesh.position.set(0, -0.128, 0.08);
+            skiGroup.add(stripeMesh);
+
+            // Upturned front shovel tip
+            const tipGeo = new THREE.BoxGeometry(0.106, 0.014, 0.22);
+            const tipMesh = enableShadows(new THREE.Mesh(tipGeo, skiAccentMat));
+            tipMesh.position.set(0, -0.106, 0.82);
+            tipMesh.rotation.x = -0.34;
+            skiGroup.add(tipMesh);
+
+            // Slight upturned twin-tip tail
+            const tailGeo = new THREE.BoxGeometry(0.104, 0.014, 0.14);
+            const tailMesh = enableShadows(new THREE.Mesh(tailGeo, skiBaseMat));
+            tailMesh.position.set(0, -0.128, -0.63);
+            tailMesh.rotation.x = 0.18;
+            skiGroup.add(tailMesh);
+
+            // Toe & heel binding blocks
+            const bindGeo = new THREE.BoxGeometry(0.088, 0.024, 0.075);
+            const toeBind = enableShadows(new THREE.Mesh(bindGeo, bindingMat));
+            toeBind.position.set(0, -0.122, 0.21);
+            const heelBind = enableShadows(new THREE.Mesh(bindGeo, bindingMat));
+            heelBind.position.set(0, -0.122, -0.12);
+            skiGroup.add(toeBind, heelBind);
+
+            return skiGroup;
+        }
+
+        /**
+         * ============================================================================
+         * BUILD HIERARCHICAL LOW-POLY SKIER CHARACTER (ANIMATION-READY RIG)
+         * ============================================================================
+         */
+        function buildSkierCharacter(initialPalette = PALETTES.coral) {
+            const root = new THREE.Group();
+            root.name = 'skierRoot';
+
+            const materials = {
+                jacket: createMatteMaterial(initialPalette.jacket, 0.86, 0.01),
+                jacketInner: createMatteMaterial(initialPalette.jacketInner, 0.90, 0.01),
+                pants: createMatteMaterial(initialPalette.pants, 0.88, 0.01),
+                beanie: createMatteMaterial(initialPalette.beanie, 0.94, 0.0),
+                beanieCuff: createMatteMaterial(initialPalette.beanieCuff, 0.94, 0.0),
+                pomPom: createMatteMaterial(initialPalette.pomPom, 0.96, 0.0),
+                skin: createMatteMaterial(0xdcc3ae, 0.88, 0.0),
+                innerShirt: createMatteMaterial(0x353b44, 0.92, 0.0),
+                goggleFrame: createMatteMaterial(0x1f242c, 0.65, 0.05),
+                goggleStrap: createMatteMaterial(0x222730, 0.88, 0.0),
+                goggleLens: new THREE.MeshStandardMaterial({
+                    color: initialPalette.goggleLens,
+                    roughness: 0.42,
+                    metalness: 0.16,
+                    flatShading: true
+                }),
+                glove: createMatteMaterial(0x23272e, 0.85, 0.03),
+                boot: createMatteMaterial(0x2b3038, 0.78, 0.04),
+                bootSole: createMatteMaterial(0x4c5460, 0.84, 0.03),
+                bootAccent: createMatteMaterial(0x8c95a3, 0.80, 0.03),
+                skiBase: createMatteMaterial(0x262c36, 0.62, 0.12),
+                skiAccent: createMatteMaterial(initialPalette.skiAccent, 0.55, 0.08),
+                poleShaft: new THREE.MeshStandardMaterial({
+                    color: 0x69727e,
+                    roughness: 0.52,
+                    metalness: 0.32,
+                    flatShading: true
+                }),
+                poleGrip: createMatteMaterial(0x2d333c, 0.86, 0.04),
+                poleBasket: createMatteMaterial(0x4a525e, 0.80, 0.04)
+            };
+
+            const collarMat = materials.jacket.clone();
+            collarMat.side = THREE.DoubleSide;
+
+            const enableShadows = (mesh) => {
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                return mesh;
+            };
+
+            const joints = {};
+            const skis = [];
+            const footContacts = []; // Reference points at bottom of soles/skis for grounding
+
+            // ------------------------------------------------------------------------
+            // 1. HIPS (Pelvis pivot at y = 0.82)
+            // ------------------------------------------------------------------------
+            const hips = new THREE.Group();
+            hips.name = 'hips';
+            hips.position.set(0, 0.82, 0);
+            root.add(hips);
+            joints.hips = hips;
+
+            const pelvisGeo = createLoftedGeometry([
+                { pos: -0.055, r1: 0.168, r2: 0.118 },
+                { pos: 0.005, r1: 0.178, r2: 0.125 },
+                { pos: 0.055, r1: 0.172, r2: 0.120 }
+            ], 8, 'y', true, true);
+            hips.add(enableShadows(new THREE.Mesh(pelvisGeo, materials.pants)));
+
+            // ------------------------------------------------------------------------
+            // 2. SPINE & SCULPTED FACETED PUFFER JACKET TORSO
+            // ------------------------------------------------------------------------
+            const spine = new THREE.Group();
+            spine.name = 'spine';
+            spine.position.set(0, 0.02, 0);
+            hips.add(spine);
+            joints.spine = spine;
+
+            const torsoGeo = createLoftedGeometry([
+                { pos: -0.095, r1: 0.236, r2: 0.162, twist: 0.0 },
+                { pos: -0.045, r1: 0.268, r2: 0.184, twist: 0.0 },
+                { pos: 0.065, r1: 0.258, r2: 0.178, twist: 0.08 },
+                { pos: 0.185, r1: 0.248, r2: 0.174, twist: 0.0 },
+                { pos: 0.310, r1: 0.272, r2: 0.186, twist: 0.08 },
+                { pos: 0.435, r1: 0.282, r2: 0.184, twist: 0.0 },
+                { pos: 0.515, r1: 0.232, r2: 0.158, twist: 0.08 },
+                { pos: 0.555, r1: 0.140, r2: 0.124, twist: 0.0 }
+            ], 10, 'y', true, true);
+            spine.add(enableShadows(new THREE.Mesh(torsoGeo, materials.jacket)));
+
+            const collarGeo = createFlaredCollarGeometry();
+            const collarMesh = enableShadows(new THREE.Mesh(collarGeo, collarMat));
+            collarMesh.position.set(0, 0.538, 0.004);
+            spine.add(collarMesh);
+
+            const innerNeckGeo = new THREE.CylinderGeometry(0.076, 0.088, 0.040, 8);
+            const innerNeckMesh = enableShadows(new THREE.Mesh(innerNeckGeo, materials.innerShirt));
+            innerNeckMesh.position.set(0, 0.548, 0.006);
+            spine.add(innerNeckMesh);
+
+            // ------------------------------------------------------------------------
+            // 3. NECK & HEAD
+            // ------------------------------------------------------------------------
+            const neck = new THREE.Group();
+            neck.name = 'neck';
+            neck.position.set(0, 0.535, 0);
+            spine.add(neck);
+            joints.neck = neck;
+
+            const neckSkinGeo = new THREE.CylinderGeometry(0.062, 0.072, 0.048, 8);
+            const neckSkinMesh = enableShadows(new THREE.Mesh(neckSkinGeo, materials.skin));
+            neckSkinMesh.position.set(0, 0.022, 0);
+            neck.add(neckSkinMesh);
+
+            const head = new THREE.Group();
+            head.name = 'head';
+            head.position.set(0, 0.036, 0);
+            neck.add(head);
+            joints.head = head;
+
+            const headGeo = createLoftedGeometry([
+                { pos: 0.0, r1: 0.062, r2: 0.060 },
+                { pos: 0.038, r1: 0.106, r2: 0.108, offsetB: 0.008 },
+                { pos: 0.102, r1: 0.132, r2: 0.134, offsetB: 0.006 },
+                { pos: 0.172, r1: 0.136, r2: 0.138, offsetB: 0.0 },
+                { pos: 0.232, r1: 0.120, r2: 0.122, offsetB: -0.004 },
+                { pos: 0.270, r1: 0.068, r2: 0.070, offsetB: -0.006 }
+            ], 10, 'y', true, true);
+            head.add(enableShadows(new THREE.Mesh(headGeo, materials.skin)));
+
+            const noseGeo = new THREE.ConeGeometry(0.020, 0.042, 4);
+            noseGeo.rotateX(Math.PI * 0.44);
+            const noseMesh = enableShadows(new THREE.Mesh(noseGeo, materials.skin));
+            noseMesh.position.set(0, 0.114, 0.139);
+            head.add(noseMesh);
+
+            const beanieCuffGeo = createLoftedGeometry([
+                { pos: 0.184, r1: 0.148, r2: 0.150, offsetB: -0.004 },
+                { pos: 0.224, r1: 0.152, r2: 0.154, offsetB: -0.005 }
+            ], 10, 'y', true, true);
+            head.add(enableShadows(new THREE.Mesh(beanieCuffGeo, materials.beanieCuff)));
+
+            const beanieDomeGeo = createLoftedGeometry([
+                { pos: 0.220, r1: 0.145, r2: 0.147, offsetB: -0.005 },
+                { pos: 0.270, r1: 0.136, r2: 0.138, offsetB: -0.006 },
+                { pos: 0.318, r1: 0.104, r2: 0.106, offsetB: -0.007 },
+                { pos: 0.348, r1: 0.048, r2: 0.049, offsetB: -0.007 }
+            ], 10, 'y', true, true);
+            head.add(enableShadows(new THREE.Mesh(beanieDomeGeo, materials.beanie)));
+
+            const pomGroup = new THREE.Group();
+            pomGroup.position.set(0, 0.376, -0.008);
+            pomGroup.add(enableShadows(new THREE.Mesh(new THREE.IcosahedronGeometry(0.036, 1), materials.pomPom)));
+            const tuftGeo = new THREE.DodecahedronGeometry(0.020, 0);
+            const tuftOffsets = [
+                [0.022, 0.010, 0.010], [-0.022, 0.010, 0.010],
+                [0.010, 0.022, -0.012], [-0.014, 0.020, -0.012],
+                [0, 0.010, 0.022], [0, -0.006, -0.022],
+                [0.016, -0.008, 0.014], [-0.016, -0.008, 0.014]
+            ];
+            tuftOffsets.forEach(([x, y, z]) => {
+                const tuft = enableShadows(new THREE.Mesh(tuftGeo, materials.pomPom));
+                tuft.position.set(x, y, z);
+                pomGroup.add(tuft);
+            });
+            head.add(pomGroup);
+
+            const gogglesGroup = new THREE.Group();
+            gogglesGroup.name = 'skiGoggles';
+            gogglesGroup.position.set(0, 0.168, 0.004);
+            head.add(gogglesGroup);
+
+            const strapGeo = new THREE.CylinderGeometry(0.153, 0.151, 0.040, 12, 1, true);
+            const strapMesh = enableShadows(new THREE.Mesh(strapGeo, materials.goggleStrap));
+            strapMesh.position.set(0, 0.0, -0.008);
+            gogglesGroup.add(strapMesh);
+
+            function createGoggleShape(w, hTop, hBot, notchW, notchH) {
+                const s = new THREE.Shape();
+                s.moveTo(-w * 0.72, hTop);
+                s.quadraticCurveTo(0, hTop + 0.006, w * 0.72, hTop);
+                s.quadraticCurveTo(w, hTop, w, hTop * 0.35);
+                s.lineTo(w * 0.94, -hBot * 0.45);
+                s.quadraticCurveTo(w * 0.88, -hBot, w * 0.48, -hBot);
+                s.lineTo(notchW, -hBot);
+                s.quadraticCurveTo(notchW * 0.55, -hBot + notchH * 0.25, 0, -hBot + notchH);
+                s.quadraticCurveTo(-notchW * 0.55, -hBot + notchH * 0.25, -notchW, -hBot);
+                s.lineTo(-w * 0.48, -hBot);
+                s.quadraticCurveTo(-w * 0.88, -hBot, -w * 0.94, -hBot * 0.45);
+                s.lineTo(-w, hTop * 0.35);
+                s.quadraticCurveTo(-w, hTop, -w * 0.72, hTop);
+                return s;
+            }
+
+            const bendGeometry = (geo, radius = 0.24) => {
+                const pos = geo.attributes.position;
+                for (let i = 0; i < pos.count; i++) {
+                    const x = pos.getX(i);
+                    const z = pos.getZ(i);
+                    const curveZ = -(x * x) / (2 * radius);
+                    pos.setZ(i, z + curveZ);
+                }
+                geo.computeVertexNormals();
+            };
+
+            const frameShape = createGoggleShape(0.140, 0.048, 0.056, 0.042, 0.034);
+            let frameGeo = new THREE.ExtrudeGeometry(frameShape, {
+                depth: 0.048,
+                bevelEnabled: true,
+                bevelThickness: 0.009,
+                bevelSize: 0.008,
+                bevelSegments: 1,
+                curveSegments: 3
+            });
+            frameGeo.center();
+            frameGeo = frameGeo.toNonIndexed();
+            bendGeometry(frameGeo, 0.25);
+
+            const frameMesh = enableShadows(new THREE.Mesh(frameGeo, materials.goggleFrame));
+            frameMesh.position.set(0, -0.004, 0.130);
+            gogglesGroup.add(frameMesh);
+
+            const lensShape = createGoggleShape(0.124, 0.036, 0.044, 0.036, 0.030);
+            let lensGeo = new THREE.ExtrudeGeometry(lensShape, {
+                depth: 0.014,
+                bevelEnabled: true,
+                bevelThickness: 0.005,
+                bevelSize: 0.004,
+                bevelSegments: 1,
+                curveSegments: 3
+            });
+            lensGeo.center();
+            lensGeo = lensGeo.toNonIndexed();
+            bendGeometry(lensGeo, 0.24);
+
+            const lensMesh = enableShadows(new THREE.Mesh(lensGeo, materials.goggleLens));
+            lensMesh.position.set(0, -0.004, 0.153);
+            gogglesGroup.add(lensMesh);
+
+            // ------------------------------------------------------------------------
+            // 4. ARMS, GLOVES & SKI POLES
+            // ------------------------------------------------------------------------
+            function buildArm(side) {
+                const prefix = side > 0 ? 'left' : 'right';
+
+                const shoulder = new THREE.Group();
+                shoulder.name = `${prefix}Shoulder`;
+                shoulder.position.set(side * 0.236, 0.440, 0);
+                spine.add(shoulder);
+                joints[`${prefix}Shoulder`] = shoulder;
+
+                const upperRings = [
+                    { pos: side * -0.068, r1: 0.096, r2: 0.112, offsetA: 0.004 },
+                    { pos: side * 0.012, r1: 0.088, r2: 0.098, offsetA: 0.000 },
+                    { pos: side * 0.082, r1: 0.078, r2: 0.084, offsetA: 0.000 },
+                    { pos: side * 0.152, r1: 0.086, r2: 0.090, offsetA: 0.000 },
+                    { pos: side * 0.222, r1: 0.076, r2: 0.080, offsetA: 0.000 },
+                    { pos: side * 0.292, r1: 0.082, r2: 0.086, offsetA: 0.000 }
+                ];
+                if (side < 0) upperRings.reverse();
+                const upperArmGeo = createLoftedGeometry(upperRings, 8, 'x', true, true);
+                shoulder.add(enableShadows(new THREE.Mesh(upperArmGeo, materials.jacket)));
+
+                const elbow = new THREE.Group();
+                elbow.name = `${prefix}Elbow`;
+                elbow.position.set(side * 0.288, 0, 0);
+                shoulder.add(elbow);
+                joints[`${prefix}Elbow`] = elbow;
+
+                const foreRings = [
+                    { pos: side * -0.018, r1: 0.080, r2: 0.084 },
+                    { pos: side * 0.048, r1: 0.073, r2: 0.076 },
+                    { pos: side * 0.118, r1: 0.079, r2: 0.082 },
+                    { pos: side * 0.184, r1: 0.070, r2: 0.072 },
+                    { pos: side * 0.248, r1: 0.073, r2: 0.075 },
+                    { pos: side * 0.304, r1: 0.058, r2: 0.060 }
+                ];
+                if (side < 0) foreRings.reverse();
+                const foreArmGeo = createLoftedGeometry(foreRings, 8, 'x', true, true);
+                elbow.add(enableShadows(new THREE.Mesh(foreArmGeo, materials.jacket)));
+
+                const wrist = new THREE.Group();
+                wrist.name = `${prefix}Wrist`;
+                wrist.position.set(side * 0.304, 0, 0);
+                elbow.add(wrist);
+                joints[`${prefix}Wrist`] = wrist;
+
+                const gloveGeo = new THREE.IcosahedronGeometry(0.050, 1);
+                gloveGeo.scale(1.10, 0.84, 0.90);
+                const gloveMesh = enableShadows(new THREE.Mesh(gloveGeo, materials.glove));
+                gloveMesh.position.set(side * 0.042, -0.004, 0.004);
+                wrist.add(gloveMesh);
+
+                const thumbGeo = new THREE.IcosahedronGeometry(0.021, 0);
+                thumbGeo.scale(1.15, 0.88, 1.25);
+                const thumbMesh = enableShadows(new THREE.Mesh(thumbGeo, materials.glove));
+                thumbMesh.position.set(side * 0.034, -0.020, 0.034);
+                wrist.add(thumbMesh);
+
+                const poleGroup = new THREE.Group();
+                poleGroup.name = `${prefix}Pole`;
+                poleGroup.position.set(side * 0.046, -0.005, 0.010);
+                poleGroup.rotation.z = side * 0.006;
+                wrist.add(poleGroup);
+                joints[`${prefix}Pole`] = poleGroup;
+
+                const gripGeo = new THREE.CylinderGeometry(0.017, 0.014, 0.136, 7);
+                const gripMesh = enableShadows(new THREE.Mesh(gripGeo, materials.poleGrip));
+                gripMesh.position.set(0, -0.008, 0);
+                poleGroup.add(gripMesh);
+
+                const capGeo = new THREE.CylinderGeometry(0.021, 0.019, 0.020, 7);
+                const capMesh = enableShadows(new THREE.Mesh(capGeo, materials.poleGrip));
+                capMesh.position.set(0, 0.064, 0);
+                poleGroup.add(capMesh);
+
+                const shaftLength = 1.03;
+                const shaftGeo = new THREE.CylinderGeometry(0.0095, 0.008, shaftLength, 6);
+                const shaftMesh = enableShadows(new THREE.Mesh(shaftGeo, materials.poleShaft));
+                shaftMesh.position.set(0, -0.072 - shaftLength / 2, 0);
+                poleGroup.add(shaftMesh);
+
+                const basketGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.011, 10);
+                const basketMesh = enableShadows(new THREE.Mesh(basketGeo, materials.poleBasket));
+                basketMesh.position.set(0, -0.072 - shaftLength + 0.045, 0);
+                poleGroup.add(basketMesh);
+
+                const tipGeo = new THREE.ConeGeometry(0.0085, 0.095, 6);
+                tipGeo.rotateX(Math.PI);
+                const tipMesh = enableShadows(new THREE.Mesh(tipGeo, materials.poleShaft));
+                tipMesh.position.set(0, -0.072 - shaftLength - 0.012, 0);
+                poleGroup.add(tipMesh);
+            }
+
+            buildArm(1);
+            buildArm(-1);
+
+            // ------------------------------------------------------------------------
+            // 5. LEGS, SKI PANTS, BOOTS & TOGGLEABLE CARVING SKIS
+            // ------------------------------------------------------------------------
+            function buildLeg(side) {
+                const prefix = side > 0 ? 'left' : 'right';
+
+                const hip = new THREE.Group();
+                hip.name = `${prefix}Hip`;
+                hip.position.set(side * 0.114, -0.025, 0);
+                hips.add(hip);
+                joints[`${prefix}Hip`] = hip;
+
+                const thighGeo = createLoftedGeometry([
+                    { pos: -0.34, r1: 0.092, r2: 0.094, twist: Math.PI / 8 },
+                    { pos: -0.17, r1: 0.098, r2: 0.100, twist: Math.PI / 8 },
+                    { pos: 0.03, r1: 0.106, r2: 0.108, twist: Math.PI / 8 }
+                ], 8, 'y', true, true);
+                hip.add(enableShadows(new THREE.Mesh(thighGeo, materials.pants)));
+
+                const knee = new THREE.Group();
+                knee.name = `${prefix}Knee`;
+                knee.position.set(0, -0.34, 0);
+                hip.add(knee);
+                joints[`${prefix}Knee`] = knee;
+
+                const kneeCapGeo = new THREE.OctahedronGeometry(0.072, 1);
+                knee.add(enableShadows(new THREE.Mesh(kneeCapGeo, materials.pants)));
+
+                const shinGeo = createLoftedGeometry([
+                    { pos: -0.325, r1: 0.086, r2: 0.088, twist: Math.PI / 8 },
+                    { pos: -0.16, r1: 0.089, r2: 0.092, twist: Math.PI / 8 },
+                    { pos: 0.0, r1: 0.092, r2: 0.094, twist: Math.PI / 8 }
+                ], 8, 'y', true, true);
+                knee.add(enableShadows(new THREE.Mesh(shinGeo, materials.pants)));
+
+                const ankle = new THREE.Group();
+                ankle.name = `${prefix}Ankle`;
+                ankle.position.set(0, -0.325, 0);
+                knee.add(ankle);
+                joints[`${prefix}Ankle`] = ankle;
+
+                const bootUpperGeo = new THREE.CylinderGeometry(0.070, 0.078, 0.095, 8);
+                const bootUpper = enableShadows(new THREE.Mesh(bootUpperGeo, materials.boot));
+                bootUpper.position.set(0, -0.025, -0.004);
+                ankle.add(bootUpper);
+
+                const bootBodyGeo = createLoftedGeometry([
+                    { pos: -0.100, r1: 0.080, r2: 0.136, offsetB: 0.042 },
+                    { pos: -0.052, r1: 0.074, r2: 0.120, offsetB: 0.032 },
+                    { pos: -0.012, r1: 0.066, r2: 0.090, offsetB: 0.012 }
+                ], 8, 'y', true, true);
+                ankle.add(enableShadows(new THREE.Mesh(bootBodyGeo, materials.boot)));
+
+                const soleGeo = createLoftedGeometry([
+                    { pos: -0.130, r1: 0.084, r2: 0.142, offsetB: 0.042 },
+                    { pos: -0.098, r1: 0.086, r2: 0.144, offsetB: 0.042 }
+                ], 8, 'y', true, true);
+                ankle.add(enableShadows(new THREE.Mesh(soleGeo, materials.bootSole)));
+
+                function addInstepStrap(yPos, zPos, width) {
+                    const strapGroup = new THREE.Group();
+                    strapGroup.position.set(0, yPos, zPos);
+                    strapGroup.rotation.x = 0.52;
+                    const halfGeo = new THREE.BoxGeometry(width * 0.54, 0.016, 0.018);
+                    const leftHalf = enableShadows(new THREE.Mesh(halfGeo, materials.bootAccent));
+                    leftHalf.position.set(-width * 0.23, -0.004, 0);
+                    leftHalf.rotation.z = 0.18;
+                    const rightHalf = enableShadows(new THREE.Mesh(halfGeo, materials.bootAccent));
+                    rightHalf.position.set(width * 0.23, -0.004, 0);
+                    rightHalf.rotation.z = -0.18;
+                    strapGroup.add(leftHalf, rightHalf);
+                    ankle.add(strapGroup);
+                }
+
+                addInstepStrap(-0.022, 0.106, 0.094);
+                addInstepStrap(-0.048, 0.136, 0.106);
+
+                // Attach alpine ski under boot
+                const ski = createAlpineSki(materials.skiBase, materials.skiAccent, materials.bootAccent, enableShadows);
+                ankle.add(ski);
+                skis.push(ski);
+
+                // Grounding contact probes (left & right edge of boot/ski sole)
+                const probeInner = new THREE.Object3D();
+                probeInner.position.set(-0.052, -0.130, 0.04);
+                const probeOuter = new THREE.Object3D();
+                probeOuter.position.set(0.052, -0.130, 0.04);
+                ankle.add(probeInner, probeOuter);
+                footContacts.push(probeInner, probeOuter);
+            }
+
+            buildLeg(1);
+            buildLeg(-1);
+
+            function setPalette(paletteKey) {
+                const p = PALETTES[paletteKey];
+                if (!p) return;
+                materials.jacket.color.setHex(p.jacket);
+                collarMat.color.setHex(p.jacket);
+                materials.jacketInner.color.setHex(p.jacketInner);
+                materials.beanie.color.setHex(p.beanie);
+                materials.beanieCuff.color.setHex(p.beanieCuff);
+                materials.pomPom.color.setHex(p.pomPom);
+                materials.goggleLens.color.setHex(p.goggleLens);
+                materials.pants.color.setHex(p.pants);
+                materials.skiAccent.color.setHex(p.skiAccent);
+            }
+
+            function setSkisVisible(visible) {
+                skis.forEach((s) => { s.visible = visible; });
+                const contactY = visible ? -0.146 : -0.130;
+                footContacts.forEach((p) => { p.position.y = contactY; });
+            }
+
+            function resetPose() {
+                hips.position.set(0, 0.82, 0);
+                Object.values(joints).forEach((joint) => {
+                    if (joint.name.endsWith('Pole')) return;
+                    joint.rotation.set(0, 0, 0);
+                });
+            }
+
+            return { root, joints, materials, footContacts, setPalette, setSkisVisible, resetPose };
+        }
+
+        /**
+         * ============================================================================
+         * PROCEDURAL ANIMATION ENGINE (CARVING, IDLE SKIING, T-POSE + SMOOTH BLENDING)
+         * ============================================================================
+         */
+        function createSkierAnimator(skier) {
+            const { root, joints, footContacts } = skier;
+
+            let mode = 'carving'; // 'carving' | 'idle' | 'tpose'
+            let isPlaying = true;
+            let speed = 1.0;
+            let animTime = 0;
+
+            // Target pose structure for smooth exponential damping
+            const jointNames = [
+                'hips', 'spine', 'neck', 'head',
+                'leftShoulder', 'leftElbow', 'leftWrist',
+                'rightShoulder', 'rightElbow', 'rightWrist',
+                'leftHip', 'leftKnee', 'leftAnkle',
+                'rightHip', 'rightKnee', 'rightAnkle'
+            ];
+
+            const targets = {};
+            jointNames.forEach((name) => {
+                targets[name] = { rx: 0, ry: 0, rz: 0 };
+            });
+            const hipPosTarget = { x: 0, z: 0 };
+
+            function clearTargets() {
+                jointNames.forEach((name) => {
+                    targets[name].rx = 0;
+                    targets[name].ry = 0;
+                    targets[name].rz = 0;
+                });
+                hipPosTarget.x = 0;
+                hipPosTarget.z = 0;
+            }
+
+            // Smooth periodic Gaussian pulse over [0, 2π] for pole plant & push-back phases
+            function phasePulse(angle, center, width) {
+                const d = Math.atan2(Math.sin(angle - center), Math.cos(angle - center));
+                const x = d / width;
+                return Math.exp(-x * x);
+            }
+
+            /**
+             * ANIMATION 1: ALPINE CARVING
+             * Continuous S-turn cycle with edge angulation, upper/lower body separation,
+             * inside/outside leg flexion asymmetry, and synchronized reach-forward -> push-back pole action.
+             */
+            function evaluateCarving(t) {
+                // 2.6-second full left-to-right S-turn cycle
+                const omega = (Math.PI * 2) / 2.6;
+                const phi = t * omega;
+
+                const s = Math.sin(phi);               // Primary turn signal: +1 Left carve, -1 Right carve
+                const p = s * s;                       // Double-frequency G-force compression (0 at edge change, 1 at apex)
+                const leftTurn = Math.max(0, s);
+                const rightTurn = Math.max(0, -s);
+
+                // Two-stage carving pole action on the carving-side hand:
+                // 1. Reach forward to plant at turn initiation
+                // 2. Drive back behind the hip to push through the turn
+                const leftReach = phasePulse(phi, 0.55, 0.52);
+                const leftPush = phasePulse(phi, 1.95, 0.68);
+                const rightReach = phasePulse(phi, Math.PI + 0.55, 0.52);
+                const rightPush = phasePulse(phi, Math.PI + 1.95, 0.68);
+
+                // 1. Hips (Center of Mass inclination, lateral drive, and steering)
+                hipPosTarget.x = 0.16 * s;
+                hipPosTarget.z = 0.03 * p;
+                targets.hips.rx = 0.08 + 0.06 * p;
+                targets.hips.ry = 0.26 * s;            // Steer hips/skis across fall line
+                targets.hips.rz = -0.32 * s;           // Lean pelvis into the turn
+
+                // 2. Spine (Pro-carving C-shape angulation + counter-rotation facing downhill)
+                targets.spine.rx = 0.24 + 0.10 * p;    // Forward athletic tuck
+                targets.spine.ry = -0.22 * s;          // Counter-rotate shoulders toward fall line
+                targets.spine.rz = 0.25 * s;           // Tilt upper body outward over outside ski
+
+                // 3. Neck & Head (Downhill gaze lock & horizon leveling)
+                targets.neck.rx = -0.10 - 0.04 * p;
+                targets.neck.ry = -0.05 * s;
+                targets.neck.rz = 0.04 * s;
+
+                targets.head.rx = -0.12 - 0.03 * p;
+                targets.head.ry = -0.04 * s;
+                targets.head.rz = 0.05 * s;
+
+                // 4. Legs (Inside leg flexes deeper; outside leg drives pressure; both roll on edge)
+                const baseThigh = -0.34 - 0.12 * p;
+                const baseShin = 0.26 + 0.10 * p;
+
+                // Left Leg (side = +1, inside during leftTurn)
+                const lThigh = baseThigh - 0.22 * leftTurn + 0.06 * rightTurn;
+                const lShin = baseShin + 0.12 * leftTurn - 0.04 * rightTurn;
+                targets.leftHip.rx = lThigh - targets.hips.rx;
+                targets.leftHip.rz = -0.14 * s;
+                targets.leftKnee.rx = lShin - lThigh;
+                targets.leftAnkle.rx = -lShin;
+                targets.leftAnkle.rz = 0.04 * s;
+
+                // Right Leg (side = -1, inside during rightTurn)
+                const rThigh = baseThigh - 0.22 * rightTurn + 0.06 * leftTurn;
+                const rShin = baseShin + 0.12 * rightTurn - 0.04 * leftTurn;
+                targets.rightHip.rx = rThigh - targets.hips.rx;
+                targets.rightHip.rz = -0.14 * s;
+                targets.rightKnee.rx = rShin - rThigh;
+                targets.rightAnkle.rx = -rShin;
+                targets.rightAnkle.rz = 0.04 * s;
+
+                // 5. Arms & Poles (Poles trail behind by default; carving-side hand reaches forward then pushes back)
+                // Left Arm (+X, active during Left carve)
+                targets.leftShoulder.rz = -1.16 + 0.16 * leftReach - 0.08 * leftPush - 0.06 * rightTurn;
+                targets.leftShoulder.rx = -0.10 - 0.52 * leftReach + 0.56 * leftPush;
+                targets.leftShoulder.ry = 0.08 - 0.14 * leftReach + 0.12 * leftPush;
+                targets.leftElbow.ry = -0.78 - 0.18 * leftReach + 0.52 * leftPush;
+                targets.leftElbow.rz = 0.14 + 0.05 * p;
+                targets.leftWrist.rx = 1.56 - 0.52 * leftReach + 0.18 * leftPush;
+                targets.leftWrist.rz = -0.45 + 0.62 * leftReach - 0.12 * leftPush;
+                targets.leftWrist.ry = 0.0;
+
+                // Right Arm (-X, active during Right carve)
+                targets.rightShoulder.rz = 1.16 - 0.16 * rightReach + 0.08 * rightPush + 0.06 * leftTurn;
+                targets.rightShoulder.rx = -0.10 - 0.52 * rightReach + 0.56 * rightPush;
+                targets.rightShoulder.ry = -0.08 + 0.14 * rightReach - 0.12 * rightPush;
+                targets.rightElbow.ry = 0.78 + 0.18 * rightReach - 0.52 * rightPush;
+                targets.rightElbow.rz = -0.14 - 0.05 * p;
+                targets.rightWrist.rx = 1.56 - 0.52 * rightReach + 0.18 * rightPush;
+                targets.rightWrist.rz = 0.45 - 0.62 * rightReach + 0.12 * rightPush;
+                targets.rightWrist.ry = 0.0;
+
+                // Return human-readable carving phase for HUD
+                if (leftReach > 0.45) return 'Carving • Left Pole Plant';
+                if (leftPush > 0.45) return 'Carving • Left Pole Push';
+                if (rightReach > 0.45) return 'Carving • Right Pole Plant';
+                if (rightPush > 0.45) return 'Carving • Right Pole Push';
+                if (s > 0.35) return 'Carving • Left Edge Apex';
+                if (s < -0.35) return 'Carving • Right Edge Apex';
+                return 'Carving • Edge Transition';
+            }
+
+            /**
+             * ANIMATION 2: IDLE SKIING
+             * Athletic ready-to-glide cruising stance with multi-frequency terrain absorption,
+             * breathing, subtle lateral balance sway, and poles tucked cleanly trailing behind.
+             */
+            function evaluateIdleSkiing(t) {
+                const bounce = Math.sin(t * 2.6);                // Micro-terrain knee absorption
+                const breath = Math.sin(t * 1.45);               // Natural chest breathing
+                const sway = Math.sin(t * 0.85);                 // Gentle lateral weight shift
+                const scan = Math.sin(t * 0.65) + 0.35 * Math.sin(t * 1.3 + 0.5);
+
+                // 1. Hips (Relaxed centered athletic stance)
+                hipPosTarget.x = 0.025 * sway;
+                hipPosTarget.z = 0.008 * bounce;
+                targets.hips.rx = 0.06 + 0.015 * bounce;
+                targets.hips.ry = 0.025 * sway;
+                targets.hips.rz = -0.032 * sway;
+
+                // 2. Spine (Forward cruising poise + breathing)
+                targets.spine.rx = 0.17 + 0.024 * breath + 0.012 * bounce;
+                targets.spine.ry = -0.02 * sway + 0.025 * Math.sin(t * 0.85 + 0.7);
+                targets.spine.rz = 0.024 * sway;
+
+                // 3. Neck & Head (Looking down the run with relaxed scanning)
+                targets.neck.rx = -0.07 - 0.01 * breath;
+                targets.neck.ry = 0.06 * scan;
+                targets.neck.rz = 0.01 * sway;
+
+                targets.head.rx = -0.08 - 0.01 * breath;
+                targets.head.ry = 0.08 * scan;
+                targets.head.rz = -0.015 * Math.sin(t * 0.65);
+
+                // 4. Legs (Springy parallel athletic flexion)
+                const lThigh = -0.28 - 0.045 * bounce - 0.02 * sway;
+                const lShin = 0.24 + 0.038 * bounce + 0.015 * sway;
+                targets.leftHip.rx = lThigh - targets.hips.rx;
+                targets.leftHip.rz = -0.018 * sway;
+                targets.leftKnee.rx = lShin - lThigh;
+                targets.leftAnkle.rx = -lShin;
+
+                const rThigh = -0.28 - 0.045 * bounce + 0.02 * sway;
+                const rShin = 0.24 + 0.038 * bounce - 0.015 * sway;
+                targets.rightHip.rx = rThigh - targets.hips.rx;
+                targets.rightHip.rz = -0.018 * sway;
+                targets.rightKnee.rx = rShin - rThigh;
+                targets.rightAnkle.rx = -rShin;
+
+                // 5. Arms & Poles (Tucked athletic glide; poles angled cleanly back behind the skier)
+                targets.leftShoulder.rz = -1.22 + 0.022 * breath;
+                targets.leftShoulder.rx = -0.10 - 0.020 * bounce;
+                targets.leftShoulder.ry = 0.08 + 0.015 * sway;
+                targets.leftElbow.ry = -0.82 - 0.025 * bounce;
+                targets.leftElbow.rz = 0.15;
+                targets.leftWrist.rx = 1.60 + 0.035 * breath;
+                targets.leftWrist.rz = -0.45;
+                targets.leftWrist.ry = 0.0;
+
+                targets.rightShoulder.rz = 1.22 - 0.022 * breath;
+                targets.rightShoulder.rx = -0.10 - 0.020 * bounce;
+                targets.rightShoulder.ry = -0.08 + 0.015 * sway;
+                targets.rightElbow.ry = 0.82 + 0.025 * bounce;
+                targets.rightElbow.rz = -0.15;
+                targets.rightWrist.rx = 1.60 + 0.035 * breath;
+                targets.rightWrist.rz = 0.45;
+                targets.rightWrist.ry = 0.0;
+
+                return 'Idle Skiing • Ready Glide';
+            }
+
+            // Temporary vectors for analytical foot/ski grounding
+            const tmpWorld = new THREE.Vector3();
+            const invRootMatrix = new THREE.Matrix4();
+
+            function groundCharacter() {
+                root.updateMatrixWorld(true);
+                invRootMatrix.copy(root.matrixWorld).invert();
+
+                let minY = Infinity;
+                for (let i = 0; i < footContacts.length; i++) {
+                    footContacts[i].getWorldPosition(tmpWorld);
+                    tmpWorld.applyMatrix4(invRootMatrix);
+                    if (tmpWorld.y < minY) minY = tmpWorld.y;
+                }
+
+                if (Number.isFinite(minY)) {
+                    joints.hips.position.y -= minY;
+                }
+            }
+
+            function update(dt) {
+                const clampedDt = Math.min(dt, 0.05);
+                if (isPlaying && mode !== 'tpose') {
+                    animTime += clampedDt * speed;
+                }
+
+                clearTargets();
+                let phaseText = 'T-Pose • Neutral Rig';
+
+                if (mode === 'carving') {
+                    phaseText = evaluateCarving(animTime);
+                } else if (mode === 'idle') {
+                    phaseText = evaluateIdleSkiing(animTime);
+                }
+
+                // Smooth frame-rate independent exponential blending
+                const blend = 1 - Math.exp(-8.5 * clampedDt);
+
+                jointNames.forEach((name) => {
+                    const j = joints[name];
+                    const tgt = targets[name];
+                    j.rotation.x += (tgt.rx - j.rotation.x) * blend;
+                    j.rotation.y += (tgt.ry - j.rotation.y) * blend;
+                    j.rotation.z += (tgt.rz - j.rotation.z) * blend;
+                });
+
+                joints.hips.position.x += (hipPosTarget.x - joints.hips.position.x) * blend;
+                joints.hips.position.z += (hipPosTarget.z - joints.hips.position.z) * blend;
+
+                // Keep lowest ski edge / boot sole cleanly planted on y = 0
+                groundCharacter();
+
+                return phaseText;
+            }
+
+            return {
+                update,
+                setMode(newMode) {
+                    mode = newMode;
+                },
+                getMode() {
+                    return mode;
+                },
+                setPlaying(val) {
+                    isPlaying = val;
+                },
+                isPlaying() {
+                    return isPlaying;
+                },
+                setSpeed(val) {
+                    speed = val;
+                }
+            };
+        }
+
+        /**
+         * ============================================================================
+         * RIG VISUALIZER OVERLAY
+         * ============================================================================
+         */
+        function createRigVisualizer(joints) {
+            const group = new THREE.Group();
+            group.visible = false;
+
+            const bonePairs = [
+                ['hips', 'spine'],
+                ['spine', 'neck'],
+                ['neck', 'head'],
+                ['spine', 'leftShoulder'],
+                ['leftShoulder', 'leftElbow'],
+                ['leftElbow', 'leftWrist'],
+                ['spine', 'rightShoulder'],
+                ['rightShoulder', 'rightElbow'],
+                ['rightElbow', 'rightWrist'],
+                ['hips', 'leftHip'],
+                ['leftHip', 'leftKnee'],
+                ['leftKnee', 'leftAnkle'],
+                ['hips', 'rightHip'],
+                ['rightHip', 'rightKnee'],
+                ['rightKnee', 'rightAnkle']
+            ];
+
+            const jointMarkers = new Map();
+            const markerGeo = new THREE.SphereGeometry(0.022, 10, 10);
+            const markerMat = new THREE.MeshBasicMaterial({
+                color: 0x0ea5e9,
+                depthTest: false,
+                transparent: true,
+                opacity: 0.95
+            });
+
+            Object.entries(joints).forEach(([key, joint]) => {
+                if (key.endsWith('Pole')) return;
+                const marker = new THREE.Mesh(markerGeo, markerMat);
+                marker.renderOrder = 999;
+                group.add(marker);
+                jointMarkers.set(key, { joint, marker });
+            });
+
+            const linePositions = new Float32Array(bonePairs.length * 2 * 3);
+            const lineGeo = new THREE.BufferGeometry();
+            lineGeo.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
+            const lineMat = new THREE.LineBasicMaterial({
+                color: 0x0284c7,
+                depthTest: false,
+                transparent: true,
+                opacity: 0.85
+            });
+            const lines = new THREE.LineSegments(lineGeo, lineMat);
+            lines.renderOrder = 998;
+            group.add(lines);
+
+            const tmpA = new THREE.Vector3();
+            const tmpB = new THREE.Vector3();
+
+            function update() {
+                if (!group.visible) return;
+                jointMarkers.forEach(({ joint, marker }) => {
+                    joint.getWorldPosition(tmpA);
+                    marker.position.copy(tmpA);
+                });
+
+                const posAttr = lineGeo.attributes.position;
+                bonePairs.forEach(([fromKey, toKey], idx) => {
+                    joints[fromKey].getWorldPosition(tmpA);
+                    joints[toKey].getWorldPosition(tmpB);
+                    posAttr.setXYZ(idx * 2, tmpA.x, tmpA.y, tmpA.z);
+                    posAttr.setXYZ(idx * 2 + 1, tmpB.x, tmpB.y, tmpB.z);
+                });
+                posAttr.needsUpdate = true;
+            }
+
+            return { group, update };
+        }
+
+        /**
+         * ============================================================================
+         * MAIN APPLICATION (Three.js Studio Scene + Rapier3D Physics + Animator)
+         * ============================================================================
+         */
+        async function initApp() {
+            const container = document.getElementById('canvas-container');
+            const statusText = document.getElementById('status-text');
+            const phaseReadout = document.getElementById('phase-readout');
+            const physicsDot = document.getElementById('physics-dot');
+            const toast = document.getElementById('toast');
+
+            // 1. Scene & Renderer
+            const scene = new THREE.Scene();
+
+            const renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                alpha: true,
+                powerPreference: 'high-performance'
+            });
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.06;
+            container.appendChild(renderer.domElement);
+
+            // 2. Camera & OrbitControls (Three-quarter front view highlights carving lean & pole plants)
+            const defaultCamPos = new THREE.Vector3(1.15, 1.15, 3.15);
+            const defaultTarget = new THREE.Vector3(0, 0.85, 0);
+
+            const camera = new THREE.PerspectiveCamera(
+                34,
+                container.clientWidth / container.clientHeight,
+                0.1,
+                50
+            );
+            camera.position.copy(defaultCamPos);
+
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.copy(defaultTarget);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.06;
+            controls.minDistance = 1.5;
+            controls.maxDistance = 7.5;
+            controls.maxPolarAngle = Math.PI * 0.52;
+            controls.update();
+
+            // 3. Soft Diffused Studio Lighting
+            const hemiLight = new THREE.HemisphereLight(0xffffff, 0xd4dae3, 1.55);
+            hemiLight.position.set(0, 10, 0);
+            scene.add(hemiLight);
+
+            const keyLight = new THREE.DirectionalLight(0xfffcf7, 1.15);
+            keyLight.position.set(-2.2, 6.5, 4.8);
+            keyLight.castShadow = true;
+            keyLight.shadow.mapSize.width = 2048;
+            keyLight.shadow.mapSize.height = 2048;
+            keyLight.shadow.camera.near = 1;
+            keyLight.shadow.camera.far = 15;
+            keyLight.shadow.camera.left = -2.4;
+            keyLight.shadow.camera.right = 2.4;
+            keyLight.shadow.camera.top = 2.6;
+            keyLight.shadow.camera.bottom = -1.6;
+            keyLight.shadow.bias = -0.0005;
+            keyLight.shadow.radius = 4;
+            scene.add(keyLight);
+
+            const fillLight = new THREE.DirectionalLight(0xeef4fc, 0.55);
+            fillLight.position.set(3.2, 1.8, 3.0);
+            scene.add(fillLight);
+
+            const rimLight = new THREE.DirectionalLight(0xdbe7f7, 0.45);
+            rimLight.position.set(2.5, 3.2, -3.5);
+            scene.add(rimLight);
+
+            // 4. Minimal Shadow-Only Floor + Subtle Carving Reference Grid Ring
+            const shadowFloorGeo = new THREE.PlaneGeometry(12, 12);
+            shadowFloorGeo.rotateX(-Math.PI / 2);
+            const shadowFloorMat = new THREE.ShadowMaterial({
+                color: 0x3b4252,
+                opacity: 0.10
+            });
+            const shadowFloor = new THREE.Mesh(shadowFloorGeo, shadowFloorMat);
+            shadowFloor.receiveShadow = true;
+            scene.add(shadowFloor);
+
+            // 5. Build Skier Character, Animator & Rig Overlay
+            const skier = buildSkierCharacter(PALETTES.coral);
+            skier.setSkisVisible(true);
+            scene.add(skier.root);
+
+            const animator = createSkierAnimator(skier);
+
+            const rigVisualizer = createRigVisualizer(skier.joints);
+            scene.add(rigVisualizer.group);
+
+            // Expose rig & animation API globally
+            window.skierRig = {
+                root: skier.root,
+                joints: skier.joints,
+                setPalette: skier.setPalette,
+                setSkisVisible: skier.setSkisVisible,
+                resetPose: skier.resetPose,
+                setAnimation: (mode) => {
+                    animator.setMode(mode);
+                    updateAnimButtons(mode);
+                }
+            };
+
+            // 6. Initialize Rapier3D Physics World
+            let rapierWorld = null;
+            let skierBody = null;
+            const capsuleRadius = 0.24;
+            const capsuleHalfHeight = 0.62;
+            const capsuleCenterOffset = capsuleRadius + capsuleHalfHeight;
+
+            try {
+                const RAPIER = await import('https://esm.sh/@dimforge/rapier3d-compat@0.12.0');
+                await RAPIER.init();
+
+                rapierWorld = new RAPIER.World({ x: 0.0, y: -9.81, z: 0.0 });
+
+                const groundDesc = RAPIER.ColliderDesc.cuboid(10.0, 0.1, 10.0).setTranslation(0.0, -0.1, 0.0);
+                rapierWorld.createCollider(groundDesc);
+
+                const bodyDesc = RAPIER.RigidBodyDesc.dynamic()
+                    .setTranslation(0.0, capsuleCenterOffset, 0.0)
+                    .lockRotations();
+                skierBody = rapierWorld.createRigidBody(bodyDesc);
+
+                const colliderDesc = RAPIER.ColliderDesc.capsule(capsuleHalfHeight, capsuleRadius)
+                    .setRestitution(0.08)
+                    .setFriction(0.6);
+                rapierWorld.createCollider(colliderDesc, skierBody);
+
+                statusText.textContent = 'Rapier3D Active • Procedural Animator';
+                physicsDot.classList.remove('bg-amber-400', 'animate-pulse');
+                physicsDot.classList.add('bg-emerald-500');
+            } catch (err) {
+                console.warn('Rapier3D failed to load, running in visual-only mode:', err);
+                statusText.textContent = 'Visual Rig Mode • Procedural Animator';
+                physicsDot.classList.remove('bg-amber-400', 'animate-pulse');
+                physicsDot.classList.add('bg-sky-500');
+            }
+
+            // 7. UI Interactions
+            const animBtns = document.querySelectorAll('.anim-btn');
+            let skisEnabled = true;
+
+            function updateAnimButtons(activeMode) {
+                animBtns.forEach((b) => {
+                    b.classList.toggle('active', b.dataset.anim === activeMode);
+                });
+            }
+
+            animBtns.forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    const selected = btn.dataset.anim;
+                    animator.setMode(selected);
+                    updateAnimButtons(selected);
+                    // Hide skis automatically in T-Pose if desired, restore in ski modes
+                    skier.setSkisVisible(selected === 'tpose' ? false : skisEnabled);
+                });
+            });
+
+            const btnSkis = document.getElementById('btn-skis');
+            btnSkis.addEventListener('click', () => {
+                skisEnabled = !skisEnabled;
+                skier.setSkisVisible(skisEnabled);
+                btnSkis.classList.toggle('bg-slate-800', skisEnabled);
+                btnSkis.classList.toggle('text-white', skisEnabled);
+                btnSkis.classList.toggle('text-slate-700', !skisEnabled);
+                btnSkis.classList.toggle('hover:bg-white/80', !skisEnabled);
+            });
+
+            const btnPlayPause = document.getElementById('btn-play-pause');
+            const iconPause = document.getElementById('icon-pause');
+            const iconPlay = document.getElementById('icon-play');
+            btnPlayPause.addEventListener('click', () => {
+                const next = !animator.isPlaying();
+                animator.setPlaying(next);
+                iconPause.classList.toggle('hidden', !next);
+                iconPlay.classList.toggle('hidden', next);
+            });
+
+            const speedSlider = document.getElementById('speed-slider');
+            const speedLabel = document.getElementById('speed-label');
+            speedSlider.addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                animator.setSpeed(val);
+                speedLabel.textContent = `${val.toFixed(1)}x`;
+            });
+
+            const btnRig = document.getElementById('btn-rig');
+            btnRig.addEventListener('click', () => {
+                rigVisualizer.group.visible = !rigVisualizer.group.visible;
+                btnRig.classList.toggle('bg-slate-800', rigVisualizer.group.visible);
+                btnRig.classList.toggle('text-white', rigVisualizer.group.visible);
+                btnRig.classList.toggle('hover:bg-white/80', !rigVisualizer.group.visible);
+            });
+
+            const btnDrop = document.getElementById('btn-drop');
+            btnDrop.addEventListener('click', () => {
+                if (skierBody) {
+                    skierBody.setTranslation({ x: 0, y: capsuleCenterOffset + 1.35, z: 0 }, true);
+                    skierBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
+                } else {
+                    skier.root.position.y = 0.6;
+                }
+            });
+
+            const btnResetCam = document.getElementById('btn-reset-cam');
+            btnResetCam.addEventListener('click', () => {
+                camera.position.copy(defaultCamPos);
+                controls.target.copy(defaultTarget);
+                controls.update();
+            });
+
+            const swatches = document.querySelectorAll('.swatch-btn');
+            swatches.forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    swatches.forEach((b) => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    skier.setPalette(btn.dataset.palette);
+                });
+            });
+
+            // Brief onboarding hint toast
+            setTimeout(() => {
+                toast.classList.remove('opacity-0');
+                setTimeout(() => toast.classList.add('opacity-0'), 4200);
+            }, 600);
+
+            // 8. Responsive Resize Handling
+            window.addEventListener('resize', () => {
+                const w = container.clientWidth;
+                const h = container.clientHeight;
+                camera.aspect = w / h;
+                camera.updateProjectionMatrix();
+                renderer.setSize(w, h);
+            });
+
+            // 9. Main Render, Animation & Physics Loop
+            const clock = new THREE.Clock();
+            let lastPhase = '';
+
+            function animate() {
+                requestAnimationFrame(animate);
+                const dt = clock.getDelta();
+
+                if (rapierWorld && skierBody) {
+                    rapierWorld.step();
+                    const t = skierBody.translation();
+                    skier.root.position.set(t.x, t.y - capsuleCenterOffset, t.z);
+                } else if (skier.root.position.y > 0) {
+                    skier.root.position.y = Math.max(0, skier.root.position.y - 0.03);
+                }
+
+                const currentPhase = animator.update(dt);
+                if (currentPhase !== lastPhase) {
+                    phaseReadout.textContent = currentPhase;
+                    lastPhase = currentPhase;
+                }
+
+                rigVisualizer.update();
+                controls.update();
+                renderer.render(scene, camera);
+            }
+
+            animate();
+        }
+
+        window.addEventListener('load', initApp);
+    </script>
+</body>
+
+</html>

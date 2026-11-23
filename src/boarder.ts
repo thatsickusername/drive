@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { TrickEngine } from './player/TrickEngine';
+import { SkierCharacter, SkierAnimator, buildSkierCharacter, PALETTES } from './player/SkierCharacter';
 import { SurfaceType, TerrainSample } from './world/alpineHeightfield';
 import { GmaPlayerPhysics } from './mechanics/GmaPlayerPhysics';
 import { SportType, TurnType, MovementState } from './mechanics/GmaConfig';
@@ -418,15 +419,10 @@ export class Skier {
   public readonly trickEngine: TrickEngine;
   public readonly gmaPhysics: GmaPlayerPhysics;
 
-  // Procedural rig hierarchy
+  // Procedural rig hierarchy & dynamic animator
   private readonly visualRoot = new THREE.Group();
-  private readonly skisGroup = new THREE.Group();
-  private readonly snowboardGroup = new THREE.Group();
-  private readonly polesGroup = new THREE.Group();
-  private readonly hipsGroup = new THREE.Group();
-  private readonly torsoGroup = new THREE.Group();
-  private readonly armL = new THREE.Group();
-  private readonly armR = new THREE.Group();
+  public skierCharacter!: SkierCharacter;
+  public animator!: SkierAnimator;
 
   private readonly cfg: BoarderConfig;
   private readonly world: RAPIER.World;
@@ -456,9 +452,6 @@ export class Skier {
 
   public smoothNormal = new THREE.Vector3(0, 1, 0);
 
-  // Procedural animation springs
-  private hipOffsetY = 0;
-  private hipVelY = 0;
   private wasGrounded = false;
 
   // Audio, Trail Ribbon and Particles
@@ -598,11 +591,7 @@ export class Skier {
   }
 
   public updateSportVisuals(): void {
-    const isSki = this.gmaPhysics.sport === SportType.Skis;
-    this.skisGroup.visible = isSki;
-    this.polesGroup.visible = isSki;
-    this.snowboardGroup.visible = !isSki;
-    this.torsoGroup.rotation.y = isSki ? 0 : 0.65;
+    // Skier character uses authentic alpine skis and dual poles
   }
 
   public toggleTwintips(): boolean {
@@ -616,148 +605,10 @@ export class Skier {
   }
 
   private buildCharacterMesh(): void {
-    // Materials
-    const skiMat = new THREE.MeshStandardMaterial({ color: 0x2a9d8f, roughness: 0.3, metalness: 0.1 });
-    const boardMat = new THREE.MeshStandardMaterial({ color: 0xe63946, roughness: 0.3, metalness: 0.2 });
-    const baseMat = new THREE.MeshStandardMaterial({ color: 0x1d3557, roughness: 0.6 });
-    const jacketMat = new THREE.MeshStandardMaterial({ color: 0xf4a261, roughness: 0.7 });
-    const pantsMat = new THREE.MeshStandardMaterial({ color: 0x264653, roughness: 0.8 });
-    const helmetMat = new THREE.MeshStandardMaterial({ color: 0xf1faee, roughness: 0.4 });
-    const goggleMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.1, metalness: 0.8 });
-
-    // 1. Dual Independent Skis (length 1.85m, two parallel skis)
-    const skiGeo = new THREE.BoxGeometry(0.12, 0.035, 1.85);
-    const skiTipGeo = new THREE.BoxGeometry(0.12, 0.03, 0.25);
-
-    const skiLeft = new THREE.Group();
-    const skiLMesh = new THREE.Mesh(skiGeo, skiMat);
-    const skiLTip = new THREE.Mesh(skiTipGeo, skiMat);
-    skiLTip.position.set(0, 0.035, -1.0);
-    skiLTip.rotation.x = 0.38;
-    skiLeft.add(skiLMesh, skiLTip);
-    skiLeft.position.set(-0.20, 0, 0);
-
-    const skiRight = new THREE.Group();
-    const skiRMesh = new THREE.Mesh(skiGeo, skiMat);
-    const skiRTip = new THREE.Mesh(skiTipGeo, skiMat);
-    skiRTip.position.set(0, 0.035, -1.0);
-    skiRTip.rotation.x = 0.38;
-    skiRight.add(skiRMesh, skiRTip);
-    skiRight.position.set(0.20, 0, 0);
-
-    this.skisGroup.add(skiLeft, skiRight);
-    this.skisGroup.position.y = -this.cfg.sphereRadius + 0.02;
-    this.skisGroup.visible = true;
-    this.visualRoot.add(this.skisGroup);
-
-    // 1b. Snowboard Deck (posture_snowboard.yaml dimension: 3.1 units ~ 1.55m single deck)
-    const boardGeo = new THREE.BoxGeometry(0.32, 0.035, 1.55);
-    const boardTipGeo = new THREE.BoxGeometry(0.32, 0.03, 0.22);
-    const boardMesh = new THREE.Mesh(boardGeo, boardMat);
-    const boardNose = new THREE.Mesh(boardTipGeo, boardMat);
-    boardNose.position.set(0, 0.035, -0.85);
-    boardNose.rotation.x = 0.35;
-    const boardTail = new THREE.Mesh(boardTipGeo, boardMat);
-    boardTail.position.set(0, 0.035, 0.85);
-    boardTail.rotation.x = -0.35;
-
-    const bindingMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.8 });
-    const bindingGeo = new THREE.BoxGeometry(0.18, 0.05, 0.26);
-    const bindFront = new THREE.Mesh(bindingGeo, bindingMat);
-    bindFront.position.set(0, 0.04, -0.32);
-    bindFront.rotation.y = 0.26;
-    const bindBack = new THREE.Mesh(bindingGeo, bindingMat);
-    bindBack.position.set(0, 0.04, 0.32);
-    bindBack.rotation.y = -0.10;
-
-    this.snowboardGroup.add(boardMesh, boardNose, boardTail, bindFront, bindBack);
-    this.snowboardGroup.position.y = -this.cfg.sphereRadius + 0.02;
-    this.snowboardGroup.visible = false;
-    this.visualRoot.add(this.snowboardGroup);
-
-    // 2. Character Rig (Parallel Alpine Ski Stance)
-    this.hipsGroup.position.set(0, 0.55, 0);
-    this.visualRoot.add(this.hipsGroup);
-
-    // Legs (boots/shins aligned over each ski)
-    const legGeo = new THREE.CapsuleGeometry(0.085, 0.38, 4, 8);
-    const legLeft = new THREE.Mesh(legGeo, pantsMat);
-    legLeft.position.set(-0.20, -0.22, 0);
-    legLeft.castShadow = true;
-
-    const legRight = new THREE.Mesh(legGeo, pantsMat);
-    legRight.position.set(0.20, -0.22, 0);
-    legRight.castShadow = true;
-    this.hipsGroup.add(legLeft, legRight);
-
-    // Torso (forward-facing alpine stance)
-    this.torsoGroup.position.set(0, 0.08, 0);
-    this.torsoGroup.rotation.y = 0;
-    this.hipsGroup.add(this.torsoGroup);
-
-    const torsoMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.36, 6, 10), jacketMat);
-    torsoMesh.position.y = 0.26;
-    torsoMesh.castShadow = true;
-    this.torsoGroup.add(torsoMesh);
-
-    // Backpack
-    const pack = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.34, 0.14), baseMat);
-    pack.position.set(0, 0.28, 0.18);
-    pack.castShadow = true;
-    this.torsoGroup.add(pack);
-
-    // Head + Helmet + Goggles (forward-facing)
-    const headGroup = new THREE.Group();
-    headGroup.position.set(0, 0.62, 0);
-    headGroup.rotation.y = 0;
-    this.torsoGroup.add(headGroup);
-
-    const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), helmetMat);
-    helmet.castShadow = true;
-    const goggles = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.08, 0.10), goggleMat);
-    goggles.position.set(0, 0.01, -0.12);
-    headGroup.add(helmet, goggles);
-
-    // Arms & Ski Poles
-    const armGeo = new THREE.CapsuleGeometry(0.06, 0.36, 4, 8);
-    const armLMesh = new THREE.Mesh(armGeo, jacketMat);
-    armLMesh.position.set(-0.22, -0.12, 0);
-    armLMesh.rotation.z = -0.55;
-    this.armL.position.set(-0.22, 0.44, 0);
-    this.armL.add(armLMesh);
-
-    const armRMesh = new THREE.Mesh(armGeo, jacketMat);
-    armRMesh.position.set(0.22, -0.12, 0);
-    armRMesh.rotation.z = 0.55;
-    this.armR.position.set(0.22, 0.44, 0);
-    this.armR.add(armRMesh);
-
-    // Ski Poles
-    const poleGeo = new THREE.CylinderGeometry(0.012, 0.010, 1.05, 6);
-    const poleMat = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.2 });
-    const basketGeo = new THREE.CylinderGeometry(0.05, 0.05, 0.01, 8);
-    const basketMat = new THREE.MeshStandardMaterial({ color: 0xe76f51 });
-
-    const poleL = new THREE.Mesh(poleGeo, poleMat);
-    const basketL = new THREE.Mesh(basketGeo, basketMat);
-    basketL.position.y = -0.42;
-    poleL.add(basketL);
-    poleL.position.set(0, -0.38, 0);
-    poleL.rotation.x = 0.25;
-    this.armL.add(poleL);
-
-    const poleR = new THREE.Mesh(poleGeo, poleMat);
-    const basketR = new THREE.Mesh(basketGeo, basketMat);
-    basketR.position.y = -0.42;
-    poleR.add(basketR);
-    poleR.position.set(0, -0.38, 0);
-    poleR.rotation.x = 0.25;
-    this.armR.add(poleR);
-
-    this.polesGroup.add(poleL, poleR);
-    this.polesGroup.visible = true;
-
-    this.torsoGroup.add(this.armL, this.armR);
+    this.skierCharacter = buildSkierCharacter(PALETTES.coral);
+    this.animator = new SkierAnimator(this.skierCharacter);
+    this.skierCharacter.root.position.y = -this.cfg.sphereRadius + 0.02;
+    this.visualRoot.add(this.skierCharacter.root);
   }
 
   /**
@@ -784,11 +635,10 @@ export class Skier {
     this.groundDistance = 0;
     this.airTimer = 0;
     this.isGrounded = false;
-    this.hipOffsetY = 0;
-    this.hipVelY = 0;
     if (this.trailRibbon) this.trailRibbon.reset();
     this.root.position.set(x, bodyY, z);
     this.visualRoot.quaternion.setFromAxisAngle(this._up, yaw);
+    this.skierCharacter.resetPose();
     this.trickEngine.startAir();
   }
 
@@ -969,10 +819,10 @@ export class Skier {
     if (this.gmaPhysics.state === MovementState.Crashing && this.gmaPhysics.ragdoll.active) {
       const pts = this.gmaPhysics.ragdoll.points;
       if (pts.length >= 7) {
-        this.hipsGroup.position.copy(pts[2].pos).sub(this.root.position);
-        this.torsoGroup.position.copy(pts[1].pos).sub(pts[2].pos);
-        this.armL.position.copy(pts[3].pos).sub(pts[1].pos);
-        this.armR.position.copy(pts[4].pos).sub(pts[1].pos);
+        this.skierCharacter.joints.hips.position.copy(pts[2].pos).sub(this.root.position);
+        this.skierCharacter.joints.spine.position.copy(pts[1].pos).sub(pts[2].pos);
+        if (this.skierCharacter.joints.leftShoulder) this.skierCharacter.joints.leftShoulder.position.copy(pts[3].pos).sub(pts[1].pos);
+        if (this.skierCharacter.joints.rightShoulder) this.skierCharacter.joints.rightShoulder.position.copy(pts[4].pos).sub(pts[1].pos);
       }
       this.triggerCrashSpray();
     } else {
@@ -988,57 +838,28 @@ export class Skier {
       }
       this.visualRoot.quaternion.slerp(this._targetQuat, Math.min(1, dt * 16));
 
-      // 2. Procedural Carving Lean & Edge Banking
-      const speedRollScale = THREE.MathUtils.clamp(0.28 + 0.72 * (this.speed / 4.0), 0.28, 1.0);
-      const targetRoll = -this.leanAngle * 0.52 * speedRollScale;
-      this.skisGroup.rotation.z = THREE.MathUtils.damp(this.skisGroup.rotation.z, targetRoll, 10, dt);
+      // 2. Snow depth suspension absorption
+      this.skierCharacter.root.position.y = -this.cfg.sphereRadius + 0.02 - this.gmaPhysics.snowDepthPos * 0.4;
 
-      // 3. Hip Spring & Snowdepth Suspension Absorption
-      const tuckDrop = input.forward && this.speed > 8 ? -0.14 : 0;
-      const targetHipY = 0.55 + tuckDrop + this.gmaPhysics.snowDepthPos * 0.5;
-      const springK = 140;
-      const damping = 16;
-      const force = (targetHipY - (0.55 + this.hipOffsetY)) * springK - this.hipVelY * damping;
-      this.hipVelY += force * dt;
-      this.hipOffsetY += this.hipVelY * dt;
-      this.hipsGroup.position.y = THREE.MathUtils.clamp(0.55 + this.hipOffsetY, 0.26, 0.70);
-      this.skisGroup.position.y = -this.cfg.sphereRadius + 0.02 - this.gmaPhysics.snowDepthPos * 0.4;
+      // 3. Dynamic Procedural Animation Update (Idle glide vs Alpine Carving + Pole Plants)
+      this.animator.update({
+        dt,
+        speed: this.speed,
+        leanAngle: this.leanAngle,
+        isGrounded: this.isGrounded,
+        isStaking: this.gmaPhysics.isStaking,
+        isDrifting: this.isDrifting,
+        tuck: !!input.forward && this.speed > 8
+      });
 
-      // 4. Torso Counter-Rotation & Tuck (Forward-facing ski stance)
-      this.torsoGroup.rotation.y = THREE.MathUtils.damp(this.torsoGroup.rotation.y, 0, 10, dt);
-      this.torsoGroup.rotation.z = THREE.MathUtils.damp(
-        this.torsoGroup.rotation.z,
-        -this.leanAngle * 0.36 * speedRollScale,
-        10,
-        dt
-      );
-
-      // 5. Procedural Dual-Pole Plant Animation & Airborne Arm Spread
-      const armSpread = this.isGrounded ? 0.0 : 0.45;
-      this.armL.rotation.z = THREE.MathUtils.damp(this.armL.rotation.z, -armSpread, 8, dt);
-      this.armR.rotation.z = THREE.MathUtils.damp(this.armR.rotation.z, armSpread, 8, dt);
-
+      // 4. Staking Sound Trigger
       if (this.isGrounded && this.gmaPhysics.isStaking) {
-        // Drive specific pole into snow based on left/right steering side
-        const isLeftPlant = this.gmaPhysics.stakingPoleSide < 0;
-        const isPowerStroke = this.gmaPhysics.stakingPoleTimer > 0.12;
-        const strokeAngle = isPowerStroke ? 0.55 : 0.10;
-        const armSwingL = isLeftPlant ? strokeAngle : -0.15;
-        const armSwingR = isLeftPlant ? -0.15 : strokeAngle;
-        this.armL.rotation.x = THREE.MathUtils.damp(this.armL.rotation.x, armSwingL, 16, dt);
-        this.armR.rotation.x = THREE.MathUtils.damp(this.armR.rotation.x, armSwingR, 16, dt);
-        this.torsoGroup.rotation.x = THREE.MathUtils.damp(this.torsoGroup.rotation.x, isPowerStroke ? 0.14 : 0.04, 12, dt);
-
-        // Staking Sound: plays once per pole-plant trigger event
         if (this.gmaPhysics.stakingPlantTriggered) {
           this.audio.playPolePlant();
           this.gmaPhysics.stakingPlantTriggered = false;
         }
       } else {
         this.gmaPhysics.stakingPlantTriggered = false;
-        this.armL.rotation.x = THREE.MathUtils.damp(this.armL.rotation.x, 0.0, 8, dt);
-        this.armR.rotation.x = THREE.MathUtils.damp(this.armR.rotation.x, 0.0, 8, dt);
-        this.torsoGroup.rotation.x = THREE.MathUtils.damp(this.torsoGroup.rotation.x, 0.0, 8, dt);
       }
     }
 
@@ -1143,8 +964,8 @@ export class Skier {
                 const idx = i * 3;
 
                 const isOutside = side === outsideSkiSign;
-                const skiPosOffset = side * 0.20 + (side > 0 ? 0.02 : -0.02);
-                const tailPosOffset = -0.72 + (Math.random() - 0.5) * 0.16;
+                const skiPosOffset = side * 0.114 + (side > 0 ? 0.02 : -0.02);
+                const tailPosOffset = -0.63 + (Math.random() - 0.5) * 0.16;
 
                 this.sprayPositions[idx] = pos.x + this._right.x * skiPosOffset + this._forward.x * tailPosOffset;
                 this.sprayPositions[idx + 1] = pos.y - this.cfg.sphereRadius + 0.04;
