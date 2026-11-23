@@ -197,8 +197,8 @@ export function createFlaredCollarGeometry(): THREE.BufferGeometry {
     const zt = -Math.sin(aTop);
 
     const distFromFront = Math.sin(t * Math.PI);
-    const hTop = 0.042 + 0.076 * Math.pow(distFromFront, 0.55);
-    const hBot = -0.012 + 0.014 * distFromFront;
+    const hTop = 0.065 + 0.085 * Math.pow(distFromFront, 0.55);
+    const hBot = -0.022 + 0.014 * distFromFront;
 
     rings.push({
       bo: [xb * rBottomOut, hBot, zb * rBottomOut * 0.94],
@@ -420,9 +420,9 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
   collarMesh.position.set(0, 0.538, 0.004);
   spine.add(collarMesh);
 
-  const innerNeckGeo = new THREE.CylinderGeometry(0.076, 0.088, 0.040, 8);
+  const innerNeckGeo = new THREE.CylinderGeometry(0.084, 0.096, 0.055, 10);
   const innerNeckMesh = enableShadows(new THREE.Mesh(innerNeckGeo, materials.innerShirt));
-  innerNeckMesh.position.set(0, 0.548, 0.006);
+  innerNeckMesh.position.set(0, 0.542, 0.004);
   spine.add(innerNeckMesh);
 
   // 3. Neck & Head
@@ -432,10 +432,11 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
   spine.add(neck);
   joints.neck = neck;
 
-  const neckSkinGeo = new THREE.CylinderGeometry(0.062, 0.072, 0.048, 8);
-  const neckSkinMesh = enableShadows(new THREE.Mesh(neckSkinGeo, materials.skin));
-  neckSkinMesh.position.set(0, 0.022, 0);
-  neck.add(neckSkinMesh);
+  // Athletic thermal neck gaiter base layer covering neck & base of skull
+  const neckGaiterGeo = new THREE.CylinderGeometry(0.080, 0.094, 0.078, 10);
+  const neckGaiterMesh = enableShadows(new THREE.Mesh(neckGaiterGeo, materials.innerShirt));
+  neckGaiterMesh.position.set(0, 0.034, -0.004);
+  neck.add(neckGaiterMesh);
 
   const head = new THREE.Group();
   head.name = 'head';
@@ -467,6 +468,7 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
 
   const beanieCuffGeo = createLoftedGeometry(
     [
+      { pos: 0.110, r1: 0.138, r2: 0.144, offsetB: -0.012 },
       { pos: 0.184, r1: 0.148, r2: 0.150, offsetB: -0.004 },
       { pos: 0.224, r1: 0.152, r2: 0.154, offsetB: -0.005 }
     ],
@@ -619,16 +621,25 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     shoulder.add(elbow);
     joints[`${prefix}Elbow`] = elbow;
 
+    // Smooth rounded low-poly elbow joint to eliminate sharp creases and gaps during arm flexion
+    const elbowGeo = new THREE.SphereGeometry(0.082, 10, 8);
+    elbowGeo.scale(0.94, 0.94, 0.96);
+    const elbowMesh = enableShadows(new THREE.Mesh(elbowGeo, materials.jacket));
+    elbowMesh.position.set(0, 0, 0);
+    elbow.add(elbowMesh);
+
     const foreRings: LoftRing[] = [
-      { pos: side * -0.018, r1: 0.080, r2: 0.084 },
-      { pos: side * 0.048, r1: 0.073, r2: 0.076 },
+      { pos: side * 0.000, r1: 0.078, r2: 0.082 },
+      { pos: side * 0.054, r1: 0.073, r2: 0.076 },
       { pos: side * 0.118, r1: 0.079, r2: 0.082 },
       { pos: side * 0.184, r1: 0.070, r2: 0.072 },
       { pos: side * 0.248, r1: 0.073, r2: 0.075 },
       { pos: side * 0.304, r1: 0.058, r2: 0.060 }
     ];
     if (side < 0) foreRings.reverse();
-    const foreArmGeo = createLoftedGeometry(foreRings, 8, 'x', true, true);
+    const capStart = side < 0;
+    const capEnd = side > 0;
+    const foreArmGeo = createLoftedGeometry(foreRings, 8, 'x', capStart, capEnd);
     elbow.add(enableShadows(new THREE.Mesh(foreArmGeo, materials.jacket)));
 
     const wrist = new THREE.Group();
@@ -706,7 +717,7 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
       ],
       8,
       'y',
-      true,
+      false,
       true
     );
     hip.add(enableShadows(new THREE.Mesh(thighGeo, materials.pants)));
@@ -717,8 +728,12 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     hip.add(knee);
     joints[`${prefix}Knee`] = knee;
 
-    const kneeCapGeo = new THREE.OctahedronGeometry(0.072, 1);
-    knee.add(enableShadows(new THREE.Mesh(kneeCapGeo, materials.pants)));
+    // Smooth rounded low-poly knee joint to create natural articulated ski pants without sharp points
+    const kneeGeo = new THREE.SphereGeometry(0.095, 10, 8);
+    kneeGeo.scale(0.96, 1.02, 1.04);
+    const kneeMesh = enableShadows(new THREE.Mesh(kneeGeo, materials.pants));
+    kneeMesh.position.set(0, 0, 0.006);
+    knee.add(kneeMesh);
 
     const shinGeo = createLoftedGeometry(
       [
@@ -729,7 +744,7 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
       8,
       'y',
       true,
-      true
+      false
     );
     knee.add(enableShadows(new THREE.Mesh(shinGeo, materials.pants)));
 
