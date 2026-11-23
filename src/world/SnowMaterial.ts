@@ -194,11 +194,6 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
 
       float sastrugiVal = rawSastrugi * topoStrength * sastrugiFade;
 
-      // Subtle albedo tint: soft cool shadow in troughs, warm ivory on crests (max ±3.2%)
-      vec3 troughColor = uShadowColor * (-0.038);
-      vec3 crestColor = vec3(0.032);
-      vec3 sastrugiAlbedo = mix(troughColor, crestColor, clamp(sastrugiVal * 1.5 + 0.5, 0.0, 1.0));
-
       // 2. High-frequency granular snow powder texture (crystalline powder grains)
       float grainHash = fract(sin(dot(floor(vWorldPosition * 24.0), vec3(12.9898, 78.233, 45.164))) * 43758.5453);
       float powderGrain = (grainHash - 0.5) * 0.045 * nearFade;
@@ -209,7 +204,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       vec3 daySnow = vec3(0.996, 0.982, 0.970);
       vec3 nightSnow = vec3(0.94, 0.965, 0.995);
       vec3 pastelSnow = mix(daySnow, nightSnow, uNightFactor);
-      diffuseColor.rgb = mix(diffuseColor.rgb, pastelSnow + vec3(powderGrain) + sastrugiAlbedo, isSnow * 0.75);
+      diffuseColor.rgb = mix(diffuseColor.rgb, pastelSnow + vec3(powderGrain), isSnow * 0.75);
       `
     );
 
@@ -225,12 +220,27 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
         float directDiffuseSum = reflectedLight.directDiffuse.r + reflectedLight.directDiffuse.g + reflectedLight.directDiffuse.b;
         float shadowFactor = smoothstep(0.06, 0.20, directDiffuseSum);
 
-        // Sculptural 3D wind-drift lighting: gentle, varied sculptural sastrugi relief
-        float lightMod = sastrugiVal * mix(0.40, 0.30, uNightFactor);
+        // Sculptural 3D wind-drift lighting: organic sastrugi relief & shadow gating
+        // In lit areas: raking sunlight creates sharp micro-relief, warm sunlit crests, and cool self-shadowed troughs
+        // In cast shadows: omnidirectional sky ambient flattens ripples, making contour lines significantly less visible
+        float lightMod = sastrugiVal * mix(0.42, 0.32, uNightFactor);
+
+        // 1. Direct light sculptural relief & chromatic tint (strictly active in lit areas)
         reflectedLight.directDiffuse *= (1.0 + lightMod * 0.85);
+
+        vec3 crestColor = uSunColor * 0.032;
+        vec3 troughColor = uShadowColor * (-0.038);
+        vec3 sastrugiTint = mix(troughColor, crestColor, clamp(sastrugiVal * 1.5 + 0.5, 0.0, 1.0));
+        reflectedLight.directDiffuse += sastrugiTint * shadowFactor;
+
+        // 2. Indirect diffuse / ambient lighting:
+        // In lit areas: troughs catch cool sky-fill shadows
+        // In cast shadows: subtle ambient form hint (~8% scale) so contour lines remain realistically faint
         if (lightMod < 0.0) {
-          reflectedLight.indirectDiffuse += (-lightMod) * 0.40 * uShadowColor;
+          reflectedLight.indirectDiffuse += (-lightMod) * 0.35 * uShadowColor * shadowFactor;
         }
+        float shadowAO = sastrugiVal * 0.08 * (1.0 - shadowFactor * 0.75);
+        reflectedLight.indirectDiffuse *= (1.0 + shadowAO);
 
         // Granular powder micro-contrast: fine crystalline relief up close (< 75m)
         reflectedLight.directDiffuse += powderGrain * 4.2 * reflectedLight.directDiffuse * shadowFactor;
