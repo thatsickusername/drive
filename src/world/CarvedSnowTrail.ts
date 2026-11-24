@@ -155,7 +155,7 @@ export class CarvedSnowTrail {
       // When carving left (carveTurn < 0), centrifugal force pushes churned snow to the RIGHT (outer edge).
       // When carving right (carveTurn > 0), centrifugal force pushes churned snow to the LEFT (outer edge).
       // Scaled proportionally with player speed: faster speed = higher and wider thrown snow berm.
-      const speedFactor = THREE.MathUtils.clamp(speed / 14.0, 0.4, 2.2);
+      const speedFactor = THREE.MathUtils.clamp(speed / 10.0, 0.6, 2.8);
       const turnEffort = THREE.MathUtils.clamp(carveTurn, -1.0, 1.0);
       const carveFactor = turnEffort * speedFactor;
 
@@ -165,17 +165,17 @@ export class CarvedSnowTrail {
       let rightBermExtraW = 0.0;
 
       if (carveFactor < 0.0) {
-        // Carving Left: Throw snow to the Right outside edge
-        const rightPush = Math.min(2.0, -carveFactor);
-        rightBermExtraH = rightPush * 0.024; // Up to +4.8cm higher outside berm
-        rightBermExtraW = rightPush * 0.048; // Up to +9.6cm wider displaced snow outside
-        leftBermExtraH = -rightPush * 0.005; // Slightly compressed inside edge
+        // Carving Left: Centrifugal force dynamically throws snow to the Right outside edge
+        const rightPush = Math.min(2.5, -carveFactor);
+        rightBermExtraH = rightPush * 0.120; // Prominently elevated outer snow berm (+12cm to +30cm)
+        rightBermExtraW = rightPush * 0.240; // Wide displaced snow displayed far outward (+24cm to +60cm)
+        leftBermExtraH = -rightPush * 0.006; // Compressed inside edge
       } else if (carveFactor > 0.0) {
-        // Carving Right: Throw snow to the Left outside edge
-        const leftPush = Math.min(2.0, carveFactor);
-        leftBermExtraH = leftPush * 0.024;  // Up to +4.8cm higher outside berm
-        leftBermExtraW = leftPush * 0.048;  // Up to +9.6cm wider displaced snow outside
-        rightBermExtraH = -leftPush * 0.005; // Slightly compressed inside edge
+        // Carving Right: Centrifugal force dynamically throws snow to the Left outside edge
+        const leftPush = Math.min(2.5, carveFactor);
+        leftBermExtraH = leftPush * 0.120;  // Prominently elevated outer snow berm (+12cm to +30cm)
+        leftBermExtraW = leftPush * 0.240;  // Wide displaced snow displayed far outward (+24cm to +60cm)
+        rightBermExtraH = -leftPush * 0.006; // Compressed inside edge
       }
 
       // Drift / skid / hockey stop adds extra symmetric pushed snow volume
@@ -230,11 +230,11 @@ export class CarvedSnowTrail {
       // 19 cross-sectional nodes forming a continuous, soft, parabolic-curved snow sculpture
       const nodes = [
         // 0: Outer left feather (softly blends into untouched snow)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 1.6), h: 0.008, u: 0.00, alpha: 0.0, isRut: false, wallTilt: 0.0 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 1.80), h: 0.008, u: 0.00, alpha: 0.0, isRut: false, wallTilt: 0.0 },
         // 1: Outer left flank (gentle outer ramp)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.85), h: powderSurfaceY + 0.006 + leftBermExtraH * 0.5, u: 0.05, alpha: 0.65, isRut: false, wallTilt: -0.30 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.95), h: powderSurfaceY + 0.008 + leftBermExtraH * 0.70, u: 0.05, alpha: 0.70, isRut: false, wallTilt: -0.35 },
         // 2: Left berm crest (smooth rounded peak)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.35), h: leftBermHeight, u: 0.10, alpha: 1.0, isRut: false, wallTilt: -0.15 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.40), h: leftBermHeight, u: 0.10, alpha: 1.0, isRut: false, wallTilt: -0.20 },
         // 3: Left outer rounded shoulder (soft S-curve roll down into rut)
         { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + (shoulderDx + leftBermExtraW * 0.25) * 0.4), h: leftShoulderY, u: 0.15, alpha: 1.0, isRut: false, wallTilt: 0.55 },
         // 4: Left rut outer bowl edge (shallow concave dip)
@@ -264,11 +264,11 @@ export class CarvedSnowTrail {
         // 15: Right outer rounded shoulder (soft S-curve roll up to berm)
         { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + (shoulderDx + rightBermExtraW * 0.25) * 0.4, h: rightShoulderY, u: 0.85, alpha: 1.0, isRut: false, wallTilt: -0.55 },
         // 16: Right berm crest (smooth rounded peak)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.35, h: rightBermHeight, u: 0.90, alpha: 1.0, isRut: false, wallTilt: 0.15 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.40, h: rightBermHeight, u: 0.90, alpha: 1.0, isRut: false, wallTilt: 0.20 },
         // 17: Outer right flank (gentle outer ramp)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.85, h: powderSurfaceY + 0.006 + rightBermExtraH * 0.5, u: 0.95, alpha: 0.65, isRut: false, wallTilt: 0.30 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.95, h: powderSurfaceY + 0.008 + rightBermExtraH * 0.70, u: 0.95, alpha: 0.70, isRut: false, wallTilt: 0.35 },
         // 18: Outer right feather (softly blends into untouched snow)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 1.6, h: 0.008, u: 1.00, alpha: 0.0, isRut: false, wallTilt: 0.0 }
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 1.80, h: 0.008, u: 1.00, alpha: 0.0, isRut: false, wallTilt: 0.0 }
       ];
 
       // Populate new slice at index 0..18

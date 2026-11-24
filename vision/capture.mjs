@@ -154,9 +154,9 @@ async function run() {
       await page.waitForTimeout(1800);
       await page.keyboard.up('KeyW');
       await page.keyboard.down('KeyA');
-      await page.waitForTimeout(1200);
+      await page.waitForTimeout(1800);
       await page.keyboard.up('KeyA');
-      await page.waitForTimeout(4000);
+      await page.waitForTimeout(300);
     } else if (scenario.includes('carve') || scenario.includes('steer')) {
       console.log('[vision] Executing scenario: Teleport to spawn 1 and hold carve steering...');
       await page.keyboard.press('Digit1');
