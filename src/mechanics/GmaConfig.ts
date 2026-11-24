@@ -41,7 +41,7 @@ export interface PlayerConfig {
   air_gravity: number; // Weighted airborne gravity (16.0 m/s^2)
   glide_gravity: number; // Modest aerodynamic glide gravity (12.0 m/s^2)
 
-  ground_friction_base: number; // 0.35 (fluid alpine snow gliding)
+  ground_friction_base: number; // 0.55 (balanced alpine snow friction and effortful acceleration)
   ground_friction_switch_no_twintips: number; // 10.0
   ground_friction_switch_twintips_hard_collision: number;
   ground_pull_force: number; // 5.0
@@ -169,7 +169,7 @@ export function createDefaultPlayerConfig(): PlayerConfig {
     air_gravity: 16.0,
     glide_gravity: 12.0,
 
-    ground_friction_base: 0.35,
+    ground_friction_base: 0.55,
     ground_friction_switch_no_twintips: 10.0,
     ground_friction_switch_twintips_hard_collision: 100.0,
     ground_pull_force: 5.0,

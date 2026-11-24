@@ -284,9 +284,10 @@ export class GmaPlayerPhysics {
         this._gParallel.subVectors(this._gVec, this._gNormal);
         const downslopeMag = this._gParallel.length();
         if (downslopeMag > 0.1 && downwardFallSpeed > 0.5) {
-          // Transfer up to 35% of downward fall speed into downhill drive, scaled by slope gradient
+          // Transfer up to 25% of downward fall speed into downhill drive, clamped to max 1.2 m/s (~4.3 km/h)
           const slopeRatio = Math.min(1.0, downslopeMag / 4.5);
-          const transfer = downwardFallSpeed * 0.35 * slopeRatio;
+          const rawTransfer = downwardFallSpeed * 0.25 * slopeRatio;
+          const transfer = Math.min(1.2, rawTransfer);
           this.velocity.addScaledVector(this._gParallel, transfer / downslopeMag);
         }
 
@@ -618,8 +619,8 @@ export class GmaPlayerPhysics {
     this._gNormal.copy(this.groundNormal).multiplyScalar(normalComp);
     this._gParallel.subVectors(this._gVec, this._gNormal);
 
-    // Tangential fall-line gravity acceleration (pure GMA 9.81 m/s^2 slope projection)
-    this.velocity.addScaledVector(this._gParallel, dt);
+    // Tangential fall-line gravity acceleration (90% efficiency with subtle slope displacement resistance)
+    this.velocity.addScaledVector(this._gParallel, dt * 0.90);
 
     // Continuous adhesive normal pull: F_pull = -n * 5.0 m/s^2 (GMA contour adhesion)
     // Eliminates unnatural airborne bouncing when skiing over small crests, wind lips, and undulating rollers
@@ -654,17 +655,24 @@ export class GmaPlayerPhysics {
       effectiveFriction += this.config.backward_friction; // 15.0
     }
 
-    // Hydrodynamic ski glide efficiency: as speed increases, straight-line glide friction reduces (meltwater film lubrication)
+    // Differentiate active downhill acceleration from passive flat-ground momentum gliding
+    const isAcceleratingDownhill = this._gParallel.dot(this.velocity) > 0.5 && this._gParallel.length() > 1.5;
     const groundSpeed = this.velocity.length();
+
+    // Hydrodynamic ski glide efficiency:
+    // When coasting on mild slopes or flat ground, straight-line glide friction reduces (preserves momentum)
+    // When actively accelerating downhill, full base friction resists gravity so speed gain feels earned
     if (absSteer <= 0.05 && groundSpeed > 4.0) {
       const speedT = THREE.MathUtils.clamp((groundSpeed - 4.0) / 16.0, 0.0, 1.0);
-      effectiveFriction *= (1.0 - 0.50 * speedT);
+      const glideReduction = isAcceleratingDownhill ? 0.0 : 0.50;
+      effectiveFriction *= (1.0 - glideReduction * speedT);
     }
 
-    // Authentic GMA ground friction + aerodynamic drag (player.air_friction: 0.006)
-    // Pitch-Gated Powder Drag Governor (SNOW_SHADING_AND_INTERACTION.md Section 5.2)
+    // Authentic GMA ground friction + aerodynamic drag
+    // Quadratic aero drag ramps up above 70 km/h (~19.5 m/s) to act as a natural top-speed governor
     const speedRatio = groundSpeed / 30.0;
-    const aeroDrag = this.config.air_friction * (speedRatio * speedRatio) * 3.5;
+    const aeroMultiplier = groundSpeed > 19.5 ? 6.0 : 3.5;
+    const aeroDrag = this.config.air_friction * (speedRatio * speedRatio) * aeroMultiplier;
 
     let powderK = 0.0;
     const horizSpeedForGov = Math.hypot(this.velocity.x, this.velocity.z);
