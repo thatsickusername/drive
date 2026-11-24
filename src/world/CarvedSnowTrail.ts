@@ -85,10 +85,11 @@ export class CarvedSnowTrail {
     cameraPos: THREE.Vector3,
     nightFactor: number = 0.0,
     sunColor?: THREE.Color,
-    shadowColor?: THREE.Color
+    shadowColor?: THREE.Color,
+    goldenFactor: number = 0.0
   ): void {
     if (this.material.userData && this.material.userData.update) {
-      this.material.userData.update(time, sunDir, cameraPos, nightFactor, sunColor, shadowColor);
+      this.material.userData.update(time, sunDir, cameraPos, nightFactor, sunColor, shadowColor, goldenFactor);
     }
   }
 

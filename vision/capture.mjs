@@ -126,23 +126,29 @@ async function run() {
     page.on('console', msg => console.log('[browser]', msg.type(), msg.text()));
     page.on('pageerror', err => console.error('[browser error]', err));
     const isNight = target.includes('2') || scenario.includes('night') || getArg('lighting') === 'night';
-    const navUrl = `http://localhost:5173?nohud=1${isNight ? '&lighting=night' : ''}`;
+    const isGolden = target.includes('3') || scenario.includes('golden') || getArg('lighting') === 'golden' || getArg('lighting') === 'goldenhour';
+    const lightingQuery = isGolden ? '&lighting=golden' : (isNight ? '&lighting=night' : '');
+    const navUrl = `http://localhost:5173?nohud=1${lightingQuery}`;
     console.log(`[vision] Navigating to ${navUrl}...`);
     await page.goto(navUrl, { waitUntil: 'networkidle' });
 
     await page.waitForSelector('#game-canvas', { timeout: 10000 });
     console.log('[vision] Canvas loaded. Waiting for 3D scene initialization...');
-    await page.evaluate((night) => {
+    await page.evaluate(({ isNight, isGolden }) => {
       const btn = document.getElementById('camera-tuner-toggle-btn');
       if (btn) btn.style.display = 'none';
       const hud = document.getElementById('hud');
       if (hud) hud.style.display = 'none';
       const toggle = document.getElementById('lighting-toggle-container');
       if (toggle) toggle.style.display = 'none';
-      if (night && window.game) {
-        window.game.renderer.setLightingMode('night', true);
+      if (window.game) {
+        if (isGolden) {
+          window.game.renderer.setLightingMode('golden', true);
+        } else if (isNight) {
+          window.game.renderer.setLightingMode('night', true);
+        }
       }
-    }, isNight);
+    }, { isNight, isGolden });
     await page.waitForTimeout(1500);
 
     // Apply scenario

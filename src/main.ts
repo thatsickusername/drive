@@ -110,7 +110,10 @@ class Game {
     if (window.location.search.includes('nohud')) {
       this.toggleHUD();
     }
-    if (window.location.search.includes('night') || window.location.search.includes('lighting=night')) {
+    if (window.location.search.includes('golden') || window.location.search.includes('lighting=golden') || window.location.search.includes('lighting=goldenhour')) {
+      this.renderer.setLightingMode('golden', true);
+      this.updateLightingToggleUI();
+    } else if (window.location.search.includes('night') || window.location.search.includes('lighting=night')) {
       this.renderer.setLightingMode('night', true);
       this.updateLightingToggleUI();
     }
@@ -253,7 +256,7 @@ class Game {
       this.updateHUD();
     }
 
-    // 3. Update Day/Night Lighting, SkyDome, Snow Shimmer and Sparkles
+    // 3. Update Day/Golden/Night Lighting, SkyDome, Snow Shimmer and Sparkles
     const timeSec = currentTime * 0.001;
     this.renderer.updateLighting(timeSec, this.player.mesh.position, this.renderer.camera.position, delta);
     this.massif.update(
@@ -262,7 +265,8 @@ class Game {
       this.player.mesh.position,
       this.renderer.nightFactor,
       this.renderer.currentSunColor,
-      this.renderer.currentShadowColor
+      this.renderer.currentShadowColor,
+      this.renderer.goldenFactor
     );
     this.player.updateTrailLighting(
       timeSec,
@@ -270,7 +274,8 @@ class Game {
       this.renderer.camera.position,
       this.renderer.nightFactor,
       this.renderer.currentSunColor,
-      this.renderer.currentShadowColor
+      this.renderer.currentShadowColor,
+      this.renderer.goldenFactor
     );
 
     // 4. Render Scene
@@ -311,7 +316,7 @@ class Game {
     this.lightingToggleElement.innerHTML = `
       <div id="toggle-track" style="
         position: relative;
-        width: 44px;
+        width: 58px;
         height: 24px;
         background: #334155;
         border-radius: 12px;
@@ -329,7 +334,7 @@ class Game {
           box-shadow: 0 1px 4px rgba(0,0,0,0.4);
         "></div>
       </div>
-      <span id="toggle-label" style="min-width: 65px; letter-spacing: 0.2px;">☀️ Day</span>
+      <span id="toggle-label" style="min-width: 75px; letter-spacing: 0.2px;">☀️ Day</span>
       <span style="font-size: 10px; opacity: 0.6; padding: 2px 6px; background: rgba(255,255,255,0.12); border-radius: 6px;">L</span>
     `;
 
@@ -357,16 +362,21 @@ class Game {
   }
 
   public updateLightingToggleUI(): void {
-    const isNight = this.renderer.isNightMode;
+    const mode = this.renderer.lightingMode;
     const track = document.getElementById('toggle-track');
     const thumb = document.getElementById('toggle-thumb');
     const label = document.getElementById('toggle-label');
     if (track && thumb && label) {
-      if (isNight) {
+      if (mode === 'night') {
         track.style.background = '#2563eb';
-        thumb.style.transform = 'translateX(20px)';
+        thumb.style.transform = 'translateX(34px)';
         thumb.style.background = '#e0f2fe';
         label.innerHTML = '🌙 Night';
+      } else if (mode === 'golden') {
+        track.style.background = '#ea580c';
+        thumb.style.transform = 'translateX(17px)';
+        thumb.style.background = '#fef08a';
+        label.innerHTML = '🌅 Golden';
       } else {
         track.style.background = '#334155';
         thumb.style.transform = 'translateX(0px)';

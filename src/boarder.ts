@@ -971,10 +971,11 @@ export class Skier {
     cameraPos: THREE.Vector3,
     nightFactor: number = 0.0,
     sunColor?: THREE.Color,
-    shadowColor?: THREE.Color
+    shadowColor?: THREE.Color,
+    goldenFactor: number = 0.0
   ): void {
     if (this.trailRibbon) {
-      this.trailRibbon.updateUniforms(time, sunDir, cameraPos, nightFactor, sunColor, shadowColor);
+      this.trailRibbon.updateUniforms(time, sunDir, cameraPos, nightFactor, sunColor, shadowColor, goldenFactor);
     }
   }
 

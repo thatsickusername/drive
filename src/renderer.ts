@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { SkyDome } from './world/SkyDome';
 import { AirborneSparkles } from './world/AirborneSparkles';
 
+export type LightingMode = 'day' | 'golden' | 'night';
+
 export class Renderer {
   public scene: THREE.Scene;
   public camera: THREE.PerspectiveCamera;
@@ -13,9 +15,18 @@ export class Renderer {
   public sparkles: AirborneSparkles;
   public readonly sunDir = new THREE.Vector3(140, 110, -50).normalize();
 
-  public isNightMode: boolean = false;
+  public lightingMode: LightingMode = 'day';
+  public get isNightMode(): boolean {
+    return this.lightingMode === 'night';
+  }
+  public get isGoldenMode(): boolean {
+    return this.lightingMode === 'golden';
+  }
+
+  public lightingFactor: number = 0.0; // 0.0 = Day, 1.0 = Golden, 2.0 = Night
+  private targetLightingFactor: number = 0.0;
+  public goldenFactor: number = 0.0;
   public nightFactor: number = 0.0;
-  private targetNightFactor: number = 0.0;
 
   // Day Lighting Palette (Acceptance Criteria 1)
   public readonly daySunColor = new THREE.Color(0xfff6ec);
@@ -24,6 +35,14 @@ export class Renderer {
   public readonly dayHemiGround = new THREE.Color(0xfceee5);
   public readonly dayFog = new THREE.Color(0xf8ebe6);
   public readonly dayBg = new THREE.Color(0xf6eef3);
+
+  // Golden Hour Lighting Palette (Acceptance Criteria 3 - Radiant sunset / sunrise glow)
+  public readonly goldenSunColor = new THREE.Color(0xffdeb8);
+  public readonly goldenShadowColor = new THREE.Color(0x9488ac);
+  public readonly goldenHemiSky = new THREE.Color(0x847298);
+  public readonly goldenHemiGround = new THREE.Color(0xf6baa4);
+  public readonly goldenFog = new THREE.Color(0xdf9a8e);
+  public readonly goldenBg = new THREE.Color(0x806e8f);
 
   // Night Lighting Palette (Acceptance Criteria 2 - Soft pastel night glow)
   public readonly nightMoonColor = new THREE.Color(0xf0f4ff);
@@ -100,49 +119,96 @@ export class Renderer {
     window.addEventListener('resize', this.onWindowResize.bind(this));
   }
 
-  public setLightingMode(mode: 'day' | 'night', instant: boolean = false): void {
-    this.isNightMode = mode === 'night';
-    this.targetNightFactor = this.isNightMode ? 1.0 : 0.0;
+  public setLightingMode(mode: LightingMode, instant: boolean = false): void {
+    this.lightingMode = mode;
+    if (mode === 'golden') {
+      this.targetLightingFactor = 1.0;
+    } else if (mode === 'night') {
+      this.targetLightingFactor = 2.0;
+    } else {
+      this.targetLightingFactor = 0.0;
+    }
     if (instant) {
-      this.nightFactor = this.targetNightFactor;
-      this.applyLightingLerp(this.nightFactor);
+      this.lightingFactor = this.targetLightingFactor;
+      this.applyLightingLerp(this.lightingFactor);
     }
   }
 
-  public toggleLightingMode(): 'day' | 'night' {
-    this.setLightingMode(this.isNightMode ? 'day' : 'night');
-    return this.isNightMode ? 'night' : 'day';
+  public toggleLightingMode(): LightingMode {
+    if (this.lightingMode === 'day') {
+      this.setLightingMode('golden');
+    } else if (this.lightingMode === 'golden') {
+      this.setLightingMode('night');
+    } else {
+      this.setLightingMode('day');
+    }
+    return this.lightingMode;
   }
 
-  public applyLightingLerp(f: number): void {
-    this.currentSunColor.lerpColors(this.daySunColor, this.nightMoonColor, f);
-    this.currentShadowColor.lerpColors(this.dayShadowColor, this.nightShadowColor, f);
+  public applyLightingLerp(t: number): void {
+    if (t <= 1.0) {
+      // Blend between Day (0.0) and Golden Hour (1.0)
+      const u = THREE.MathUtils.clamp(t, 0.0, 1.0);
+      this.goldenFactor = u;
+      this.nightFactor = 0.0;
 
-    this.dirLight.color.copy(this.currentSunColor);
-    this.dirLight.intensity = THREE.MathUtils.lerp(2.05, 1.42, f);
+      this.currentSunColor.lerpColors(this.daySunColor, this.goldenSunColor, u);
+      this.currentShadowColor.lerpColors(this.dayShadowColor, this.goldenShadowColor, u);
 
-    this.hemiLight.color.lerpColors(this.dayHemiSky, this.nightHemiSky, f);
-    this.hemiLight.groundColor.lerpColors(this.dayHemiGround, this.nightHemiGround, f);
-    this.hemiLight.intensity = THREE.MathUtils.lerp(0.88, 1.02, f);
+      this.dirLight.color.copy(this.currentSunColor);
+      this.dirLight.intensity = THREE.MathUtils.lerp(2.05, 2.15, u);
 
-    this.fillLight.color.lerpColors(new THREE.Color(0xdedbe0), new THREE.Color(0x52668c), f);
-    this.fillLight.intensity = THREE.MathUtils.lerp(0.12, 0.16, f);
+      this.hemiLight.color.lerpColors(this.dayHemiSky, this.goldenHemiSky, u);
+      this.hemiLight.groundColor.lerpColors(this.dayHemiGround, this.goldenHemiGround, u);
+      this.hemiLight.intensity = THREE.MathUtils.lerp(0.88, 0.96, u);
 
-    this.scene.background = (new THREE.Color().copy(this.dayBg)).lerp(this.nightBg, f);
-    if (this.scene.fog instanceof THREE.Fog) {
-      this.scene.fog.color.lerpColors(this.dayFog, this.nightFog, f);
-      this.scene.fog.near = THREE.MathUtils.lerp(180, 95, f);
-      this.scene.fog.far = THREE.MathUtils.lerp(1500, 1220, f);
+      this.fillLight.color.lerpColors(new THREE.Color(0xdedbe0), new THREE.Color(0x94657b), u);
+      this.fillLight.intensity = THREE.MathUtils.lerp(0.12, 0.16, u);
+
+      this.scene.background = (new THREE.Color().copy(this.dayBg)).lerp(this.goldenBg, u);
+      if (this.scene.fog instanceof THREE.Fog) {
+        this.scene.fog.color.lerpColors(this.dayFog, this.goldenFog, u);
+        this.scene.fog.near = THREE.MathUtils.lerp(180, 140, u);
+        this.scene.fog.far = THREE.MathUtils.lerp(1500, 1350, u);
+      }
+      this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.08, 1.08, u);
+      this.sparkles.setColor(new THREE.Color(0xffeedd).lerp(new THREE.Color(0xffdfb8), u));
+    } else {
+      // Blend between Golden Hour (1.0) and Night (2.0)
+      const u = THREE.MathUtils.clamp(t - 1.0, 0.0, 1.0);
+      this.goldenFactor = 1.0 - u;
+      this.nightFactor = u;
+
+      this.currentSunColor.lerpColors(this.goldenSunColor, this.nightMoonColor, u);
+      this.currentShadowColor.lerpColors(this.goldenShadowColor, this.nightShadowColor, u);
+
+      this.dirLight.color.copy(this.currentSunColor);
+      this.dirLight.intensity = THREE.MathUtils.lerp(2.15, 1.42, u);
+
+      this.hemiLight.color.lerpColors(this.goldenHemiSky, this.nightHemiSky, u);
+      this.hemiLight.groundColor.lerpColors(this.goldenHemiGround, this.nightHemiGround, u);
+      this.hemiLight.intensity = THREE.MathUtils.lerp(0.96, 1.02, u);
+
+      this.fillLight.color.lerpColors(new THREE.Color(0x94657b), new THREE.Color(0x52668c), u);
+      this.fillLight.intensity = THREE.MathUtils.lerp(0.16, 0.16, u);
+
+      this.scene.background = (new THREE.Color().copy(this.goldenBg)).lerp(this.nightBg, u);
+      if (this.scene.fog instanceof THREE.Fog) {
+        this.scene.fog.color.lerpColors(this.goldenFog, this.nightFog, u);
+        this.scene.fog.near = THREE.MathUtils.lerp(140, 95, u);
+        this.scene.fog.far = THREE.MathUtils.lerp(1350, 1220, u);
+      }
+      this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.08, 1.06, u);
+      this.sparkles.setColor(new THREE.Color(0xffdfb8).lerp(new THREE.Color(0xcbe0ff), u));
     }
-    this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.08, 1.06, f);
-    this.skyDome.setNightFactor(f);
-    this.sparkles.setColor(new THREE.Color(0xffeedd).lerp(new THREE.Color(0xcbe0ff), f));
+
+    this.skyDome.setLightingFactors(this.goldenFactor, this.nightFactor);
   }
 
   public updateLighting(time: number, targetPos: THREE.Vector3, cameraPos: THREE.Vector3, delta: number = 0.016): void {
-    if (Math.abs(this.nightFactor - this.targetNightFactor) > 0.0005) {
-      this.nightFactor = THREE.MathUtils.damp(this.nightFactor, this.targetNightFactor, 7.5, delta);
-      this.applyLightingLerp(this.nightFactor);
+    if (Math.abs(this.lightingFactor - this.targetLightingFactor) > 0.0005) {
+      this.lightingFactor = THREE.MathUtils.damp(this.lightingFactor, this.targetLightingFactor, 7.5, delta);
+      this.applyLightingLerp(this.lightingFactor);
     }
 
     // Keep high-resolution shadow map centered on player

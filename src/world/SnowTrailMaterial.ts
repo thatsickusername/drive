@@ -17,6 +17,7 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
     uSunColor: { value: sunColor.clone() },
     uShadowColor: { value: shadowColor.clone() },
     uCameraPos: { value: new THREE.Vector3() },
+    uGoldenFactor: { value: 0.0 },
     uNightFactor: { value: 0.0 }
   };
 
@@ -38,6 +39,7 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
     shader.uniforms.uSunColor = uniforms.uSunColor;
     shader.uniforms.uShadowColor = uniforms.uShadowColor;
     shader.uniforms.uCameraPos = uniforms.uCameraPos;
+    shader.uniforms.uGoldenFactor = uniforms.uGoldenFactor;
     shader.uniforms.uNightFactor = uniforms.uNightFactor;
 
     // 1. Vertex Shader: export world position, normal, UVs, and alpha
@@ -88,6 +90,7 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       uniform vec3 uSunColor;
       uniform vec3 uShadowColor;
       uniform vec3 uCameraPos;
+      uniform float uGoldenFactor;
       uniform float uNightFactor;
 
       varying vec3 vWorldPosition;
@@ -152,8 +155,9 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
 
       // Luminous pristine white powder snow throughout the carved trail
       vec3 dayPowder = vec3(0.99, 0.992, 1.0);
+      vec3 goldenPowder = vec3(0.98, 0.95, 0.96);
       vec3 nightPowder = vec3(0.94, 0.965, 0.995);
-      vec3 baseSnow = mix(dayPowder, nightPowder, uNightFactor);
+      vec3 baseSnow = mix(mix(dayPowder, goldenPowder, uGoldenFactor), nightPowder, uNightFactor);
 
       // High-frequency granular snow powder texture matching mountain terrain
       float trailDistCam = length(vWorldPosition - uCameraPos);
@@ -280,11 +284,12 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
 
   material.userData = {
     uniforms,
-    update(time: number, sunDirection: THREE.Vector3, cameraPos: THREE.Vector3, nightFactor: number = 0.0, sunColor?: THREE.Color, shadowColor?: THREE.Color) {
+    update(time: number, sunDirection: THREE.Vector3, cameraPos: THREE.Vector3, nightFactor: number = 0.0, sunColor?: THREE.Color, shadowColor?: THREE.Color, goldenFactor: number = 0.0) {
       uniforms.uTime.value = time;
       uniforms.uSunDir.value.copy(sunDirection);
       uniforms.uCameraPos.value.copy(cameraPos);
       uniforms.uNightFactor.value = nightFactor;
+      uniforms.uGoldenFactor.value = goldenFactor;
       if (sunColor) uniforms.uSunColor.value.copy(sunColor);
       if (shadowColor) uniforms.uShadowColor.value.copy(shadowColor);
     }

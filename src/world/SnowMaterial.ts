@@ -23,6 +23,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
     uShadowColor: { value: shadowColor.clone() },
     uCameraPos: { value: new THREE.Vector3() },
     uPlayerPos: { value: new THREE.Vector3() },
+    uGoldenFactor: { value: 0.0 },
     uNightFactor: { value: 0.0 }
   };
 
@@ -42,6 +43,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
     shader.uniforms.uShadowColor = uniforms.uShadowColor;
     shader.uniforms.uCameraPos = uniforms.uCameraPos;
     shader.uniforms.uPlayerPos = uniforms.uPlayerPos;
+    shader.uniforms.uGoldenFactor = uniforms.uGoldenFactor;
     shader.uniforms.uNightFactor = uniforms.uNightFactor;
 
     // 1. Vertex Shader: export world position & normal
@@ -75,6 +77,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       uniform vec3 uShadowColor;
       uniform vec3 uCameraPos;
       uniform vec3 uPlayerPos;
+      uniform float uGoldenFactor;
       uniform float uNightFactor;
 
       varying vec3 vWorldPosition;
@@ -142,10 +145,11 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
 
       // Rock albedo & striations
       vec3 darkRock = vec3(0.24, 0.22, 0.21) * mix(0.85, 1.15, rNoise2);
-      // Physically-calibrated fresh alpine powder snow albedo (pure luminous alpine white)
+      // Physically-calibrated fresh alpine powder snow albedo
       vec3 daySnow = vec3(0.96, 0.965, 0.98);
+      vec3 goldenSnow = vec3(0.97, 0.92, 0.92);
       vec3 nightSnow = vec3(0.80, 0.83, 0.88);
-      vec3 snowAlbedo = mix(daySnow, nightSnow, uNightFactor);
+      vec3 snowAlbedo = mix(mix(daySnow, goldenSnow, uGoldenFactor), nightSnow, uNightFactor);
 
       // Tactile crystalline powder micro-AO and crevice tooth
       float microAO = mix(0.56, 1.0, smoothstep(0.08, 0.90, gDMicro.b));
@@ -217,8 +221,9 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
         float forwardScatter = pow(clamp(dot(viewDirWorld, -uSunDir), 0.0, 1.0), 3.2) * 0.36;
 
         vec3 daySss = vec3(1.0, 0.92, 0.82);
+        vec3 goldenSss = vec3(1.0, 0.80, 0.65);
         vec3 nightSss = vec3(0.72, 0.80, 0.98);
-        vec3 sssTint = mix(daySss, nightSss, uNightFactor);
+        vec3 sssTint = mix(mix(daySss, goldenSss, uGoldenFactor), nightSss, uNightFactor);
         vec3 sssRadiance = (diffuseWrap * 0.18 + forwardScatter * 0.32) * sssTint * uSunColor * shadowFactor * gRockMask;
         reflectedLight.directDiffuse += sssRadiance;
 
@@ -268,8 +273,9 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
 
           float totalSparkle = (glint1 + glint2) * glintGrazing * glintFade * shadowFactor * gRockMask;
           vec3 daySparkle = vec3(3.5, 3.3, 3.1);
+          vec3 goldenSparkle = vec3(4.8, 3.9, 3.2);
           vec3 nightSparkle = vec3(4.2, 4.8, 5.6);
-          vec3 sparkleColor = mix(daySparkle, nightSparkle, uNightFactor) * totalSparkle;
+          vec3 sparkleColor = mix(mix(daySparkle, goldenSparkle, uGoldenFactor), nightSparkle, uNightFactor) * totalSparkle;
 
           reflectedLight.directSpecular += sparkleColor;
         }
@@ -287,13 +293,15 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       playerPos?: THREE.Vector3,
       nightFactor: number = 0.0,
       sunColor?: THREE.Color,
-      shadowColor?: THREE.Color
+      shadowColor?: THREE.Color,
+      goldenFactor: number = 0.0
     ) {
       uniforms.uTime.value = time;
       uniforms.uSunDir.value.copy(sunDirection);
       uniforms.uCameraPos.value.copy(cameraPos);
       if (playerPos) uniforms.uPlayerPos.value.copy(playerPos);
       uniforms.uNightFactor.value = nightFactor;
+      uniforms.uGoldenFactor.value = goldenFactor;
       if (sunColor) uniforms.uSunColor.value.copy(sunColor);
       if (shadowColor) uniforms.uShadowColor.value.copy(shadowColor);
     }
