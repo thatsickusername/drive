@@ -259,18 +259,10 @@ export class CarvedSnowTrail {
         this.normals[vIdx + 1] = normY * invLen;
         this.normals[vIdx + 2] = normZ * invLen;
 
-        // Vertex color:
-        // Rut cavity compressed snow has cool blue-grey crystalline tint (#8faecc)
-        // Outer berm powder has soft ivory tone (#fff8f2)
-        if (node.isRut) {
-          this.colors[vIdx + 0] = 0.86;
-          this.colors[vIdx + 1] = 0.91;
-          this.colors[vIdx + 2] = 0.97;
-        } else {
-          this.colors[vIdx + 0] = 1.0;
-          this.colors[vIdx + 1] = 1.0;
-          this.colors[vIdx + 2] = 1.0;
-        }
+        // Vertex color: pure luminous alpine white snow across entire trail
+        this.colors[vIdx + 0] = 1.0;
+        this.colors[vIdx + 1] = 1.0;
+        this.colors[vIdx + 2] = 1.0;
 
         const uvIdx = i * 2;
         this.uvs[uvIdx + 0] = node.u;

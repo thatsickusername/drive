@@ -127,8 +127,8 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       float inRightRut_n = smoothstep(0.60, 0.64, vTrailUV.x) * (1.0 - smoothstep(0.82, 0.86, vTrailUV.x));
       float inRutFloor_n = max(inLeftRut_n, inRightRut_n) * inRutBase_n;
 
-      // Gentle, soft cosine slope for smooth ski base grooming
-      float striationSlope = cos(tRut_n * 4.0 * 6.2831853) * 0.20 * inRutFloor_n;
+      // Gentle, smooth surface without harsh dark grooved lines
+      float striationSlope = 0.0;
 
       // Perturb normal laterally along exact cross-track axis
       vec3 trailPerturbedN = normalize(vWorldNormal + crossTrack * striationSlope);
@@ -142,32 +142,18 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       /* glsl */ `
       #include <color_fragment>
 
-      // 1. Ski Rut Floor & Parallel Micro-Striations:
+      // 1. Ski Rut Floor:
       float inLeftRut = smoothstep(0.14, 0.20, vTrailUV.x) * (1.0 - smoothstep(0.34, 0.40, vTrailUV.x));
       float inRightRut = smoothstep(0.60, 0.66, vTrailUV.x) * (1.0 - smoothstep(0.80, 0.86, vTrailUV.x));
       float inRutFloor = max(inLeftRut, inRightRut);
 
-      // Local normalized coordinate across each ski rut (0.0 to 1.0)
-      float tRutLeft = clamp((vTrailUV.x - 0.16) / 0.22, 0.0, 1.0);
-      float tRutRight = clamp((vTrailUV.x - 0.62) / 0.22, 0.0, 1.0);
-      float tRut = (vTrailUV.x < 0.5) ? tRutLeft : tRutRight;
+      // Clean, light alpine snow without dark artificial grooves
+      float striationPattern = 0.0;
 
-      // Soft, subtle corduroy striation lines inside each ski rut
-      float striationWaves = sin(tRut * 4.0 * 6.2831853);
-      float ribLines = striationWaves * 0.5 + 0.5;
-      float inRutBase = smoothstep(0.04, 0.14, tRut) * (1.0 - smoothstep(0.86, 0.96, tRut)) * inRutFloor;
-      float striationPattern = (ribLines - 0.5) * 0.08 * inRutBase;
-
-      // Soft snow compression tone:
-      // Powder snow is soft luminous alpine white, compressed base has delicate crystalline tint
-      vec3 dayPowder = vec3(0.985, 0.988, 1.0);
-      vec3 dayCompressed = vec3(0.92, 0.945, 0.975);
+      // Luminous pristine white powder snow throughout the carved trail
+      vec3 dayPowder = vec3(0.99, 0.992, 1.0);
       vec3 nightPowder = vec3(0.94, 0.965, 0.995);
-      vec3 nightCompressed = vec3(0.78, 0.85, 0.94);
-
-      vec3 baseSnow = mix(mix(dayPowder, dayCompressed, inRutFloor * 0.45),
-                          mix(nightPowder, nightCompressed, inRutFloor * 0.45),
-                          uNightFactor);
+      vec3 baseSnow = mix(dayPowder, nightPowder, uNightFactor);
 
       // High-frequency granular snow powder texture matching mountain terrain
       float trailDistCam = length(vWorldPosition - uCameraPos);
@@ -175,12 +161,12 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       float trailGrainHash = fract(sin(dot(floor(vWorldPosition * 24.0), vec3(12.9898, 78.233, 45.164))) * 43758.5453);
       float trailPowderGrain = (trailGrainHash - 0.5) * 0.035 * trailNearFade;
 
-      // Gentle, subtle cavity darkening (soft 6% darkening for natural depth, no dirty black tone)
-      float cavityDarkening = 1.0 - inRutFloor * 0.06;
+      // Perfectly light, clean snow without cavity darkening
+      float cavityDarkening = 1.0;
       // Soft rounded berm crest brightness
       float inBerm = smoothstep(0.06, 0.12, vTrailUV.x) * (1.0 - smoothstep(0.12, 0.18, vTrailUV.x))
                    + smoothstep(0.82, 0.88, vTrailUV.x) * (1.0 - smoothstep(0.88, 0.94, vTrailUV.x));
-      vec3 bermColorBoost = vec3(0.04) * inBerm;
+      vec3 bermColorBoost = vec3(0.03) * inBerm;
 
       diffuseColor.rgb = (diffuseColor.rgb * (baseSnow + vec3(striationPattern)) + vec3(trailPowderGrain) + bermColorBoost) * cavityDarkening;
       `
@@ -202,22 +188,15 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       float lightPowderGrain = (lightGrainHash - 0.5) * 0.045 * lightNearFade;
       reflectedLight.directDiffuse += lightPowderGrain * 3.8 * reflectedLight.directDiffuse * shadowFactor;
 
-      // 1. Cavity Ambient Occlusion in the deep trough of the ruts
+      // 1. Gentle Cavity Ambient Occlusion
       float inLeftRutCavity = smoothstep(0.15, 0.22, vTrailUV.x) * (1.0 - smoothstep(0.32, 0.39, vTrailUV.x));
       float inRightRutCavity = smoothstep(0.61, 0.68, vTrailUV.x) * (1.0 - smoothstep(0.78, 0.85, vTrailUV.x));
       float cavityMask = max(inLeftRutCavity, inRightRutCavity);
 
-      // Cavity AO darkens ambient light at the base of the trench
-      reflectedLight.indirectDiffuse *= (1.0 - cavityMask * 0.68);
+      // Subtle, gentle 8% ambient soft dip (no dark stripes)
+      reflectedLight.indirectDiffuse *= (1.0 - cavityMask * 0.08);
 
-      // 2. Micro-Striation Normal Shading on the Rut Floor
-      float tRutL = clamp((vTrailUV.x - 0.18) / 0.18, 0.0, 1.0);
-      float tRutR = clamp((vTrailUV.x - 0.64) / 0.18, 0.0, 1.0);
-      float tRutCurrent = (vTrailUV.x < 0.5) ? tRutL : tRutR;
-      float ribWaves = sin(tRutCurrent * 4.0 * 6.2831853);
-      float inBaseMask = smoothstep(0.04, 0.14, tRutCurrent) * (1.0 - smoothstep(0.86, 0.96, tRutCurrent)) * cavityMask;
-
-      // 3. Directional contact shadow cast by the raised berm walls into the trench:
+      // 2. Directional contact shadow cast along the raised berm shoulders:
       vec3 dPdx_l = dFdx(vWorldPosition);
       vec3 dPdy_l = dFdy(vWorldPosition);
       float du_dx_l = dFdx(vTrailUV.x);
@@ -238,13 +217,10 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
         : max(leftSoftShadow, innerRightSoftShadow);
 
       float shadowWeight = clamp(abs(sunLateral) * 1.5, 0.3, 0.85);
-      float trenchOcclusion = wallShadow * shadowWeight * 0.42; // Soft 42% attenuation max!
+      float trenchOcclusion = wallShadow * shadowWeight * 0.25; // Gentle 25% max softening
 
-      // Softly attenuate direct diffuse lighting (no pitch black cuts):
+      // Softly attenuate direct diffuse lighting without dark lines:
       reflectedLight.directDiffuse *= (1.0 - trenchOcclusion);
-
-      // Subtle micro-striation ribs
-      reflectedLight.directDiffuse *= (1.0 + ribWaves * 0.16 * inBaseMask * shadowFactor);
 
       // Soft sunlit rounded shoulder & crest sheen:
       float litCrest = (sunLateral >= 0.0)
@@ -253,12 +229,12 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       float litShoulder = (sunLateral >= 0.0)
         ? (smoothstep(0.10, 0.18, vTrailUV.x) * (1.0 - smoothstep(0.26, 0.34, vTrailUV.x)))
         : (smoothstep(0.66, 0.74, vTrailUV.x) * (1.0 - smoothstep(0.82, 0.90, vTrailUV.x)));
-      reflectedLight.directDiffuse += uSunColor * ((litShoulder * 0.20 + litCrest * 0.16) * shadowFactor);
+      reflectedLight.directDiffuse += uSunColor * ((litShoulder * 0.18 + litCrest * 0.14) * shadowFactor);
 
       // Gentle alpine sky-blue ambient in shaded curvature:
       reflectedLight.indirectDiffuse = mix(reflectedLight.indirectDiffuse,
-                                           reflectedLight.indirectDiffuse * uShadowColor * 1.25,
-                                           wallShadow * 0.35);
+                                           reflectedLight.indirectDiffuse * uShadowColor * 1.15,
+                                           wallShadow * 0.25);
 
       // 3. Velvet Grazing Rim on Raised Berms (Forward & Backscatter)
       float NdotV = clamp(dot(geometryNormal, geometryViewDir), 0.0, 1.0);
