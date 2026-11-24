@@ -78,7 +78,7 @@ export class CarvedSnowTrail {
 
     this.mesh = new THREE.Mesh(this.geometry, this.material);
     this.mesh.frustumCulled = false;
-    this.mesh.castShadow = true;
+    this.mesh.castShadow = false;
     this.mesh.receiveShadow = true;
     this.mesh.renderOrder = 4;
     scene.add(this.mesh);
