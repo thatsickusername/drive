@@ -892,10 +892,34 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
   return { root, joints, materials, footContacts, skis, setPalette, resetPose };
 }
 
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = clamp01((x - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+}
+
+function bell(u: number, start: number, peak: number, end: number): number {
+  if (u <= start || u >= end) return 0;
+  return u < peak
+    ? smoothstep(start, peak, u)
+    : 1 - smoothstep(peak, end, u);
+}
+
+function shortestAngleDelta(target: number, current: number): number {
+  let d = (target - current) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
 /**
  * ============================================================================
  * PROCEDURAL DYNAMIC ANIMATOR
- * Blends between Athletic Idle Skiing and Alpine Carving with pole plants
+ * Blends between Athletic Idle Skiing, Alpine Carving, Jump in Place,
+ * and Freestyle 360° Vertical Spin Trick.
  * ============================================================================
  */
 export interface SkierAnimParams {
@@ -909,13 +933,26 @@ export interface SkierAnimParams {
   inputLeft?: boolean;
   inputRight?: boolean;
   isGliding?: boolean;
+  // Jump (Animation 3) and Spin Trick (Animation 4) parameters
+  airTime?: number;
+  jumpPressed?: boolean;
+  isSpinning?: boolean;
+  spinProgress?: number;   // 0.0 to 1.0 (phase through 360° spin)
+  spinDirection?: number;  // +1.0 for left spin, -1.0 for right spin
+  spinRate?: number;       // Angular velocity of spin in rad/s
 }
 
 export class SkierAnimator {
   private skier: SkierCharacter;
   private animTime = 0;
   private carveBlend = 0; // 0 = idle, 1 = carve
-  private glideSpread = 0.0; // 0 = normal, 1 = glide legs separated
+
+  // Jump (Animation 3) and 360° Spin Trick (Animation 4) states
+  private airTime = 0.0;
+  private wasAirborne = false;
+  private landAbsorbTimer = 0.0;
+  private spinTrickBlend = 0.0;
+  private spinAnimTime = 0.0;
 
   // Dedicated deterministic instant pole plant state
   private activePlantSide: 'left' | 'right' | 'none' = 'none';
@@ -965,6 +1002,24 @@ export class SkierAnimator {
   public update(params: SkierAnimParams): void {
     const clampedDt = Math.min(params.dt, 0.05);
     this.animTime += clampedDt;
+
+    // Airborne and landing impact tracking
+    if (params.isGrounded) {
+      if (this.wasAirborne) {
+        if (this.airTime > 0.12) {
+          this.landAbsorbTimer = 0.32; // Trigger bent-knee landing impact absorption
+        }
+        this.airTime = 0.0;
+        this.wasAirborne = false;
+      }
+      if (this.landAbsorbTimer > 0) {
+        this.landAbsorbTimer = Math.max(0, this.landAbsorbTimer - clampedDt);
+      }
+    } else {
+      this.wasAirborne = true;
+      this.airTime = params.airTime !== undefined ? params.airTime : (this.airTime + clampedDt);
+      this.landAbsorbTimer = 0.0;
+    }
 
     // Detect instantaneous key/stick turn direction
     let currentKey: 'left' | 'right' | 'none' = 'none';
@@ -1243,30 +1298,289 @@ export class SkierAnimator {
       this.targets.spine.rx += isPower ? 0.12 : -0.04;
     }
 
-    // Glide spread animation blend
-    const targetGlideSpread = (!params.isGrounded && params.isGliding) ? 1.0 : 0.0;
-    this.glideSpread = THREE.MathUtils.damp(this.glideSpread, targetGlideSpread, 12.0, clampedDt);
-
-    // 6. Special Overrides: Airborne Flight Stance & Glide Fall
+    // 6. Overrides: Airborne Flight (Animation 3: Jump in Place & Animation 4: 360° Vertical Spin)
     if (!params.isGrounded) {
-      if (params.isGliding || this.glideSpread > 0.01) {
-        // Glide fall stance: Use idle ski animation with legs separated slightly more to see a visual difference
-        const spreadAngle = 0.26 * this.glideSpread;
-        this.targets.leftHip.rz = spreadAngle;
-        this.targets.rightHip.rz = -spreadAngle;
-        this.targets.leftAnkle.rz = -spreadAngle * 0.75;
-        this.targets.rightAnkle.rz = spreadAngle * 0.75;
-      } else {
-        // Standard ballistic jump flight stance
-        this.targets.leftShoulder.rz = -1.42;
-        this.targets.rightShoulder.rz = 1.42;
-        this.targets.leftShoulder.rx = -0.22;
-        this.targets.rightShoulder.rx = -0.22;
-        this.targets.leftKnee.rx = 0.55;
-        this.targets.rightKnee.rx = 0.55;
-        this.targets.leftHip.rx = -0.42;
-        this.targets.rightHip.rx = -0.42;
-      }
+      // --- ANIMATION 3: JUMP IN PLACE (POP TAKEOFF, MID-AIR SPREAD EAGLE, SKI TIP LIFT) ---
+      const airT = this.airTime;
+      const takeoff = bell(airT, 0.0, 0.08, 0.22);
+      const spread = smoothstep(0.04, 0.20, airT);
+      const airEase = Math.sin(Math.min(1.0, airT / 0.8) * Math.PI);
+      const skiTipLift = -0.18 * airEase;
+      const legSpreadAngle = 0.42 * spread;
+
+        // Base Jump Target Poses (Animation 3)
+        const jumpHipsRx = 0.06 - 0.10 * spread;
+        const jumpHipsRy = 0;
+        const jumpHipsRz = 0;
+
+        const jumpSpineRx = 0.17 - 0.14 * spread;
+        const jumpSpineRy = 0;
+        const jumpSpineRz = 0;
+
+        const jumpNeckRx = -0.07 + 0.05 * spread;
+        const jumpHeadRx = -0.08 + 0.06 * spread;
+
+        const baseThigh = -0.28;
+        const baseShin = 0.24;
+        const jumpThigh = baseThigh + 0.24 * takeoff - 0.06 * spread;
+        const jumpShin = baseShin - 0.20 * takeoff + 0.08 * spread;
+
+        const jumpLHipRx = jumpThigh - jumpHipsRx;
+        const jumpLHipRz = legSpreadAngle;
+        const jumpLHipRy = 0.08 * spread;
+        const jumpLKneeRx = jumpShin - jumpThigh;
+        const jumpLAnkleRx = -jumpShin + skiTipLift;
+        const jumpLAnkleRz = -0.14 * spread;
+
+        const jumpRHipRx = jumpThigh - jumpHipsRx;
+        const jumpRHipRz = -legSpreadAngle;
+        const jumpRHipRy = -0.08 * spread;
+        const jumpRKneeRx = jumpShin - jumpThigh;
+        const jumpRAnkleRx = -jumpShin + skiTipLift;
+        const jumpRAnkleRz = 0.14 * spread;
+
+        const armLift = 0.52 * spread + 0.18 * takeoff;
+        const jumpLShoulderRz = -1.22 + armLift;
+        const jumpLShoulderRx = -0.10 - 0.18 * spread - 0.22 * takeoff;
+        const jumpLShoulderRy = 0.08 - 0.18 * spread;
+        const jumpLElbowRy = -0.82 + 0.42 * spread;
+        const jumpLElbowRz = 0.15 - 0.10 * spread;
+        const jumpLWristRx = 1.60 - 0.32 * spread;
+        const jumpLWristRz = -0.45 + 0.18 * spread;
+
+        const jumpRShoulderRz = 1.22 - armLift;
+        const jumpRShoulderRx = -0.10 - 0.18 * spread - 0.22 * takeoff;
+        const jumpRShoulderRy = -0.08 + 0.18 * spread;
+        const jumpRElbowRy = 0.82 - 0.42 * spread;
+        const jumpRElbowRz = -0.15 + 0.10 * spread;
+        const jumpRWristRx = 1.60 - 0.32 * spread;
+        const jumpRWristRz = 0.45 - 0.18 * spread;
+
+        // --- ANIMATION 4: 360° VERTICAL SPIN TRICK ---
+        const isSpinning = !!params.isSpinning;
+        if (isSpinning) {
+          this.spinAnimTime += clampedDt;
+          this.spinTrickBlend = THREE.MathUtils.damp(this.spinTrickBlend, 1.0, 24.0, clampedDt);
+        } else {
+          this.spinTrickBlend = THREE.MathUtils.damp(this.spinTrickBlend, 0.0, 16.0, clampedDt);
+        }
+
+        if (this.spinTrickBlend > 0.005) {
+          const spinSpeed = Math.abs(params.spinRate ?? 7.0);
+          const period = (Math.PI * 2) / Math.max(3.0, spinSpeed);
+          const u = (params.spinProgress !== undefined && params.spinProgress > 0)
+            ? (params.spinProgress % 1.0)
+            : ((this.spinAnimTime % period) / period);
+          const sDir = params.spinDirection !== undefined && params.spinDirection < 0 ? -1.0 : 1.0;
+
+          const spinWindup = bell(u, 0.0, 0.12, 0.26);
+          const spinSnapLead = bell(u, 0.16, 0.28, 0.44);
+          const spinMidTuck = bell(u, 0.32, 0.50, 0.70);
+          const spinSpotCheck = bell(u, 0.58, 0.72, 0.85);
+          const spinStompLand = bell(u, 0.75, 0.88, 1.0);
+
+          // 1. Hips targets (Relative counter-twist, snap lead, and stomp absorption)
+          const spinHipsRx = 0.06 + 0.10 * spinWindup - 0.08 * spinMidTuck + 0.12 * spinStompLand;
+          const spinHipsRy = sDir * (-0.25 * spinWindup + 0.32 * spinSnapLead - 0.15 * spinSpotCheck + 0.06 * spinStompLand);
+          const spinHipsRz = sDir * (0.08 * spinWindup - 0.12 * spinSnapLead - 0.08 * spinMidTuck + 0.06 * spinSpotCheck);
+
+          // 2. Spine targets (Upper-body lead coil & braking check)
+          const spinSpineRy = sDir * (-0.58 * spinWindup + 0.62 * spinSnapLead + 0.16 * spinMidTuck - 0.34 * spinSpotCheck - 0.10 * spinStompLand);
+          const spinSpineRx = 0.17 + 0.24 * spinWindup - 0.08 * spinSnapLead + 0.16 * spinMidTuck - 0.06 * spinSpotCheck + 0.26 * spinStompLand;
+          const spinSpineRz = sDir * (0.14 * spinWindup - 0.14 * spinSnapLead - 0.08 * spinMidTuck + 0.10 * spinSpotCheck);
+
+          // 3. Head & Neck (Spots landing early)
+          const spinNeckRy = sDir * (-0.18 * spinWindup + 0.28 * spinSnapLead + 0.24 * spinSpotCheck - 0.06 * spinStompLand);
+          const spinNeckRx = -0.07 - 0.08 * spinWindup + 0.05 * spinMidTuck - 0.12 * spinSpotCheck - 0.08 * spinStompLand;
+          const spinNeckRz = sDir * (0.05 * spinWindup - 0.08 * spinSnapLead + 0.06 * spinSpotCheck);
+
+          const spinHeadRy = sDir * (-0.22 * spinWindup + 0.36 * spinSnapLead + 0.32 * spinSpotCheck - 0.08 * spinStompLand);
+          const spinHeadRx = -0.08 - 0.08 * spinWindup + 0.04 * spinMidTuck - 0.14 * spinSpotCheck - 0.10 * spinStompLand;
+          const spinHeadRz = sDir * (0.06 * spinWindup - 0.10 * spinSnapLead + 0.08 * spinSpotCheck);
+
+          // 4. Legs (Asymmetric freestyle tuck)
+          const leadThigh = baseThigh - 0.36 * spinWindup + 0.22 * spinSnapLead - 0.56 * spinMidTuck + 0.12 * spinSpotCheck - 0.42 * spinStompLand;
+          const leadShin = baseShin + 0.32 * spinWindup - 0.18 * spinSnapLead + 0.52 * spinMidTuck - 0.10 * spinSpotCheck + 0.38 * spinStompLand;
+          const trailThigh = baseThigh - 0.36 * spinWindup + 0.24 * spinSnapLead - 0.42 * spinMidTuck + 0.10 * spinSpotCheck - 0.40 * spinStompLand;
+          const trailShin = baseShin + 0.32 * spinWindup - 0.20 * spinSnapLead + 0.40 * spinMidTuck - 0.08 * spinSpotCheck + 0.36 * spinStompLand;
+
+          let spinLHipRx: number, spinLHipRy: number, spinLHipRz: number;
+          let spinLKneeRx: number, spinLAnkleRx: number;
+          let spinRHipRx: number, spinRHipRy: number, spinRHipRz: number;
+          let spinRKneeRx: number, spinRAnkleRx: number;
+
+          if (sDir >= 0) {
+            spinLHipRx = leadThigh - spinHipsRx;
+            spinLHipRy = -0.18 * spinSnapLead + 0.10 * spinMidTuck;
+            spinLHipRz = 0.06 * spinMidTuck;
+            spinLKneeRx = leadShin - leadThigh;
+            spinLAnkleRx = -leadShin - 0.16 * spinMidTuck;
+
+            spinRHipRx = trailThigh - spinHipsRx;
+            spinRHipRy = -0.18 * spinSnapLead + 0.10 * spinMidTuck;
+            spinRHipRz = -0.08 * spinMidTuck;
+            spinRKneeRx = trailShin - trailThigh;
+            spinRAnkleRx = -trailShin - 0.14 * spinMidTuck;
+          } else {
+            spinRHipRx = leadThigh - spinHipsRx;
+            spinRHipRy = 0.18 * spinSnapLead - 0.10 * spinMidTuck;
+            spinRHipRz = -0.06 * spinMidTuck;
+            spinRKneeRx = leadShin - leadThigh;
+            spinRAnkleRx = -leadShin - 0.16 * spinMidTuck;
+
+            spinLHipRx = trailThigh - spinHipsRx;
+            spinLHipRy = 0.18 * spinSnapLead - 0.10 * spinMidTuck;
+            spinLHipRz = 0.08 * spinMidTuck;
+            spinLKneeRx = trailShin - trailThigh;
+            spinLAnkleRx = -trailShin - 0.14 * spinMidTuck;
+          }
+
+          // 5. Arms & Poles (Drive into spin -> compact mid-tuck -> wide flare check)
+          const leadShoulderRz = -1.22 - 0.10 * spinWindup + 0.55 * spinSnapLead + 0.12 * spinMidTuck + 0.85 * spinSpotCheck + 0.18 * spinStompLand;
+          const leadShoulderRx = -0.10 + 0.32 * spinWindup - 0.42 * spinSnapLead - 0.24 * spinMidTuck - 0.12 * spinSpotCheck - 0.18 * spinStompLand;
+          const leadShoulderRy = 0.08 + 0.38 * spinWindup - 0.45 * spinSnapLead + 0.22 * spinMidTuck - 0.32 * spinSpotCheck;
+          const leadElbowRy = -0.82 - 0.15 * spinWindup + 0.28 * spinSnapLead - 0.42 * spinMidTuck + 0.52 * spinSpotCheck;
+          const leadElbowRz = 0.15 + 0.12 * spinMidTuck - 0.14 * spinSpotCheck;
+          const leadWristRx = 1.60 + 0.15 * spinWindup - 0.35 * spinMidTuck - 0.28 * spinSpotCheck;
+          const leadWristRz = -0.45 + 0.18 * spinMidTuck + 0.22 * spinSpotCheck;
+
+          const trailShoulderRz = 1.22 + 0.16 * spinWindup - 0.38 * spinSnapLead - 0.10 * spinMidTuck - 0.85 * spinSpotCheck - 0.18 * spinStompLand;
+          const trailShoulderRx = -0.10 + 0.36 * spinWindup - 0.58 * spinSnapLead - 0.28 * spinMidTuck - 0.12 * spinSpotCheck - 0.18 * spinStompLand;
+          const trailShoulderRy = -0.08 + 0.42 * spinWindup - 0.52 * spinSnapLead - 0.26 * spinMidTuck + 0.32 * spinSpotCheck;
+          const trailElbowRy = 0.82 + 0.18 * spinWindup + 0.36 * spinSnapLead + 0.46 * spinMidTuck - 0.52 * spinSpotCheck;
+          const trailElbowRz = -0.15 - 0.12 * spinMidTuck + 0.14 * spinSpotCheck;
+          const trailWristRx = 1.60 + 0.15 * spinWindup - 0.35 * spinMidTuck - 0.28 * spinSpotCheck;
+          const trailWristRz = 0.45 - 0.18 * spinMidTuck - 0.22 * spinSpotCheck;
+
+          let spinLShoulderRz: number, spinLShoulderRx: number, spinLShoulderRy: number;
+          let spinLElbowRy: number, spinLElbowRz: number, spinLWristRx: number, spinLWristRz: number;
+          let spinRShoulderRz: number, spinRShoulderRx: number, spinRShoulderRy: number;
+          let spinRElbowRy: number, spinRElbowRz: number, spinRWristRx: number, spinRWristRz: number;
+
+          if (sDir >= 0) {
+            spinLShoulderRz = leadShoulderRz; spinLShoulderRx = leadShoulderRx; spinLShoulderRy = leadShoulderRy;
+            spinLElbowRy = leadElbowRy; spinLElbowRz = leadElbowRz; spinLWristRx = leadWristRx; spinLWristRz = leadWristRz;
+
+            spinRShoulderRz = trailShoulderRz; spinRShoulderRx = trailShoulderRx; spinRShoulderRy = trailShoulderRy;
+            spinRElbowRy = trailElbowRy; spinRElbowRz = trailElbowRz; spinRWristRx = trailWristRx; spinRWristRz = trailWristRz;
+          } else {
+            spinRShoulderRz = -leadShoulderRz; spinRShoulderRx = leadShoulderRx; spinRShoulderRy = -leadShoulderRy;
+            spinRElbowRy = -leadElbowRy; spinRElbowRz = -leadElbowRz; spinRWristRx = leadWristRx; spinRWristRz = -leadWristRz;
+
+            spinLShoulderRz = -trailShoulderRz; spinLShoulderRx = trailShoulderRx; spinLShoulderRy = -trailShoulderRy;
+            spinLElbowRy = -trailElbowRy; spinLElbowRz = -trailElbowRz; spinLWristRx = trailWristRx; spinLWristRz = -trailWristRz;
+          }
+
+          // Blend Animation 3 (Jump) and Animation 4 (360 Spin Trick)
+          const sb = this.spinTrickBlend;
+          this.targets.hips.rx = THREE.MathUtils.lerp(jumpHipsRx, spinHipsRx, sb);
+          this.targets.hips.ry = THREE.MathUtils.lerp(jumpHipsRy, spinHipsRy, sb);
+          this.targets.hips.rz = THREE.MathUtils.lerp(jumpHipsRz, spinHipsRz, sb);
+
+          this.targets.spine.rx = THREE.MathUtils.lerp(jumpSpineRx, spinSpineRx, sb);
+          this.targets.spine.ry = THREE.MathUtils.lerp(jumpSpineRy, spinSpineRy, sb);
+          this.targets.spine.rz = THREE.MathUtils.lerp(jumpSpineRz, spinSpineRz, sb);
+
+          this.targets.neck.rx = THREE.MathUtils.lerp(jumpNeckRx, spinNeckRx, sb);
+          this.targets.neck.ry = THREE.MathUtils.lerp(0, spinNeckRy, sb);
+          this.targets.neck.rz = THREE.MathUtils.lerp(0, spinNeckRz, sb);
+
+          this.targets.head.rx = THREE.MathUtils.lerp(jumpHeadRx, spinHeadRx, sb);
+          this.targets.head.ry = THREE.MathUtils.lerp(0, spinHeadRy, sb);
+          this.targets.head.rz = THREE.MathUtils.lerp(0, spinHeadRz, sb);
+
+          this.targets.leftHip.rx = THREE.MathUtils.lerp(jumpLHipRx, spinLHipRx, sb);
+          this.targets.leftHip.ry = THREE.MathUtils.lerp(jumpLHipRy, spinLHipRy, sb);
+          this.targets.leftHip.rz = THREE.MathUtils.lerp(jumpLHipRz, spinLHipRz, sb);
+          this.targets.leftKnee.rx = THREE.MathUtils.lerp(jumpLKneeRx, spinLKneeRx, sb);
+          this.targets.leftAnkle.rx = THREE.MathUtils.lerp(jumpLAnkleRx, spinLAnkleRx, sb);
+          this.targets.leftAnkle.rz = THREE.MathUtils.lerp(jumpLAnkleRz, 0, sb);
+
+          this.targets.rightHip.rx = THREE.MathUtils.lerp(jumpRHipRx, spinRHipRx, sb);
+          this.targets.rightHip.ry = THREE.MathUtils.lerp(jumpRHipRy, spinRHipRy, sb);
+          this.targets.rightHip.rz = THREE.MathUtils.lerp(jumpRHipRz, spinRHipRz, sb);
+          this.targets.rightKnee.rx = THREE.MathUtils.lerp(jumpRKneeRx, spinRKneeRx, sb);
+          this.targets.rightAnkle.rx = THREE.MathUtils.lerp(jumpRAnkleRx, spinRAnkleRx, sb);
+          this.targets.rightAnkle.rz = THREE.MathUtils.lerp(jumpRAnkleRz, 0, sb);
+
+          this.targets.leftShoulder.rz = THREE.MathUtils.lerp(jumpLShoulderRz, spinLShoulderRz, sb);
+          this.targets.leftShoulder.rx = THREE.MathUtils.lerp(jumpLShoulderRx, spinLShoulderRx, sb);
+          this.targets.leftShoulder.ry = THREE.MathUtils.lerp(jumpLShoulderRy, spinLShoulderRy, sb);
+          this.targets.leftElbow.ry = THREE.MathUtils.lerp(jumpLElbowRy, spinLElbowRy, sb);
+          this.targets.leftElbow.rz = THREE.MathUtils.lerp(jumpLElbowRz, spinLElbowRz, sb);
+          this.targets.leftWrist.rx = THREE.MathUtils.lerp(jumpLWristRx, spinLWristRx, sb);
+          this.targets.leftWrist.rz = THREE.MathUtils.lerp(jumpLWristRz, spinLWristRz, sb);
+
+          this.targets.rightShoulder.rz = THREE.MathUtils.lerp(jumpRShoulderRz, spinRShoulderRz, sb);
+          this.targets.rightShoulder.rx = THREE.MathUtils.lerp(jumpRShoulderRx, spinRShoulderRx, sb);
+          this.targets.rightShoulder.ry = THREE.MathUtils.lerp(jumpRShoulderRy, spinRShoulderRy, sb);
+          this.targets.rightElbow.ry = THREE.MathUtils.lerp(jumpRElbowRy, spinRElbowRy, sb);
+          this.targets.rightElbow.rz = THREE.MathUtils.lerp(jumpRElbowRz, spinRElbowRz, sb);
+          this.targets.rightWrist.rx = THREE.MathUtils.lerp(jumpRWristRx, spinRWristRx, sb);
+          this.targets.rightWrist.rz = THREE.MathUtils.lerp(jumpRWristRz, spinRWristRz, sb);
+        } else {
+          // Pure Animation 3 Jump
+          this.targets.hips.rx = jumpHipsRx;
+          this.targets.hips.ry = jumpHipsRy;
+          this.targets.hips.rz = jumpHipsRz;
+
+          this.targets.spine.rx = jumpSpineRx;
+          this.targets.spine.ry = jumpSpineRy;
+          this.targets.spine.rz = jumpSpineRz;
+
+          this.targets.neck.rx = jumpNeckRx;
+          this.targets.head.rx = jumpHeadRx;
+
+          this.targets.leftHip.rx = jumpLHipRx;
+          this.targets.leftHip.rz = jumpLHipRz;
+          this.targets.leftHip.ry = jumpLHipRy;
+          this.targets.leftKnee.rx = jumpLKneeRx;
+          this.targets.leftAnkle.rx = jumpLAnkleRx;
+          this.targets.leftAnkle.rz = jumpLAnkleRz;
+
+          this.targets.rightHip.rx = jumpRHipRx;
+          this.targets.rightHip.rz = jumpRHipRz;
+          this.targets.rightHip.ry = jumpRHipRy;
+          this.targets.rightKnee.rx = jumpRKneeRx;
+          this.targets.rightAnkle.rx = jumpRAnkleRx;
+          this.targets.rightAnkle.rz = jumpRAnkleRz;
+
+          this.targets.leftShoulder.rz = jumpLShoulderRz;
+          this.targets.leftShoulder.rx = jumpLShoulderRx;
+          this.targets.leftShoulder.ry = jumpLShoulderRy;
+          this.targets.leftElbow.ry = jumpLElbowRy;
+          this.targets.leftElbow.rz = jumpLElbowRz;
+          this.targets.leftWrist.rx = jumpLWristRx;
+          this.targets.leftWrist.rz = jumpLWristRz;
+
+          this.targets.rightShoulder.rz = jumpRShoulderRz;
+          this.targets.rightShoulder.rx = jumpRShoulderRx;
+          this.targets.rightShoulder.ry = jumpRShoulderRy;
+          this.targets.rightElbow.ry = jumpRElbowRy;
+          this.targets.rightElbow.rz = jumpRElbowRz;
+          this.targets.rightWrist.rx = jumpRWristRx;
+          this.targets.rightWrist.rz = jumpRWristRz;
+        }
+    } else if (this.landAbsorbTimer > 0) {
+      // --- ANIMATION 3: BENT-KNEE LANDING IMPACT ABSORPTION ---
+      const landAbsorb = Math.sin((this.landAbsorbTimer / 0.32) * Math.PI * 0.5);
+      this.targets.hips.rx += 0.12 * landAbsorb;
+      this.targets.spine.rx += 0.24 * landAbsorb;
+      this.targets.neck.rx -= 0.10 * landAbsorb;
+      this.targets.head.rx -= 0.11 * landAbsorb;
+
+      this.targets.leftHip.rx -= 0.38 * landAbsorb;
+      this.targets.rightHip.rx -= 0.38 * landAbsorb;
+      this.targets.leftKnee.rx += 0.36 * landAbsorb;
+      this.targets.rightKnee.rx += 0.36 * landAbsorb;
+
+      this.targets.leftShoulder.rz += 0.18 * landAbsorb;
+      this.targets.rightShoulder.rz -= 0.18 * landAbsorb;
+      this.targets.leftShoulder.rx -= 0.20 * landAbsorb;
+      this.targets.rightShoulder.rx -= 0.20 * landAbsorb;
+
+      this.hipPosTarget.y -= 0.08 * landAbsorb;
+      this.hipY = THREE.MathUtils.damp(this.hipY, this.hipPosTarget.y, 18.0, clampedDt);
     }
 
     // 7. Special Overrides: Drift Hockey Stop
@@ -1284,8 +1598,13 @@ export class SkierAnimator {
       const tgt = this.targets[name];
       if (j && tgt) {
         j.rotation.x += (tgt.rx - j.rotation.x) * blendRate;
-        j.rotation.y += (tgt.ry - j.rotation.y) * blendRate;
-        j.rotation.z += (tgt.rz - j.rotation.z) * blendRate;
+        if (name === 'hips') {
+          j.rotation.y += shortestAngleDelta(tgt.ry, j.rotation.y) * blendRate;
+          j.rotation.z += shortestAngleDelta(tgt.rz, j.rotation.z) * blendRate;
+        } else {
+          j.rotation.y += (tgt.ry - j.rotation.y) * blendRate;
+          j.rotation.z += (tgt.rz - j.rotation.z) * blendRate;
+        }
       }
     });
 
@@ -1294,8 +1613,8 @@ export class SkierAnimator {
     this.skier.joints.hips.position.x += (this.hipPosTarget.x - this.skier.joints.hips.position.x) * blendRate;
     this.skier.joints.hips.position.z += (this.hipPosTarget.z - this.skier.joints.hips.position.z) * blendRate;
 
-    // Distinct visual separation of legs during glide fall
-    const hipSpreadOffset = 0.075 * this.glideSpread;
+    // Distinct visual separation of legs during jump flight
+    const hipSpreadOffset = !params.isGrounded ? (0.05 * Math.min(1.0, this.airTime / 0.20)) : 0.0;
     if (this.skier.joints.leftHip) {
       this.skier.joints.leftHip.position.x = 0.114 + hipSpreadOffset;
     }

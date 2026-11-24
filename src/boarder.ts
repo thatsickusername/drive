@@ -1004,7 +1004,20 @@ export class Skier {
       }
       this.visualRoot.quaternion.slerp(this._targetQuat, Math.min(1, dt * 24));
 
-      // 2. Dynamic Procedural Animation Update (Idle glide vs Alpine Carving + Pole Plants)
+      // 2. Dynamic Procedural Animation Update (Idle glide vs Alpine Carving + Jump + 360 Spin Trick)
+      const inAir = !this.isGrounded;
+      const hasSpinInput = !!input.left || !!input.right || (input.trickSpinX !== undefined && Math.abs(input.trickSpinX) > 0.05);
+      const isSpinning = inAir && (hasSpinInput || Math.abs(this.gmaPhysics.angularVelocitySpin) > 0.15 || this.gmaPhysics.accumulatedAirSpinDeg > 2.0);
+
+      let spinDir = 1.0;
+      if (input.right || (input.trickSpinX !== undefined && input.trickSpinX > 0.05) || this.gmaPhysics.angularVelocitySpin < -0.1) {
+        spinDir = -1.0; // Right Spin
+      } else if (input.left || (input.trickSpinX !== undefined && input.trickSpinX < -0.05) || this.gmaPhysics.angularVelocitySpin > 0.1) {
+        spinDir = 1.0;  // Left Spin
+      }
+
+      const spinProgress = (this.gmaPhysics.accumulatedAirSpinDeg % 360.0) / 360.0;
+
       this.animator.update({
         dt,
         speed: this.speed,
@@ -1015,7 +1028,13 @@ export class Skier {
         tuck: !!input.forward && this.speed > 8,
         inputLeft: !!input.left || (input.steerX !== undefined && input.steerX < -0.25),
         inputRight: !!input.right || (input.steerX !== undefined && input.steerX > 0.25),
-        isGliding: this.gmaPhysics.isGliding
+        isGliding: this.gmaPhysics.isGliding,
+        airTime: this.airTimer,
+        jumpPressed: input.jump,
+        isSpinning,
+        spinProgress,
+        spinDirection: spinDir,
+        spinRate: this.gmaPhysics.angularVelocitySpin
       });
 
       // 3. Foot Grounding & Ski Elevation Clamping:

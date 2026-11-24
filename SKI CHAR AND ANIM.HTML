@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Minimal Low-Poly Skier — Carving & Idle Animations</title>
+    <title>Minimal Low-Poly Skier — Carving, Idle, Jump & 360° Spin</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -138,6 +138,14 @@
                 <button data-anim="idle"
                     class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
                     Idle Skiing
+                </button>
+                <button data-anim="jump"
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
+                    Jump
+                </button>
+                <button data-anim="spin360"
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
+                    360° Spin
                 </button>
                 <button data-anim="tpose"
                     class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
@@ -523,6 +531,7 @@
             // ------------------------------------------------------------------------
             const hips = new THREE.Group();
             hips.name = 'hips';
+            hips.rotation.order = 'YXZ'; // Vertical spin (Y) outermost so pitch/roll stay local to skier
             hips.position.set(0, 0.82, 0);
             root.add(hips);
             joints.hips = hips;
@@ -929,13 +938,13 @@
 
         /**
          * ============================================================================
-         * PROCEDURAL ANIMATION ENGINE (CARVING, IDLE SKIING, T-POSE + SMOOTH BLENDING)
+         * PROCEDURAL ANIMATION ENGINE (CARVING, IDLE, JUMP, 360° SPIN + BLENDING)
          * ============================================================================
          */
         function createSkierAnimator(skier) {
             const { root, joints, footContacts } = skier;
 
-            let mode = 'carving'; // 'carving' | 'idle' | 'tpose'
+            let mode = 'carving'; // 'carving' | 'idle' | 'jump' | 'spin360' | 'tpose'
             let isPlaying = true;
             let speed = 1.0;
             let animTime = 0;
@@ -955,6 +964,14 @@
             });
             const hipPosTarget = { x: 0, z: 0 };
 
+            // Airborne height & grounding blend state (0 = grounded, 1 = full mid-air COM arc)
+            let airOffsetTarget = 0;      // Upright jump height added above grounded ski contact
+            let airOffsetCurrent = 0;
+            let freeAirBlendTarget = 0;   // 1 during inverted flips so inverted skis don't push rig underground
+            let freeAirBlendCurrent = 0;
+            let freeAirHipYTarget = 0.82; // Target pelvis height during inverted airtime
+            let freeAirHipYCurrent = 0.82;
+
             function clearTargets() {
                 jointNames.forEach((name) => {
                     targets[name].rx = 0;
@@ -963,6 +980,33 @@
                 });
                 hipPosTarget.x = 0;
                 hipPosTarget.z = 0;
+                airOffsetTarget = 0;
+                freeAirBlendTarget = 0;
+                freeAirHipYTarget = 0.82;
+            }
+
+            // Utility math helpers for smooth animation curves & 360° wrapping
+            function clamp01(v) {
+                return Math.max(0, Math.min(1, v));
+            }
+
+            function smoothstep(edge0, edge1, x) {
+                const t = clamp01((x - edge0) / (edge1 - edge0));
+                return t * t * (3 - 2 * t);
+            }
+
+            function bell(u, start, peak, end) {
+                if (u <= start || u >= end) return 0;
+                return u < peak
+                    ? smoothstep(start, peak, u)
+                    : 1 - smoothstep(peak, end, u);
+            }
+
+            function shortestAngleDelta(target, current) {
+                let d = (target - current) % (Math.PI * 2);
+                if (d > Math.PI) d -= Math.PI * 2;
+                if (d < -Math.PI) d += Math.PI * 2;
+                return d;
             }
 
             // Smooth periodic Gaussian pulse over [0, 2π] for pole plant & push-back phases
@@ -1138,6 +1182,225 @@
                 return 'Idle Skiing • Ready Glide';
             }
 
+            /**
+             * ANIMATION 3: JUMP IN PLACE
+             * Stays in place horizontally: Idle -> Crouch Windup -> Explosive Takeoff ->
+             * Mid-Air Leg Spread -> Bent-Knee Landing Absorption -> Smooth Idle Recovery.
+             */
+            function evaluateJump(t) {
+                const period = 2.6;
+                const u = (t % period) / period;
+
+                // Start from subtle idle baseline so transitions in/out feel seamless
+                const idleBreath = Math.sin(t * 1.45);
+                const idleBounce = Math.sin(t * 2.6);
+
+                // Phase envelopes
+                const crouch = bell(u, 0.12, 0.30, 0.40);      // Pre-jump bend
+                const takeoff = bell(u, 0.32, 0.40, 0.48);     // Explosive upward pop
+                const spread = bell(u, 0.41, 0.56, 0.72);      // Mid-air leg spread
+                const landAbsorb = bell(u, 0.71, 0.80, 0.94);  // Bent-knee landing impact
+
+                // Parabolic airborne lift (u in [0.38, 0.74])
+                const airStart = 0.38;
+                const airEnd = 0.74;
+                const inAir = u > airStart && u < airEnd;
+                const airT = inAir ? (u - airStart) / (airEnd - airStart) : 0;
+                const parabola = inAir ? 4 * airT * (1 - airT) : 0;
+                const airEase = inAir ? Math.sin(airT * Math.PI) : 0;
+
+                // Stay strictly in place on X/Z, lift cleanly on Y
+                hipPosTarget.x = 0;
+                hipPosTarget.z = 0;
+                airOffsetTarget = 0.82 * parabola;
+
+                // 1. Hips (Forward pitch on crouch/land, proud upright pop at apex)
+                targets.hips.rx = 0.06 + 0.10 * crouch - 0.10 * spread + 0.12 * landAbsorb;
+                targets.hips.ry = 0;
+                targets.hips.rz = 0;
+
+                // 2. Spine (Loads forward on crouch & landing, opens proud in mid-air)
+                targets.spine.rx = 0.17 + 0.02 * idleBreath + 0.22 * crouch - 0.14 * spread + 0.24 * landAbsorb;
+                targets.spine.ry = 0;
+                targets.spine.rz = 0;
+
+                // 3. Neck & Head (Keeps eyes forward on horizon, slight upward look at takeoff)
+                targets.neck.rx = -0.07 - 0.10 * crouch + 0.05 * spread - 0.10 * landAbsorb;
+                targets.head.rx = -0.08 - 0.10 * crouch + 0.06 * spread - 0.11 * landAbsorb;
+
+                // 4. Legs (Idle -> Deep Bend -> Extended Pop -> Spread Eagle -> Parallel Land -> Deep Absorb)
+                const baseThigh = -0.28 - 0.025 * idleBounce;
+                const baseShin = 0.24 + 0.020 * idleBounce;
+
+                const thigh = baseThigh
+                    - 0.36 * crouch
+                    + 0.24 * takeoff
+                    - 0.06 * spread
+                    - 0.40 * landAbsorb;
+
+                const shin = baseShin
+                    + 0.32 * crouch
+                    - 0.20 * takeoff
+                    + 0.08 * spread
+                    + 0.36 * landAbsorb;
+
+                // Symmetric outward leg spread at mid-air apex
+                const legSpreadAngle = 0.42 * spread;
+                const skiTipLift = -0.18 * airEase; // Slight stylish tip lift in the air
+
+                // Left Leg (+X)
+                targets.leftHip.rx = thigh - targets.hips.rx;
+                targets.leftHip.rz = legSpreadAngle;
+                targets.leftHip.ry = 0.08 * spread;
+                targets.leftKnee.rx = shin - thigh;
+                targets.leftAnkle.rx = -shin + skiTipLift;
+                targets.leftAnkle.rz = -0.14 * spread;
+
+                // Right Leg (-X)
+                targets.rightHip.rx = thigh - targets.hips.rx;
+                targets.rightHip.rz = -legSpreadAngle;
+                targets.rightHip.ry = -0.08 * spread;
+                targets.rightKnee.rx = shin - thigh;
+                targets.rightAnkle.rx = -shin + skiTipLift;
+                targets.rightAnkle.rz = 0.14 * spread;
+
+                // 5. Arms & Poles (Drop slightly on crouch, flare up/out for mid-air balance, steady on landing)
+                const armLift = 0.52 * spread + 0.18 * takeoff;
+                const armDrop = 0.14 * crouch + 0.16 * landAbsorb;
+
+                // Left Arm (+X)
+                targets.leftShoulder.rz = -1.22 + armLift - 0.08 * crouch + 0.18 * landAbsorb;
+                targets.leftShoulder.rx = -0.10 + 0.24 * crouch - 0.22 * takeoff - 0.18 * spread - 0.20 * landAbsorb;
+                targets.leftShoulder.ry = 0.08 - 0.18 * spread;
+                targets.leftElbow.ry = -0.82 + 0.42 * spread - 0.12 * crouch;
+                targets.leftElbow.rz = 0.15 - 0.10 * spread;
+                targets.leftWrist.rx = 1.60 - 0.32 * spread + 0.15 * crouch;
+                targets.leftWrist.rz = -0.45 + 0.18 * spread;
+
+                // Right Arm (-X)
+                targets.rightShoulder.rz = 1.22 - armLift + 0.08 * crouch - 0.18 * landAbsorb;
+                targets.rightShoulder.rx = -0.10 + 0.24 * crouch - 0.22 * takeoff - 0.18 * spread - 0.20 * landAbsorb;
+                targets.rightShoulder.ry = -0.08 + 0.18 * spread;
+                targets.rightElbow.ry = 0.82 - 0.42 * spread + 0.12 * crouch;
+                targets.rightElbow.rz = -0.15 + 0.10 * spread;
+                targets.rightWrist.rx = 1.60 - 0.32 * spread + 0.15 * crouch;
+                targets.rightWrist.rz = 0.45 - 0.18 * spread;
+
+                if (crouch > 0.35) return 'Jump • Crouch Wind-Up';
+                if (takeoff > 0.45) return 'Jump • Explosive Pop';
+                if (spread > 0.35) return 'Jump • Mid-Air Spread';
+                if (inAir) return 'Jump • Preparing Landing';
+                if (landAbsorb > 0.30) return 'Jump • Bent-Knee Landing';
+                return 'Jump • Idle Stance';
+            }
+
+            /**
+             * ANIMATION 4: 360° VERTICAL SPIN (FREESTYLE STAGGERED MID-AIR TURN)
+             * Natural non-rigid 360° vertical-axis spin modeled on real freestyle ski 360s:
+             * Counter-Windup -> Head & Shoulder Lead -> Trailing-Leg Whip & Mid-Air Tuck ->
+             * Early Landing Spot & Wide Arm Check -> Bent-Knee Stomp Absorption.
+             */
+            function evaluateSpin360(t) {
+                const period = 2.8;
+                const u = (t % period) / period;
+
+                const airStart = 0.27;
+                const airEnd = 0.76;
+                const inAir = u > airStart && u < airEnd;
+                const airT = inAir ? (u - airStart) / (airEnd - airStart) : 0;
+
+                // Phase envelopes
+                const windup = bell(u, 0.06, 0.20, 0.28);  // Deep crouch + upper-body coil to right
+                const snapLead = bell(u, 0.21, 0.30, 0.44);  // Head & shoulders whip left AHEAD of hips
+                const midTuck = bell(u, 0.34, 0.52, 0.68);  // Stylish asymmetric mid-air tuck
+                const spotCheck = bell(u, 0.60, 0.72, 0.80);  // Head spots landing; arms flare to brake spin
+                const stompLand = bell(u, 0.74, 0.82, 0.95);  // Bent-knee stomp absorption
+
+                // Parabolic airborne lift (stays cleanly upright on vertical Y-axis)
+                const parabola = inAir ? 4 * airT * (1 - airT) : 0;
+                airOffsetTarget = 0.92 * parabola;
+
+                // Staggered vertical 360° spin curve:
+                // Hips lag slightly behind shoulder launch, accelerate through mid-air tuck, ease into landing
+                let spinAngle = 0;
+                if (inAir) {
+                    const staggeredEase = smoothstep(0, 1, airT) * 0.42 + airT * 0.58;
+                    spinAngle = Math.PI * 2 * staggeredEase; // Full 360° left spin around vertical +Y axis
+                } else if (u >= airEnd) {
+                    spinAngle = Math.PI * 2; // Equivalent to 0 via shortest-angle wrapping
+                }
+
+                hipPosTarget.x = 0;
+                hipPosTarget.z = 0;
+
+                // 1. Hips (Anticipation counter-twist -> staggered 360° vertical Y spin -> stomp)
+                targets.hips.ry = -0.10 * windup + spinAngle + 0.06 * stompLand;
+                targets.hips.rx = 0.06 + 0.10 * windup - 0.08 * midTuck + 0.12 * stompLand;
+                targets.hips.rz = 0.08 * windup - 0.12 * snapLead - 0.08 * midTuck + 0.06 * spotCheck;
+
+                // 2. Spine (STAGGERED: Coils right, whips left ahead of hips, counter-checks on landing)
+                targets.spine.ry = -0.58 * windup + 0.62 * snapLead + 0.16 * midTuck - 0.34 * spotCheck - 0.10 * stompLand;
+                targets.spine.rx = 0.17 + 0.24 * windup - 0.08 * snapLead + 0.16 * midTuck - 0.06 * spotCheck + 0.26 * stompLand;
+                targets.spine.rz = 0.14 * windup - 0.14 * snapLead - 0.08 * midTuck + 0.10 * spotCheck;
+
+                // 3. Neck & Head (Leads the launch aggressively, then snaps ahead to spot the snow)
+                targets.neck.ry = -0.18 * windup + 0.28 * snapLead + 0.24 * spotCheck - 0.06 * stompLand;
+                targets.neck.rx = -0.07 - 0.08 * windup + 0.05 * midTuck - 0.12 * spotCheck - 0.08 * stompLand;
+                targets.neck.rz = 0.05 * windup - 0.08 * snapLead + 0.06 * spotCheck;
+
+                targets.head.ry = -0.22 * windup + 0.36 * snapLead + 0.32 * spotCheck - 0.08 * stompLand;
+                targets.head.rx = -0.08 - 0.08 * windup + 0.04 * midTuck - 0.14 * spotCheck - 0.10 * stompLand;
+                targets.head.rz = 0.06 * windup - 0.10 * snapLead + 0.08 * spotCheck;
+
+                // 4. Legs (Deep pre-load -> brief trailing whip -> asymmetric freestyle tuck -> parallel stomp)
+                const baseThigh = -0.28;
+                const baseShin = 0.24;
+
+                // Left Leg (+X, slightly higher tucked knee for natural freestyle silhouette)
+                const lThigh = baseThigh - 0.36 * windup + 0.22 * snapLead - 0.56 * midTuck + 0.12 * spotCheck - 0.42 * stompLand;
+                const lShin = baseShin + 0.32 * windup - 0.18 * snapLead + 0.52 * midTuck - 0.10 * spotCheck + 0.38 * stompLand;
+                targets.leftHip.rx = lThigh - targets.hips.rx;
+                targets.leftHip.ry = -0.18 * snapLead + 0.10 * midTuck; // Trails behind shoulders at takeoff
+                targets.leftHip.rz = 0.06 * midTuck;
+                targets.leftKnee.rx = lShin - lThigh;
+                targets.leftAnkle.rx = -lShin - 0.16 * midTuck;
+
+                // Right Leg (-X, slightly lower tuck for organic asymmetry)
+                const rThigh = baseThigh - 0.36 * windup + 0.24 * snapLead - 0.42 * midTuck + 0.10 * spotCheck - 0.40 * stompLand;
+                const rShin = baseShin + 0.32 * windup - 0.20 * snapLead + 0.40 * midTuck - 0.08 * spotCheck + 0.36 * stompLand;
+                targets.rightHip.rx = rThigh - targets.hips.rx;
+                targets.rightHip.ry = -0.18 * snapLead + 0.10 * midTuck;
+                targets.rightHip.rz = -0.08 * midTuck;
+                targets.rightKnee.rx = rShin - rThigh;
+                targets.rightAnkle.rx = -rShin - 0.14 * midTuck;
+
+                // 5. Arms & Poles (Coil right -> throw left -> tuck tight to spin -> flare wide to check)
+                // Left Arm (+X, lead arm opens into the spin, tucks in, then flares to brake)
+                targets.leftShoulder.rz = -1.22 - 0.10 * windup + 0.55 * snapLead + 0.12 * midTuck + 0.85 * spotCheck + 0.18 * stompLand;
+                targets.leftShoulder.rx = -0.10 + 0.32 * windup - 0.42 * snapLead - 0.24 * midTuck - 0.12 * spotCheck - 0.18 * stompLand;
+                targets.leftShoulder.ry = 0.08 + 0.38 * windup - 0.45 * snapLead + 0.22 * midTuck - 0.32 * spotCheck;
+                targets.leftElbow.ry = -0.82 - 0.15 * windup + 0.28 * snapLead - 0.42 * midTuck + 0.52 * spotCheck;
+                targets.leftElbow.rz = 0.15 + 0.12 * midTuck - 0.14 * spotCheck;
+                targets.leftWrist.rx = 1.60 + 0.15 * windup - 0.35 * midTuck - 0.28 * spotCheck;
+                targets.leftWrist.rz = -0.45 + 0.18 * midTuck + 0.22 * spotCheck;
+
+                // Right Arm (-X, drives across chest for rotational torque, then flares wide to stop spin)
+                targets.rightShoulder.rz = 1.22 + 0.16 * windup - 0.38 * snapLead - 0.10 * midTuck - 0.85 * spotCheck - 0.18 * stompLand;
+                targets.rightShoulder.rx = -0.10 + 0.36 * windup - 0.58 * snapLead - 0.28 * midTuck - 0.12 * spotCheck - 0.18 * stompLand;
+                targets.rightShoulder.ry = -0.08 + 0.42 * windup - 0.52 * snapLead - 0.26 * midTuck + 0.32 * spotCheck;
+                targets.rightElbow.ry = 0.82 + 0.18 * windup + 0.36 * snapLead + 0.46 * midTuck - 0.52 * spotCheck;
+                targets.rightElbow.rz = -0.15 - 0.12 * midTuck + 0.14 * spotCheck;
+                targets.rightWrist.rx = 1.60 + 0.15 * windup - 0.35 * midTuck - 0.28 * spotCheck;
+                targets.rightWrist.rz = 0.45 - 0.18 * midTuck - 0.22 * spotCheck;
+
+                if (windup > 0.35) return '360° Spin • Counter-Windup';
+                if (snapLead > 0.42) return '360° Spin • Shoulder Lead';
+                if (midTuck > 0.38) return '360° Spin • Mid-Air Tuck';
+                if (spotCheck > 0.32) return '360° Spin • Spotting & Check';
+                if (stompLand > 0.30) return '360° Spin • Stomp Landing';
+                return '360° Spin • Ready Glide';
+            }
+
             // Temporary vectors for analytical foot/ski grounding
             const tmpWorld = new THREE.Vector3();
             const invRootMatrix = new THREE.Matrix4();
@@ -1171,24 +1434,48 @@
                     phaseText = evaluateCarving(animTime);
                 } else if (mode === 'idle') {
                     phaseText = evaluateIdleSkiing(animTime);
+                } else if (mode === 'jump') {
+                    phaseText = evaluateJump(animTime);
+                } else if (mode === 'spin360') {
+                    phaseText = evaluateSpin360(animTime);
                 }
 
-                // Smooth frame-rate independent exponential blending
-                const blend = 1 - Math.exp(-8.5 * clampedDt);
+                // Smooth frame-rate independent exponential blending (faster response for aerial snaps)
+                const lambda = (mode === 'spin360' || mode === 'jump') ? 13.5 : 8.5;
+                const blend = 1 - Math.exp(-lambda * clampedDt);
 
                 jointNames.forEach((name) => {
                     const j = joints[name];
                     const tgt = targets[name];
                     j.rotation.x += (tgt.rx - j.rotation.x) * blend;
-                    j.rotation.y += (tgt.ry - j.rotation.y) * blend;
-                    j.rotation.z += (tgt.rz - j.rotation.z) * blend;
+                    if (name === 'hips') {
+                        // Shortest-angle deltas guarantee seamless 360° wrapping on Y and Z
+                        j.rotation.y += shortestAngleDelta(tgt.ry, j.rotation.y) * blend;
+                        j.rotation.z += shortestAngleDelta(tgt.rz, j.rotation.z) * blend;
+                    } else {
+                        j.rotation.y += (tgt.ry - j.rotation.y) * blend;
+                        j.rotation.z += (tgt.rz - j.rotation.z) * blend;
+                    }
                 });
 
                 joints.hips.position.x += (hipPosTarget.x - joints.hips.position.x) * blend;
                 joints.hips.position.z += (hipPosTarget.z - joints.hips.position.z) * blend;
 
-                // Keep lowest ski edge / boot sole cleanly planted on y = 0
-                groundCharacter();
+                airOffsetCurrent += (airOffsetTarget - airOffsetCurrent) * blend;
+                freeAirBlendCurrent += (freeAirBlendTarget - freeAirBlendCurrent) * blend;
+                freeAirHipYCurrent += (freeAirHipYTarget - freeAirHipYCurrent) * blend;
+
+                // Grounding + Airborne Parabolic Trajectory
+                if (freeAirBlendCurrent < 0.005) {
+                    // Grounded or upright jump: keep lowest ski edge at y = 0 + upright airOffset
+                    groundCharacter();
+                    joints.hips.position.y += airOffsetCurrent;
+                } else {
+                    // Inverted trick: smoothly blend between grounded hip height and parabolic COM arc
+                    groundCharacter();
+                    const groundedY = joints.hips.position.y + airOffsetCurrent;
+                    joints.hips.position.y = groundedY * (1 - freeAirBlendCurrent) + freeAirHipYCurrent * freeAirBlendCurrent;
+                }
 
                 return phaseText;
             }
@@ -1197,6 +1484,9 @@
                 update,
                 setMode(newMode) {
                     mode = newMode;
+                    if (newMode === 'jump' || newMode === 'spin360') {
+                        animTime = 0; // Start aerial animations cleanly from Idle -> Windup
+                    }
                 },
                 getMode() {
                     return mode;
@@ -1321,9 +1611,9 @@
             renderer.toneMappingExposure = 1.06;
             container.appendChild(renderer.domElement);
 
-            // 2. Camera & OrbitControls (Three-quarter front view highlights carving lean & pole plants)
-            const defaultCamPos = new THREE.Vector3(1.15, 1.15, 3.15);
-            const defaultTarget = new THREE.Vector3(0, 0.85, 0);
+            // 2. Camera & OrbitControls (Three-quarter front view framed for both carving & high-air tricks)
+            const defaultCamPos = new THREE.Vector3(1.25, 1.38, 3.85);
+            const defaultTarget = new THREE.Vector3(0, 1.05, 0);
 
             const camera = new THREE.PerspectiveCamera(
                 34,
