@@ -724,14 +724,12 @@ export class GmaPlayerPhysics {
       this.velocity.y += this.config.trick_hover_zforce * dt;
     }
 
-    // 2. Aerial Rotations (Spins, Flips, Rolls)
-    // Invert spinCmd sign so air rotation aligns 1:1 with ground steering convention
-    if (Math.abs(spinCmd) > 0.05) {
-      const spinMultiplier = this.sharpTurnSpinBoostActive ? this.config.rotationboost_sharp_turn_boost : 1.0;
-      this.angularVelocitySpin -= spinCmd * this.config.spin_acceleration * spinMultiplier * dt;
-    } else {
-      this.angularVelocitySpin *= Math.exp(-this.config.spin_deceleration * dt);
-    }
+    // 2. Aerial Rotations (Predictive, constant rotation speeds for consistent trick landing)
+    // Consistent spin rate: ~400 deg/s (360 takes ~0.9s), instant damping on release so tricks stop cleanly
+    const TARGET_SPIN_SPEED = 7.0; // rad/s
+    const targetSpinVel = Math.abs(spinCmd) > 0.05 ? -Math.sign(spinCmd) * TARGET_SPIN_SPEED : 0.0;
+    const spinDampRate = targetSpinVel !== 0 ? 30.0 : 40.0;
+    this.angularVelocitySpin = THREE.MathUtils.damp(this.angularVelocitySpin, targetSpinVel, spinDampRate, dt);
 
     const deltaSpin = this.angularVelocitySpin * dt;
     this.currentHeadingAngle += deltaSpin;
@@ -739,22 +737,24 @@ export class GmaPlayerPhysics {
     this.accumulatedAirSpinDeg += spinDeg;
     this.trickScoring.addSpin(this.accumulatedAirSpinDeg);
 
-    if (Math.abs(flipInput) > 0.05) {
-      this.angularVelocityFlip += flipInput * this.config.flip_acceleration * dt;
-    } else {
-      this.angularVelocityFlip *= Math.exp(-this.config.flip_deceleration * dt);
-    }
+    // Consistent flip rate: ~430 deg/s (360 flip takes ~0.84s), no runaway acceleration
+    const TARGET_FLIP_SPEED = 7.5; // rad/s
+    const targetFlipVel = Math.abs(flipInput) > 0.05 ? Math.sign(flipInput) * TARGET_FLIP_SPEED : 0.0;
+    const flipDampRate = targetFlipVel !== 0 ? 30.0 : 40.0;
+    this.angularVelocityFlip = THREE.MathUtils.damp(this.angularVelocityFlip, targetFlipVel, flipDampRate, dt);
+
     const deltaFlip = this.angularVelocityFlip * dt;
     this.airPitch += deltaFlip;
     const flipDeg = Math.abs(deltaFlip) * RAD2DEG;
     this.accumulatedAirFlipDeg += flipDeg;
     this.trickScoring.addFlip(this.accumulatedAirFlipDeg, flipInput > 0);
 
-    if (Math.abs(rollInput) > 0.05) {
-      this.angularVelocityRoll += rollInput * this.config.roll_acceleration * dt;
-    } else {
-      this.angularVelocityRoll *= Math.exp(-this.config.roll_deceleration * dt);
-    }
+    // Consistent roll rate: ~370 deg/s
+    const TARGET_ROLL_SPEED = 6.5; // rad/s
+    const targetRollVel = Math.abs(rollInput) > 0.05 ? Math.sign(rollInput) * TARGET_ROLL_SPEED : 0.0;
+    const rollDampRate = targetRollVel !== 0 ? 30.0 : 40.0;
+    this.angularVelocityRoll = THREE.MathUtils.damp(this.angularVelocityRoll, targetRollVel, rollDampRate, dt);
+
     const deltaRoll = this.angularVelocityRoll * dt;
     this.airRoll += deltaRoll;
     this.accumulatedAirRollDeg += Math.abs(deltaRoll) * RAD2DEG;

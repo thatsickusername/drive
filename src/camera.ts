@@ -405,13 +405,16 @@ export class DynamicCameraDirector {
 
     // 3. Fall-Line Heading Alignment with Smooth Course Follow
     // Fall-line in Alvdalen Massif is 0 radians (downhill along +Z)
-    //rotSpeedMul = 2.0 allows responsive slight yaw swivel during turns while preserving mountain orientation
+    // When airborne, camera yaw stays facing forward down the flight line rather than spinning with trick keys
     let targetYaw = 0.0;
-    const riderYawFromFallLine = heading % (Math.PI * 2);
-    // Swivel slightly with rider heading (capped at +/- 25 degrees) so isometric orientation is never flipped
-    const maxSwivel = THREE.MathUtils.degToRad(25.0);
-    const clampedRiderYaw = THREE.MathUtils.clamp(riderYawFromFallLine, -maxSwivel, maxSwivel);
-    targetYaw = clampedRiderYaw * 0.45 * (GMACameraConfig.rotSpeedMul / 2.0) + this.manualYawOffset;
+    if (!isAirborne) {
+      const riderYawFromFallLine = heading % (Math.PI * 2);
+      // Swivel slightly with rider heading (capped at +/- 25 degrees) so isometric orientation is never flipped
+      const maxSwivel = THREE.MathUtils.degToRad(25.0);
+      const clampedRiderYaw = THREE.MathUtils.clamp(riderYawFromFallLine, -maxSwivel, maxSwivel);
+      targetYaw = clampedRiderYaw * 0.45 * (GMACameraConfig.rotSpeedMul / 2.0);
+    }
+    targetYaw += this.manualYawOffset;
     this.camYaw = THREE.MathUtils.damp(this.camYaw, targetYaw, 3.5, dt);
 
     // 4. Airborne / Flying Dynamics Progress (fadeTime = 2.0s)
@@ -487,10 +490,15 @@ export class DynamicCameraDirector {
     const idealDist = this.settings.behindDistance * zoomRatio;
 
     // 1. Smooth heading follow first so forward azimuth is up-to-date
-    let angleDiff = (heading - this.camYaw) % (Math.PI * 2);
-    if (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-    if (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-    this.camYaw += angleDiff * Math.min(1.0, this.settings.behindFollowSpeed * dt);
+    // When airborne, lock camera yaw so trick spins (A/D or stick) rotate the character in front of the camera
+    // without spinning the camera, letting the player clearly judge distance and alignment to landing.
+    let angleDiff = 0.0;
+    if (!_isAirborne) {
+      angleDiff = (heading - this.camYaw) % (Math.PI * 2);
+      if (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+      if (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+      this.camYaw += angleDiff * Math.min(1.0, this.settings.behindFollowSpeed * dt);
+    }
 
     // Rider forward direction: (-sin(camYaw), 0, -cos(camYaw))
     const fwdX = -Math.sin(this.camYaw);
