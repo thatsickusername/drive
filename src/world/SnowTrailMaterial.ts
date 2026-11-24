@@ -197,8 +197,8 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       float inRightRutCavity = smoothstep(0.61, 0.68, vTrailUV.x) * (1.0 - smoothstep(0.78, 0.85, vTrailUV.x));
       float cavityMask = max(inLeftRutCavity, inRightRutCavity);
 
-      // Subtle, gentle 8% ambient soft dip (no dark stripes)
-      reflectedLight.indirectDiffuse *= (1.0 - cavityMask * 0.08);
+      // Subtle, gentle ambient soft dip
+      reflectedLight.indirectDiffuse *= (1.0 - cavityMask * 0.05);
 
       // 2. Directional contact shadow cast along the raised berm shoulders:
       vec3 dPdx_l = dFdx(vWorldPosition);
@@ -221,7 +221,7 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
         : max(leftSoftShadow, innerRightSoftShadow);
 
       float shadowWeight = clamp(abs(sunLateral) * 1.5, 0.3, 0.85);
-      float trenchOcclusion = wallShadow * shadowWeight * 0.25; // Gentle 25% max softening
+      float trenchOcclusion = wallShadow * shadowWeight * 0.18; // Softened trench occlusion
 
       // Softly attenuate direct diffuse lighting without dark lines:
       reflectedLight.directDiffuse *= (1.0 - trenchOcclusion);
@@ -238,7 +238,7 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       // Gentle alpine sky-blue ambient in shaded curvature:
       reflectedLight.indirectDiffuse = mix(reflectedLight.indirectDiffuse,
                                            reflectedLight.indirectDiffuse * uShadowColor * 1.15,
-                                           wallShadow * 0.25);
+                                           wallShadow * 0.18);
 
       // 3. Velvet Grazing Rim on Raised Berms (Forward & Backscatter)
       float NdotV = clamp(dot(geometryNormal, geometryViewDir), 0.0, 1.0);

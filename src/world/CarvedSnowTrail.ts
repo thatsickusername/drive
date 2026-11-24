@@ -339,13 +339,13 @@ export class CarvedSnowTrail {
         : 0.075;
 
       const bermWidth = isDrifting ? 0.140 : 0.115;
-      const shoulderDx = 0.045; // 4.5cm gentle rounded curve from crest down to rut
+      const shoulderDx = 0.050; // Gentle rounded curve from crest down to rut
 
       // Soft, Realistic 3D Rut Depth & Rounded Berm Heights:
-      // Shallow, natural rut floor (+0.010m above ground surface)
-      const rutFloorY = 0.010;
-      // Powder surface reference elevation (+0.035m)
-      const powderSurfaceY = 0.035;
+      // Shallow, natural rut floor (+0.013m above ground surface)
+      const rutFloorY = 0.013;
+      // Powder surface reference elevation (+0.028m)
+      const powderSurfaceY = 0.028;
 
       // Dynamic Asymmetric Snow Accumulation during Carving & Turning:
       // When carving left (carveTurn < 0), centrifugal force pushes churned snow to the RIGHT (outer edge).
@@ -363,36 +363,36 @@ export class CarvedSnowTrail {
       if (carveFactor < 0.0) {
         // Carving Left: Centrifugal force dynamically throws snow to the Right outside edge
         const rightPush = Math.min(2.5, -carveFactor);
-        rightBermExtraH = rightPush * 0.120; // Prominently elevated outer snow berm (+12cm to +30cm)
-        rightBermExtraW = rightPush * 0.240; // Wide displaced snow displayed far outward (+24cm to +60cm)
-        leftBermExtraH = -rightPush * 0.006; // Compressed inside edge
+        rightBermExtraH = rightPush * 0.090; // Subtle elevated outer snow berm
+        rightBermExtraW = rightPush * 0.220; // Wide displaced snow displayed outward
+        leftBermExtraH = -rightPush * 0.005; // Compressed inside edge
       } else if (carveFactor > 0.0) {
         // Carving Right: Centrifugal force dynamically throws snow to the Left outside edge
         const leftPush = Math.min(2.5, carveFactor);
-        leftBermExtraH = leftPush * 0.120;  // Prominently elevated outer snow berm (+12cm to +30cm)
-        leftBermExtraW = leftPush * 0.240;  // Wide displaced snow displayed far outward (+24cm to +60cm)
-        rightBermExtraH = -leftPush * 0.006; // Compressed inside edge
+        leftBermExtraH = leftPush * 0.090;  // Subtle elevated outer snow berm
+        leftBermExtraW = leftPush * 0.220;  // Wide displaced snow displayed outward
+        rightBermExtraH = -leftPush * 0.005; // Compressed inside edge
       }
 
       // Drift / skid / hockey stop adds extra symmetric pushed snow volume
-      const driftExtraH = isDrifting ? 0.012 : 0.0;
-      const driftExtraW = isDrifting ? 0.030 : 0.0;
+      const driftExtraH = isDrifting ? 0.009 : 0.0;
+      const driftExtraW = isDrifting ? 0.025 : 0.0;
 
       // Soft natural micro-wobble along the berm crest
-      const wobble = Math.sin(this.cumulativeDistance * 8.0) * 0.003 + Math.cos(this.cumulativeDistance * 18.0) * 0.002;
-      const bermHeight = (isDrifting ? 0.035 : 0.028) + wobble;
+      const wobble = Math.sin(this.cumulativeDistance * 8.0) * 0.0025 + Math.cos(this.cumulativeDistance * 18.0) * 0.0015;
+      const bermHeight = (isDrifting ? 0.027 : 0.022) + wobble;
 
       const leftBermHeight = powderSurfaceY + bermHeight + leftBermExtraH + driftExtraH;
       const leftBermWidth = bermWidth + leftBermExtraW + driftExtraW;
-      const leftShoulderY = rutFloorY + (leftBermHeight - rutFloorY) * 0.62;
+      const leftShoulderY = rutFloorY + (leftBermHeight - rutFloorY) * 0.58;
 
       const rightBermHeight = powderSurfaceY + bermHeight + rightBermExtraH + driftExtraH;
       const rightBermWidth = bermWidth + rightBermExtraW + driftExtraW;
-      const rightShoulderY = rutFloorY + (rightBermHeight - rutFloorY) * 0.62;
+      const rightShoulderY = rutFloorY + (rightBermHeight - rutFloorY) * 0.58;
 
-      // Gentle center median spine between skis (4.1cm above rut floor)
-      const medianY = powderSurfaceY + 0.016;
-      const innerShoulderY = rutFloorY + (medianY - rutFloorY) * 0.60;
+      // Gentle center median spine between skis (softly rounded)
+      const medianY = powderSurfaceY + 0.012;
+      const innerShoulderY = rutFloorY + (medianY - rutFloorY) * 0.55;
 
       // Shift existing vertices down by 1 slice (19 vertices)
       const stride = this.VERTS_PER_SEG * 3;
@@ -435,45 +435,45 @@ export class CarvedSnowTrail {
       // 19 cross-sectional nodes forming a continuous, soft, parabolic-curved snow sculpture
       const nodes = [
         // 0: Outer left feather (softly blends into untouched snow)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 1.80), h: 0.008, u: 0.00, alpha: 0.0, isRut: false, wallTilt: 0.0 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 1.80), h: 0.007, u: 0.00, alpha: 0.0, isRut: false, wallTilt: 0.0 },
         // 1: Outer left flank (gentle outer ramp)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.95), h: powderSurfaceY + 0.008 + leftBermExtraH * 0.70, u: 0.05, alpha: 0.70, isRut: false, wallTilt: -0.35 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.95), h: powderSurfaceY + 0.006 + leftBermExtraH * 0.60, u: 0.05, alpha: 0.70, isRut: false, wallTilt: -0.28 },
         // 2: Left berm crest (smooth rounded peak)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.40), h: leftBermHeight, u: 0.10, alpha: 1.0, isRut: false, wallTilt: -0.20 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.40), h: leftBermHeight, u: 0.10, alpha: 1.0, isRut: false, wallTilt: -0.16 },
         // 3: Left outer rounded shoulder (soft S-curve roll down into rut)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + (shoulderDx + leftBermExtraW * 0.25) * 0.4), h: leftShoulderY, u: 0.15, alpha: 1.0, isRut: false, wallTilt: 0.55 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + (shoulderDx + leftBermExtraW * 0.25) * 0.4), h: leftShoulderY, u: 0.15, alpha: 1.0, isRut: false, wallTilt: 0.42 },
         // 4: Left rut outer bowl edge (shallow concave dip)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -halfWidth * 0.70, h: rutFloorY + 0.006, u: 0.20, alpha: 1.0, isRut: true, wallTilt: 0.35 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -halfWidth * 0.70, h: rutFloorY + 0.004, u: 0.20, alpha: 1.0, isRut: true, wallTilt: 0.26 },
         // 5: Left rut floor center (ski base trough)
         { cx: leftCenterX, cz: leftCenterZ, lat: 0.0, h: rutFloorY, u: 0.27, alpha: 1.0, isRut: true, wallTilt: 0.0 },
         // 6: Left rut inner bowl edge
-        { cx: leftCenterX, cz: leftCenterZ, lat: halfWidth * 0.70, h: rutFloorY + 0.006, u: 0.34, alpha: 1.0, isRut: true, wallTilt: -0.35 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: halfWidth * 0.70, h: rutFloorY + 0.004, u: 0.34, alpha: 1.0, isRut: true, wallTilt: -0.26 },
         // 7: Left inner rounded shoulder (soft curve rolling up to median)
-        { cx: leftCenterX, cz: leftCenterZ, lat: halfWidth + shoulderDx * 0.3, h: innerShoulderY, u: 0.39, alpha: 1.0, isRut: false, wallTilt: -0.45 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: halfWidth + shoulderDx * 0.3, h: innerShoulderY, u: 0.39, alpha: 1.0, isRut: false, wallTilt: -0.36 },
         // 8: Left median flank
-        { cx: leftCenterX, cz: leftCenterZ, lat: halfWidth + shoulderDx * 0.8, h: medianY * 0.90, u: 0.44, alpha: 1.0, isRut: false, wallTilt: -0.20 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: halfWidth + shoulderDx * 0.8, h: medianY * 0.92, u: 0.44, alpha: 1.0, isRut: false, wallTilt: -0.16 },
 
         // 9: Center median crest (gentle rounded mound between skis)
         { cx: (leftCenterX + rightCenterX) * 0.5, cz: (leftCenterZ + rightCenterZ) * 0.5, lat: 0.0, h: medianY, u: 0.50, alpha: 1.0, isRut: false, wallTilt: 0.0 },
 
         // 10: Right median flank
-        { cx: rightCenterX, cz: rightCenterZ, lat: -(halfWidth + shoulderDx * 0.8), h: medianY * 0.90, u: 0.56, alpha: 1.0, isRut: false, wallTilt: 0.20 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: -(halfWidth + shoulderDx * 0.8), h: medianY * 0.92, u: 0.56, alpha: 1.0, isRut: false, wallTilt: 0.16 },
         // 11: Right inner rounded shoulder
-        { cx: rightCenterX, cz: rightCenterZ, lat: -(halfWidth + shoulderDx * 0.3), h: innerShoulderY, u: 0.61, alpha: 1.0, isRut: false, wallTilt: 0.45 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: -(halfWidth + shoulderDx * 0.3), h: innerShoulderY, u: 0.61, alpha: 1.0, isRut: false, wallTilt: 0.36 },
         // 12: Right rut inner bowl edge
-        { cx: rightCenterX, cz: rightCenterZ, lat: -halfWidth * 0.70, h: rutFloorY + 0.006, u: 0.66, alpha: 1.0, isRut: true, wallTilt: 0.35 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: -halfWidth * 0.70, h: rutFloorY + 0.004, u: 0.66, alpha: 1.0, isRut: true, wallTilt: 0.26 },
         // 13: Right rut floor center
         { cx: rightCenterX, cz: rightCenterZ, lat: 0.0, h: rutFloorY, u: 0.73, alpha: 1.0, isRut: true, wallTilt: 0.0 },
         // 14: Right rut outer bowl edge
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth * 0.70, h: rutFloorY + 0.006, u: 0.80, alpha: 1.0, isRut: true, wallTilt: -0.35 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth * 0.70, h: rutFloorY + 0.004, u: 0.80, alpha: 1.0, isRut: true, wallTilt: -0.26 },
         // 15: Right outer rounded shoulder (soft S-curve roll up to berm)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + (shoulderDx + rightBermExtraW * 0.25) * 0.4, h: rightShoulderY, u: 0.85, alpha: 1.0, isRut: false, wallTilt: -0.55 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + (shoulderDx + rightBermExtraW * 0.25) * 0.4, h: rightShoulderY, u: 0.85, alpha: 1.0, isRut: false, wallTilt: -0.42 },
         // 16: Right berm crest (smooth rounded peak)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.40, h: rightBermHeight, u: 0.90, alpha: 1.0, isRut: false, wallTilt: 0.20 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.40, h: rightBermHeight, u: 0.90, alpha: 1.0, isRut: false, wallTilt: 0.16 },
         // 17: Outer right flank (gentle outer ramp)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.95, h: powderSurfaceY + 0.008 + rightBermExtraH * 0.70, u: 0.95, alpha: 0.70, isRut: false, wallTilt: 0.35 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.95, h: powderSurfaceY + 0.006 + rightBermExtraH * 0.60, u: 0.95, alpha: 0.70, isRut: false, wallTilt: 0.28 },
         // 18: Outer right feather (softly blends into untouched snow)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 1.80, h: 0.008, u: 1.00, alpha: 0.0, isRut: false, wallTilt: 0.0 }
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 1.80, h: 0.007, u: 1.00, alpha: 0.0, isRut: false, wallTilt: 0.0 }
       ];
 
       // Populate new slice at index 0..18
