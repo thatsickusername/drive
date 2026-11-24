@@ -744,7 +744,8 @@ export class GmaPlayerPhysics {
     this.angularVelocityFlip = THREE.MathUtils.damp(this.angularVelocityFlip, targetFlipVel, flipDampRate, dt);
 
     const deltaFlip = this.angularVelocityFlip * dt;
-    this.airPitch += deltaFlip;
+    // Positive flipInput (W key / stick up) pitches forward (frontflip), negative (S key / stick down) pitches back (backflip)
+    this.airPitch -= deltaFlip;
     const flipDeg = Math.abs(deltaFlip) * RAD2DEG;
     this.accumulatedAirFlipDeg += flipDeg;
     this.trickScoring.addFlip(this.accumulatedAirFlipDeg, flipInput > 0);
