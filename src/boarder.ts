@@ -459,6 +459,7 @@ export class Skier {
 
   private wasGrounded = false;
   private wasCrashing = false;
+  private prevJumpInput = false;
 
   // Audio, Trail Ribbon and Particles
   private readonly audio = new SnowAudio();
@@ -775,10 +776,21 @@ export class Skier {
       z: this.gmaPhysics.position.z
     });
 
+    // Handle player jump trigger for snow trail interruption
+    const jumpTriggered = this.gmaPhysics.jumpActionTriggered || (input.jump && !this.prevJumpInput && this.wasGrounded);
+    this.gmaPhysics.jumpActionTriggered = false;
+    if (jumpTriggered && this.trailRibbon) {
+      this.trailRibbon.onJumpStart();
+    }
+    this.prevJumpInput = !!input.jump;
+
     // 5. Update Cached State
     this.yaw = this.gmaPhysics.currentHeadingAngle;
     this.speed = this.gmaPhysics.speed;
     this.isGrounded = this.gmaPhysics.state !== MovementState.Airborne && this.gmaPhysics.state !== MovementState.Crashing;
+    if (this.trailRibbon && this.gmaPhysics.state === MovementState.Crashing) {
+      this.trailRibbon.onCrash();
+    }
     this.isDrifting = this.gmaPhysics.currentTurnType === TurnType.SlideTurn || this.gmaPhysics.currentTurnType === TurnType.OverTurn || input.brake;
     this.isSlashing = this.gmaPhysics.currentTurnType === TurnType.SharpTurn;
     this._forward.copy(this.gmaPhysics.forwardDir);

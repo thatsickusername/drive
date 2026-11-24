@@ -84,6 +84,7 @@ export class GmaPlayerPhysics {
 
   // Ragdoll recovery timer
   public crashRecoveryTimer: number = 0;
+  public jumpActionTriggered: boolean = false;
   private prevJumpPressed: boolean = false;
   private prevStakePressed: boolean = false;
 
@@ -122,6 +123,7 @@ export class GmaPlayerPhysics {
     this.subStepAccumulator = 0;
     this.snowDepthPos = 0;
     this.snowDepthVel = 0;
+    this.jumpActionTriggered = false;
 
     this.angularVelocitySpin = 0;
     this.angularVelocityFlip = 0;
@@ -669,6 +671,7 @@ export class GmaPlayerPhysics {
       this.state = MovementState.Airborne;
       this.airTime = 0.0;
       this.isGliding = jumpPressed;
+      this.jumpActionTriggered = true;
       if (this.currentTurnType === TurnType.SharpTurn) {
         this.sharpTurnSpinBoostActive = true;
       }
