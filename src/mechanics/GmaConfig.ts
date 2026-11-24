@@ -263,7 +263,7 @@ export function createDefaultPlayerConfig(): PlayerConfig {
     inclination_dampening_max_regular: 0.2,
     inclination_dampening_min_regular: 0.03,
 
-    snowslide_push_mul: 3.0,
+    snowslide_push_mul: 2.0,
 
     snowdepth_spring_constant: 20.0,
     snowdepth_spring_pull: 1.0,

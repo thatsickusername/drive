@@ -445,7 +445,7 @@ export class GmaPlayerPhysics {
       // Alternated steering edge: e.g. Left -> Right or Right -> Left
       if (this.steerWiggleTimer >= 0.10 && this.steerWiggleTimer <= 0.70) {
         // Valid rhythmic skate alternation!
-        const maxSkateSpeed = 10.0; // 36 km/h cap for wiggle acceleration
+        const maxSkateSpeed = 8.0; // 28.8 km/h cap for wiggle acceleration (moderated from 10.0)
         if (curSpeed < maxSkateSpeed) {
           const speedFactor = Math.max(0.15, 1.0 - (curSpeed / maxSkateSpeed));
           const skateImpulse = (this.config.snowslide_push_mul * 0.5) * speedFactor;
