@@ -869,6 +869,17 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
 
   function resetPose() {
     hips.position.set(0, 0.82, 0);
+    spine.position.set(0, 0.02, 0);
+    neck.position.set(0, 0.535, 0);
+    head.position.set(0, 0.036, 0);
+    if (joints.leftShoulder) joints.leftShoulder.position.set(0.18, 0.49, 0);
+    if (joints.rightShoulder) joints.rightShoulder.position.set(-0.18, 0.49, 0);
+    if (joints.leftHip) joints.leftHip.position.set(0.114, -0.025, 0);
+    if (joints.rightHip) joints.rightHip.position.set(-0.114, -0.025, 0);
+    if (joints.leftKnee) joints.leftKnee.position.set(0, -0.34, 0);
+    if (joints.rightKnee) joints.rightKnee.position.set(0, -0.34, 0);
+    if (joints.leftAnkle) joints.leftAnkle.position.set(0, -0.325, 0);
+    if (joints.rightAnkle) joints.rightAnkle.position.set(0, -0.325, 0);
     Object.values(joints).forEach((joint) => {
       if (!joint || joint.name.endsWith('Pole')) return;
       joint.rotation.set(0, 0, 0);

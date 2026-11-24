@@ -15,12 +15,13 @@ export interface ScoreFinalization {
   totalScore: number;
   comboMultiplier: number;
   speedBoostMultiplier: number;
+  forwardSpeedBoost: number;
   landing: LandingQuality;
   trickHistory: TrickRecord[];
 }
 
 export class TrickScoringSystem {
-  // Recovered from trick_score.yaml
+  // Recovered parameters from trick_score.yaml
   private readonly perfectMinFlyTime = 1.5;
   private readonly perfectMaxImpact = 0.5;
   private readonly perfectMaxLevel = 20.0;
@@ -35,15 +36,7 @@ export class TrickScoringSystem {
   private readonly railBase = 400;
   private readonly railRate = 16.0;      // pts / meter
   private readonly pressBase = 200;
-  private readonly pressRate = 8.0;      // pts / meter
-  private readonly spinBase = 100;
-  private readonly spinRate = 1.6;       // pts / degree
-  private readonly flipBase = 200;
-  private readonly flipRate = 2.0;       // pts / degree
-  private readonly rollBase = 150;
-  private readonly rollRate = 2.0;       // pts / degree
-  private readonly rodeoBase = 150;
-  private readonly rodeoRate = 2.0;
+  private readonly pressRate = 8.0;       // pts / meter
 
   public currentScore: number = 0;
   public totalGameScore: number = 0;
@@ -53,6 +46,14 @@ export class TrickScoringSystem {
   public lastFinalizedPoints: number = 0;
   public displayTimer: number = 0.0;
 
+  // Continuous accumulation buffers (substep accumulation without history spam)
+  public maxAirSpinDeg: number = 0;
+  public maxAirFlipDeg: number = 0;
+  public maxAirRollDeg: number = 0;
+  public isFrontFlip: boolean = false;
+  public isGrabbing: boolean = false;
+  public grabName: string = '';
+
   constructor() {
     this.reset();
   }
@@ -61,39 +62,44 @@ export class TrickScoringSystem {
     this.currentScore = 0;
     this.comboMultiplier = 1;
     this.history = [];
+    this.maxAirSpinDeg = 0;
+    this.maxAirFlipDeg = 0;
+    this.maxAirRollDeg = 0;
+    this.isFrontFlip = false;
+    this.isGrabbing = false;
+    this.grabName = '';
+  }
+
+  public setGrab(grabbing: boolean, name: string = 'METHOD'): void {
+    this.isGrabbing = grabbing;
+    if (grabbing) this.grabName = name;
   }
 
   public addSpin(degrees: number): void {
-    if (degrees < 90.0) return;
-    const pts = this.spinBase + Math.floor(degrees * this.spinRate);
-    this.currentScore += pts;
-    this.history.push({ name: `Spin ${Math.round(degrees)}°`, points: pts, rotationOrLength: degrees });
-    this.comboMultiplier++;
+    if (degrees > this.maxAirSpinDeg) {
+      this.maxAirSpinDeg = degrees;
+    }
   }
 
   public addFlip(degrees: number, isFront: boolean = false): void {
-    if (degrees < 180.0) return;
-    const pts = this.flipBase + Math.floor(degrees * this.flipRate);
-    this.currentScore += pts;
-    const flipName = isFront ? 'Frontflip' : 'Backflip';
-    this.history.push({ name: `${flipName} ${Math.round(degrees)}°`, points: pts, rotationOrLength: degrees });
-    this.comboMultiplier++;
+    if (degrees > this.maxAirFlipDeg) {
+      this.maxAirFlipDeg = degrees;
+      if (degrees > 90.0) {
+        this.isFrontFlip = isFront;
+      }
+    }
   }
 
   public addRoll(degrees: number): void {
-    if (degrees < 180.0) return;
-    const pts = this.rollBase + Math.floor(degrees * this.rollRate);
-    this.currentScore += pts;
-    this.history.push({ name: `Roll ${Math.round(degrees)}°`, points: pts, rotationOrLength: degrees });
-    this.comboMultiplier++;
+    if (degrees > this.maxAirRollDeg) {
+      this.maxAirRollDeg = degrees;
+    }
   }
 
   public addRodeoMisty(degrees: number): void {
-    if (degrees < 180.0) return;
-    const pts = this.rodeoBase + Math.floor(degrees * this.rodeoRate);
-    this.currentScore += pts;
-    this.history.push({ name: `Rodeo/Misty ${Math.round(degrees)}°`, points: pts, rotationOrLength: degrees });
-    this.comboMultiplier++;
+    if (degrees > this.maxAirRollDeg) {
+      this.maxAirRollDeg = degrees;
+    }
   }
 
   public addRailGrind(distanceMeters: number): void {
@@ -101,7 +107,6 @@ export class TrickScoringSystem {
     const pts = this.railBase + Math.floor(distanceMeters * this.railRate);
     this.currentScore += pts;
     this.history.push({ name: `Rail Grind ${distanceMeters.toFixed(1)}m`, points: pts, rotationOrLength: distanceMeters });
-    this.comboMultiplier++;
   }
 
   public addTailNosePress(distanceMeters: number): void {
@@ -109,7 +114,6 @@ export class TrickScoringSystem {
     const pts = this.pressBase + Math.floor(distanceMeters * this.pressRate);
     this.currentScore += pts;
     this.history.push({ name: `Tail/Nose Press ${distanceMeters.toFixed(1)}m`, points: pts, rotationOrLength: distanceMeters });
-    this.comboMultiplier++;
   }
 
   public evaluateLanding(
@@ -146,16 +150,70 @@ export class TrickScoringSystem {
     return LandingQuality.Sketchy;
   }
 
-  public finalizeScore(landing: LandingQuality): ScoreFinalization {
-    let speedBoostMultiplier = 1.0;
+  /**
+   * Evaluates discrete trick name from cumulative aerial rotations.
+   */
+  private determineTrickName(): { title: string; baseScore: number; comboElements: number } {
+    const spinCount = Math.floor((this.maxAirSpinDeg + 45.0) / 180.0);
+    const spinDegrees = spinCount * 180;
+    const flipCount = Math.floor((this.maxAirFlipDeg + 60.0) / 360.0);
+    const rollCount = Math.floor((this.maxAirRollDeg + 60.0) / 360.0);
 
+    let title = '';
+    let baseScore = 0;
+    let comboElements = 1;
+
+    // Off-axis cork / rodeo / misty
+    if (flipCount >= 1 && spinDegrees >= 180) {
+      comboElements = 2;
+      if (this.isFrontFlip) {
+        title = spinDegrees >= 540 ? `MISTY ${spinDegrees}` : 'MISTY FLIP';
+      } else {
+        title = spinDegrees >= 720 ? `CORK ${spinDegrees}` : (spinDegrees >= 540 ? `RODEO ${spinDegrees}` : 'CORK 360');
+      }
+      baseScore = 650 + (spinDegrees / 180) * 150 + flipCount * 300;
+    } else if (flipCount >= 1) {
+      comboElements = 1;
+      const flipWord = this.isFrontFlip ? 'FRONTFLIP' : 'BACKFLIP';
+      title = flipCount > 1 ? `DOUBLE ${flipWord}` : flipWord;
+      baseScore = 400 * flipCount;
+    } else if (rollCount >= 1) {
+      comboElements = 1;
+      title = rollCount > 1 ? 'DOUBLE LINCOLN LOOP' : 'LINCOLN LOOP';
+      baseScore = 380 * rollCount;
+    } else if (spinDegrees >= 180) {
+      comboElements = 1;
+      title = `SPIN ${spinDegrees}`;
+      baseScore = (spinDegrees / 180) * 220;
+    } else if (this.maxAirSpinDeg >= 90.0) {
+      title = 'SHIFTY 90';
+      baseScore = 120;
+    }
+
+    if (this.isGrabbing) {
+      const grabLabel = this.grabName ? this.grabName.toUpperCase() : 'METHOD';
+      title = title ? `${grabLabel} ${title}` : `${grabLabel} AIR`;
+      baseScore += 200;
+      comboElements += 1;
+    }
+
+    if (!title && (this.currentScore > 0 || this.maxAirSpinDeg > 45)) {
+      title = 'BIG AIR';
+      baseScore = 100;
+    }
+
+    return { title, baseScore, comboElements };
+  }
+
+  public finalizeScore(landing: LandingQuality): ScoreFinalization {
     if (landing === LandingQuality.Crash) {
       const result: ScoreFinalization = {
         totalScore: 0,
         comboMultiplier: 1,
         speedBoostMultiplier: 1.0,
+        forwardSpeedBoost: 0.0,
         landing: LandingQuality.Crash,
-        trickHistory: [...this.history]
+        trickHistory: []
       };
       this.lastFinalizedTrickName = 'CRASH / WIPEOUT';
       this.lastFinalizedPoints = 0;
@@ -164,41 +222,43 @@ export class TrickScoringSystem {
       return result;
     }
 
+    const { title, baseScore, comboElements } = this.determineTrickName();
+
     let landingMultiplier = 1.0;
+    let forwardSpeedBoost = 0.0;
+
     if (landing === LandingQuality.Perfect) {
       landingMultiplier = 1.5;
+      // Controlled +2.0 m/s boost for clean/perfect landing
+      forwardSpeedBoost = title ? 2.0 : 0.8;
     } else if (landing === LandingQuality.Good) {
       landingMultiplier = 1.2;
+      forwardSpeedBoost = title ? 1.3 : 0.4;
     } else if (landing === LandingQuality.Sketchy) {
       landingMultiplier = 0.7;
+      forwardSpeedBoost = title ? 0.5 : 0.0;
     }
 
-    const totalScore = Math.floor(this.currentScore * landingMultiplier * this.comboMultiplier);
+    const totalScore = Math.floor((baseScore + this.currentScore) * landingMultiplier * comboElements);
 
-    // Speed boost milestones from player.yaml:
-    // trick_points: 800 1600 3000 -> trick_boosts: 1.7 3.2 6.0
-    if (totalScore >= 3000) {
-      speedBoostMultiplier = 6.0;
-    } else if (totalScore >= 1600) {
-      speedBoostMultiplier = 3.2;
-    } else if (totalScore >= 800) {
-      speedBoostMultiplier = 1.7;
-    }
+    let landingBadge = '';
+    if (landing === LandingQuality.Perfect) landingBadge = ' [PERFECT]';
+    else if (landing === LandingQuality.Good) landingBadge = ' [GOOD]';
+    else if (landing === LandingQuality.Sketchy) landingBadge = ' [SKETCHY]';
 
-    const historySnapshot = [...this.history];
-    const trickSummary = historySnapshot.map(h => h.name).join(' + ') + (landing === LandingQuality.Perfect ? ' [PERFECT]' : landing === LandingQuality.Good ? ' [GOOD]' : ' [SKETCHY]');
-
-    this.lastFinalizedTrickName = trickSummary.length > 0 ? trickSummary : (totalScore > 0 ? 'Big Air' : '');
+    this.lastFinalizedTrickName = title ? `${title}${landingBadge}` : (totalScore > 0 ? `BIG AIR${landingBadge}` : '');
     this.lastFinalizedPoints = totalScore;
     this.displayTimer = 3.0;
     this.totalGameScore += totalScore;
+    this.comboMultiplier = comboElements;
 
     const result: ScoreFinalization = {
       totalScore,
       comboMultiplier: this.comboMultiplier,
-      speedBoostMultiplier,
+      speedBoostMultiplier: 1.0,
+      forwardSpeedBoost,
       landing,
-      trickHistory: historySnapshot
+      trickHistory: title ? [{ name: title, points: totalScore, rotationOrLength: this.maxAirSpinDeg }] : []
     };
 
     this.reset();

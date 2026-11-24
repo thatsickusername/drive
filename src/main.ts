@@ -523,13 +523,14 @@ class Game {
       this.trickBannerElement.style.display = 'block';
       const opacity = Math.min(1.0, trickEng.displayTimer);
       this.trickBannerElement.style.opacity = `${opacity}`;
+      const pointsHtml = trickEng.lastTrickPoints > 0
+        ? `<div style="font-size:16px;font-weight:bold;color:#4ade80;text-shadow:0 1px 6px rgba(0,0,0,0.8);">+${trickEng.lastTrickPoints} PTS</div>`
+        : '';
       this.trickBannerElement.innerHTML = `
         <div style="font-size:24px;font-weight:900;color:#facc15;text-shadow:0 2px 10px rgba(0,0,0,0.8);letter-spacing:1px;text-transform:uppercase;">
           ${trickEng.lastTrickName}
         </div>
-        <div style="font-size:16px;font-weight:bold;color:#4ade80;text-shadow:0 1px 6px rgba(0,0,0,0.8);">
-          +${trickEng.lastTrickPoints} PTS
-        </div>
+        ${pointsHtml}
       `;
     } else if (!this.player.isGrounded && trickEng.currentAirTime > 0.3) {
       this.trickBannerElement.style.display = 'block';

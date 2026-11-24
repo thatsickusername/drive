@@ -304,10 +304,10 @@ export class GmaPlayerPhysics {
           return;
         }
 
-        // Finalize score and apply speed boost multiplier
+        // Finalize score and apply controlled forward speed boost (+2.0 m/s max)
         const scoreResult = this.trickScoring.finalizeScore(landingQuality);
-        if (scoreResult.speedBoostMultiplier > 1.0) {
-          this.velocity.multiplyScalar(scoreResult.speedBoostMultiplier);
+        if (scoreResult.forwardSpeedBoost > 0) {
+          this.velocity.addScaledVector(this.forwardDir, scoreResult.forwardSpeedBoost);
         }
 
         this.state = MovementState.Skiing;

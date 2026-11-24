@@ -458,6 +458,7 @@ export class Skier {
   public smoothNormal = new THREE.Vector3(0, 1, 0);
 
   private wasGrounded = false;
+  private wasCrashing = false;
 
   // Audio, Trail Ribbon and Particles
   private readonly audio = new SnowAudio();
@@ -848,14 +849,69 @@ export class Skier {
       );
     }
 
-    // If crashing, ragdoll limbs track the Verlet particles
-    if (this.gmaPhysics.state === MovementState.Crashing && this.gmaPhysics.ragdoll.active) {
+    const isCrashing = this.gmaPhysics.state === MovementState.Crashing && this.gmaPhysics.ragdoll.active;
+    if (this.wasCrashing && !isCrashing) {
+      this.skierCharacter.resetPose();
+    }
+    this.wasCrashing = isCrashing;
+
+    // If crashing, ragdoll limbs track the Verlet particles without detaching
+    if (isCrashing) {
       const pts = this.gmaPhysics.ragdoll.points;
-      if (pts.length >= 7) {
-        this.skierCharacter.joints.hips.position.copy(pts[2].pos).sub(this.root.position);
-        this.skierCharacter.joints.spine.position.copy(pts[1].pos).sub(pts[2].pos);
-        if (this.skierCharacter.joints.leftShoulder) this.skierCharacter.joints.leftShoulder.position.copy(pts[3].pos).sub(pts[1].pos);
-        if (this.skierCharacter.joints.rightShoulder) this.skierCharacter.joints.rightShoulder.position.copy(pts[4].pos).sub(pts[1].pos);
+      if (pts.length >= 17) {
+        // 1. Root translates strictly with pelvis particle
+        this.root.position.copy(pts[0].pos);
+        this.skierCharacter.root.position.set(0, 0, 0);
+        this.skierCharacter.joints.hips.position.set(0, 0, 0);
+
+        // 2. Compute 3D Torso / Pelvis Orientation
+        // Up: Pelvis (0) -> Chest (2)
+        const upVec = new THREE.Vector3().subVectors(pts[2].pos, pts[0].pos).normalize();
+        // Right: Left Hip (11) -> Right Hip (14)
+        const rightVec = new THREE.Vector3().subVectors(pts[14].pos, pts[11].pos).normalize();
+        // Forward: Right x Up (faces -Z in model frame)
+        const fwdVec = new THREE.Vector3().crossVectors(rightVec, upVec).normalize();
+        rightVec.crossVectors(upVec, fwdVec).normalize();
+
+        const basisMat = new THREE.Matrix4().makeBasis(rightVec, upVec, fwdVec.clone().negate());
+        this.visualRoot.quaternion.setFromRotationMatrix(basisMat);
+
+        // 3. Helper to orient a child joint's rotation without translating joint sockets
+        const parentQuatInv = new THREE.Quaternion();
+        const localTarget = new THREE.Vector3();
+        const orientJoint = (joint: THREE.Group | undefined, defaultAxis: THREE.Vector3, worldDir: THREE.Vector3) => {
+          if (!joint || !joint.parent) return;
+          joint.parent.getWorldQuaternion(parentQuatInv).invert();
+          localTarget.copy(worldDir).applyQuaternion(parentQuatInv).normalize();
+          joint.quaternion.setFromUnitVectors(defaultAxis, localTarget);
+        };
+
+        const axisY = new THREE.Vector3(0, 1, 0);
+        const axisNegY = new THREE.Vector3(0, -1, 0);
+        const axisX = new THREE.Vector3(1, 0, 0);
+        const axisNegX = new THREE.Vector3(-1, 0, 0);
+
+        // Spine: Pelvis -> Chest (waist remains attached)
+        orientJoint(this.skierCharacter.joints.spine, axisY, new THREE.Vector3().subVectors(pts[2].pos, pts[0].pos));
+
+        // Neck: Chest -> Head (neck remains attached)
+        orientJoint(this.skierCharacter.joints.neck, axisY, new THREE.Vector3().subVectors(pts[4].pos, pts[3].pos));
+
+        // Left Arm: Shoulders rigidly attached, bones orient towards elbow and hand
+        orientJoint(this.skierCharacter.joints.leftShoulder, axisX, new THREE.Vector3().subVectors(pts[6].pos, pts[5].pos));
+        orientJoint(this.skierCharacter.joints.leftElbow, axisX, new THREE.Vector3().subVectors(pts[7].pos, pts[6].pos));
+
+        // Right Arm: Shoulders rigidly attached, bones orient towards elbow and hand
+        orientJoint(this.skierCharacter.joints.rightShoulder, axisNegX, new THREE.Vector3().subVectors(pts[9].pos, pts[8].pos));
+        orientJoint(this.skierCharacter.joints.rightElbow, axisNegX, new THREE.Vector3().subVectors(pts[10].pos, pts[9].pos));
+
+        // Left Leg: Waist and Knees rigidly attached, bones orient towards knee and foot
+        orientJoint(this.skierCharacter.joints.leftHip, axisNegY, new THREE.Vector3().subVectors(pts[12].pos, pts[11].pos));
+        orientJoint(this.skierCharacter.joints.leftKnee, axisNegY, new THREE.Vector3().subVectors(pts[13].pos, pts[12].pos));
+
+        // Right Leg: Waist and Knees rigidly attached, bones orient towards knee and foot
+        orientJoint(this.skierCharacter.joints.rightHip, axisNegY, new THREE.Vector3().subVectors(pts[15].pos, pts[14].pos));
+        orientJoint(this.skierCharacter.joints.rightKnee, axisNegY, new THREE.Vector3().subVectors(pts[16].pos, pts[15].pos));
       }
       this.triggerCrashSpray();
     } else {
@@ -986,6 +1042,7 @@ export class Skier {
 
   public setTerrainSampler(sampler: (x: number, z: number) => number): void {
     this.terrainSampler = sampler;
+    this.gmaPhysics.ragdoll.setTerrainSampler(sampler);
     if (this.trailRibbon) {
       this.trailRibbon.setTerrainSampler(sampler);
     }
