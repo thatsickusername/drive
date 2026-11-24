@@ -538,8 +538,12 @@ export class GmaPlayerPhysics {
     }
 
     // 4. Update Heading with GMA Turn Angle Clamping relative to horizontal momentum
+    const isPowder = surfaceType === 'POWDER' ? 1.0 : 0.0;
+    const turnRadiusScale = 1.0 + 0.45 * isPowder;
+    const effectiveTurnRate = turnRate / turnRadiusScale;
+
     if (absSteer > 0.01) {
-      const deltaAngle = -steerInput * turnRate * dt;
+      const deltaAngle = -steerInput * effectiveTurnRate * dt;
       this.currentHeadingAngle += deltaAngle;
     }
 
@@ -613,11 +617,23 @@ export class GmaPlayerPhysics {
     }
 
     // Authentic GMA ground friction + aerodynamic drag (player.air_friction: 0.006)
-    // Quadratic aero drag ensures gradual speed buildup and caps terminal speeds realistically around 30 m/s (108 km/h)
+    // Pitch-Gated Powder Drag Governor (SNOW_SHADING_AND_INTERACTION.md Section 5.2)
     const groundSpeed = this.velocity.length();
     const speedRatio = groundSpeed / 30.0;
     const aeroDrag = this.config.air_friction * (speedRatio * speedRatio) * 3.5;
-    const totalFriction = (effectiveFriction + driftFriction) * materialFriction + aeroDrag;
+
+    let powderK = 0.0;
+    const horizSpeedForGov = Math.hypot(this.velocity.x, this.velocity.z);
+    if (isPowder > 0.0 && horizSpeedForGov > 0.1) {
+      const gAlong = -(this.groundNormal.x * this.velocity.x + this.groundNormal.z * this.velocity.z) / horizSpeedForGov;
+      const tan8 = 0.14054; // tan(8 deg)
+      const tan20 = 0.36397; // tan(20 deg)
+      powderK = isPowder * THREE.MathUtils.clamp((gAlong - tan8) / (tan20 - tan8), 0.0, 1.0);
+    }
+
+    const effectiveAeroDrag = aeroDrag * (1.0 + 0.25 * powderK);
+    const effectiveMaterialFriction = materialFriction * (1.0 + 0.30 * powderK);
+    const totalFriction = (effectiveFriction + driftFriction) * effectiveMaterialFriction + effectiveAeroDrag;
     const damping = Math.exp(-totalFriction * dt);
     this.velocity.multiplyScalar(damping);
 
@@ -630,11 +646,18 @@ export class GmaPlayerPhysics {
     const alignSpeed = this.velocity.length();
     if (alignSpeed > 1e-4) {
       this._velDir.copy(this.velocity).divideScalar(alignSpeed);
-      const grip = (this.currentTurnType === TurnType.SlideTurn) ? 0.85 : 0.98;
+      const baseGrip = (this.currentTurnType === TurnType.SlideTurn) ? 0.85 : 0.98;
+      const grip = baseGrip * (1.0 - 0.30 * isPowder);
       this._targetDir.copy(this.forwardDir);
       if (isSwitch) this._targetDir.negate();
       this._velDir.multiplyScalar(1.0 - grip).addScaledVector(this._targetDir, grip).normalize();
       this.velocity.copy(this._velDir).multiplyScalar(alignSpeed);
+
+      // Edge scrub: carving displaces snow and scrubs kinetic energy
+      if (absSteer > 0.05 && alignSpeed > 1.0) {
+        const edgeScrub = 0.015 * absSteer * alignSpeed * (1.0 + 0.5 * isPowder) * dt;
+        this.velocity.multiplyScalar(Math.max(0.5, 1.0 - edgeScrub));
+      }
     }
 
     // 8. Jump Execution (strictly edge-triggered one-shot impulse)

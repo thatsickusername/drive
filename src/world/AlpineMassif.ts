@@ -105,8 +105,8 @@ export class AlpineMassif {
             // Vertex Color blending (Clear visual distinction: PISTE, POWDER, ROCK, ICE)
             if (wy <= 0.5) {
               tempColor.copy(colorIce);
-            } else if (sample.surfaceType === 'ROCK' || sample.slopeDeg > 38.0) {
-              const rockBlend = Math.min(1.0, Math.max(0.0, (sample.slopeDeg - 36.0) / 10.0));
+            } else if (sample.surfaceType === 'ROCK' || sample.slopeDeg > 42.0) {
+              const rockBlend = Math.min(1.0, Math.max(0.0, (sample.slopeDeg - 40.0) / 10.0));
               tempColor.copy(colorPowder).lerp(colorRock, Math.max(0.70, rockBlend));
             } else if (sample.surfaceType === 'PISTE' || sample.pisteDist < 26.0) {
               const blend = Math.max(0, Math.min(1, 1.0 - sample.pisteDist / 26.0));

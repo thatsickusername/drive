@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createSnowDetailTexture } from './DetailTexture';
 
 export interface SnowMaterialOptions {
   sunDir?: THREE.Vector3;
@@ -7,11 +8,15 @@ export interface SnowMaterialOptions {
 }
 
 export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.MeshStandardMaterial {
-  const sunDir = options.sunDir || new THREE.Vector3(140, 110, -130).normalize();
-  const sunColor = options.sunColor || new THREE.Color(0xffefe2);
-  const shadowColor = options.shadowColor || new THREE.Color(0x94a6cf);
+  const sunDir = options.sunDir || new THREE.Vector3(-190, 130, -50).normalize();
+  const sunColor = options.sunColor || new THREE.Color(0xfff6ec);
+  const shadowColor = options.shadowColor || new THREE.Color(0x9ca9cb);
+
+  // Generate shared 1024x1024 procedural detail texture
+  const detailTexture = createSnowDetailTexture();
 
   const uniforms = {
+    uDetailTex: { value: detailTexture },
     uTime: { value: 0.0 },
     uSunDir: { value: sunDir.clone() },
     uSunColor: { value: sunColor.clone() },
@@ -30,6 +35,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
   });
 
   material.onBeforeCompile = (shader) => {
+    shader.uniforms.uDetailTex = uniforms.uDetailTex;
     shader.uniforms.uTime = uniforms.uTime;
     shader.uniforms.uSunDir = uniforms.uSunDir;
     shader.uniforms.uSunColor = uniforms.uSunColor;
@@ -38,7 +44,7 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
     shader.uniforms.uPlayerPos = uniforms.uPlayerPos;
     shader.uniforms.uNightFactor = uniforms.uNightFactor;
 
-    // 1. Vertex Shader: export world position & world normal
+    // 1. Vertex Shader: export world position & normal
     shader.vertexShader = shader.vertexShader.replace(
       '#include <common>',
       /* glsl */ `
@@ -57,11 +63,12 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       `
     );
 
-    // 2. Fragment Shader: Add uniforms, 3D hash, powdery SSS, velvet rim, and snow shimmer
+    // 2. Fragment Shader declarations
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <common>',
       /* glsl */ `
       #include <common>
+      uniform sampler2D uDetailTex;
       uniform float uTime;
       uniform vec3 uSunDir;
       uniform vec3 uSunColor;
@@ -73,21 +80,27 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       varying vec3 vWorldPosition;
       varying vec3 vWorldNormal;
 
-      // 3D Hash for stable world-space cellular sparkles
+      // Shared globals across fragment chunks
+      float gDistToCam;
+      float gLodMicro;
+      float gLodMeso;
+      float gLodMacro;
+      float gRockMask;
+      float gIsSnow;
+      vec3 gWorldNPerturbed;
+      vec4 gDMicro;
+      vec4 gDMeso;
+
+      // 3D Hash for microfacet glints
       vec3 hash33(vec3 p) {
         p = fract(p * vec3(0.1031, 0.1030, 0.0973));
         p += dot(p, p.yxz + 33.33);
         return fract((p.xxy + p.yxx) * p.zyx);
       }
 
-      // Smooth 2D noise for subtle, natural organic wind-drift contours
+      // Smooth 2D noise for rock wander and domain warping
       float hash2D(vec2 p) {
         return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-      }
-
-      vec2 hash2D2(vec2 p) {
-        p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
-        return fract(sin(p) * 43758.5453123);
       }
 
       float noise2D(vec2 p) {
@@ -100,224 +113,177 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
         float d = hash2D(i + vec2(1.0, 1.0));
         return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
       }
-
-      // Evaluates 2D cellular wind-drift snow pillow height and horizontal gradient vector
-      // Returns vec3(height [0..1], gradX, gradZ)
-      vec3 snowPillows(vec2 p) {
-        vec2 i = floor(p);
-        vec2 f = fract(p);
-        float minDist = 1.0;
-        vec2 bestDiff = vec2(0.0);
-        for (int y = -1; y <= 1; y++) {
-          for (int x = -1; x <= 1; x++) {
-            vec2 neighbor = vec2(float(x), float(y));
-            vec2 pt = hash2D2(i + neighbor);
-            pt = 0.5 + 0.40 * sin(pt * 6.2831853);
-            vec2 diff = neighbor + pt - f;
-            float dist = length(diff);
-            if (dist < minDist) {
-              minDist = dist;
-              bestDiff = diff;
-            }
-          }
-        }
-        float h = cos(clamp(minDist * 1.5707963, 0.0, 1.5707963));
-        vec2 grad = (minDist > 0.001) ? normalize(bestDiff) * sin(clamp(minDist * 1.5707963, 0.0, 1.5707963)) : vec2(0.0);
-        return vec3(h, grad);
-      }
       `
     );
 
-    // Powdery granular micro-grain texture & organic wind-drift contours (Distance LOD optimized)
+    // 3. Color fragment: Albedo & Slope-dependent rock stripping
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <color_fragment>',
       /* glsl */ `
       #include <color_fragment>
-      float isSnow = step(0.52, diffuseColor.r);
+      gIsSnow = step(0.50, diffuseColor.r);
 
-      // Distance LOD evaluation for snow micro-structure optimization
-      float distToCam = length(vWorldPosition - uCameraPos);
-      float nearFade = 1.0 - smoothstep(10.0, 75.0, distToCam);   // Fine crystalline powder grains (< 75m)
-      
-      // Sculpted snow sastrugi: subtle in immediate foreground (<4m), prominent on midground slopes (10m-180m)
-      float sastrugiFade = smoothstep(3.5, 12.0, distToCam) * (1.0 - smoothstep(40.0, 240.0, distToCam));
+      gDistToCam = length(vWorldPosition - uCameraPos);
+      gLodMicro = 1.0 - smoothstep(1.5, 95.0, gDistToCam);
+      gLodMeso  = 1.0 - smoothstep(5.0, 280.0, gDistToCam);
+      gLodMacro = 1.0 - smoothstep(20.0, 650.0, gDistToCam);
 
-      // 1. Topologically-guided wind-drift field
-      vec3 wNorm = normalize(vWorldNormal);
-      vec2 slopeVec = wNorm.xz;
-      float slopeSteep = clamp(1.0 - wNorm.y, 0.0, 1.0);
-      vec2 slopeDir = (slopeSteep > 0.001) ? normalize(slopeVec) : vec2(0.0);
+      gDMicro = texture2D(uDetailTex, vWorldPosition.xz * 8.0);
+      gDMeso  = texture2D(uDetailTex, vWorldPosition.xz * 2.0);
 
-      // Prevailing wind
-      vec2 prevWind = normalize(vec2(0.707, -0.707));
+      // 18m broad geological wander for natural non-speckle rock stripping
+      float rNoise1 = noise2D(vWorldPosition.xz / 18.0);
+      float rNoise2 = noise2D(vWorldPosition.xz / 7.0);
+      float rNoise = 0.65 * rNoise1 + 0.35 * rNoise2;
 
-      // Contour tangent along mountain face (deflects wind along slope)
-      vec2 contourTangent = vec2(-slopeDir.y, slopeDir.x);
-      if (dot(contourTangent, prevWind) < 0.0) contourTangent = -contourTangent;
+      float ny = vWorldNormal.y;
+      float rockThreshold = mix(0.70, 0.82, rNoise);
+      gRockMask = smoothstep(rockThreshold - 0.08, rockThreshold + 0.04, ny);
 
-      // Local wind smoothly combines prevailing wind with slope contour
-      vec2 localWind = normalize(mix(prevWind, contourTangent, clamp(slopeSteep * 3.0, 0.0, 0.70)));
-      vec2 crossWind = vec2(-localWind.y, localWind.x);
+      // Rock albedo & striations
+      vec3 darkRock = vec3(0.24, 0.22, 0.21) * mix(0.85, 1.15, rNoise2);
+      // Physically-calibrated fresh alpine powder snow albedo
+      vec3 daySnow = vec3(0.84, 0.83, 0.82);
+      vec3 nightSnow = vec3(0.80, 0.83, 0.88);
+      vec3 snowAlbedo = mix(daySnow, nightSnow, uNightFactor);
 
-      // Altitude shear (rotates gently as elevation changes)
-      float altAngle = (vWorldPosition.y - 70.0) * 0.0022;
-      mat2 altRot = mat2(cos(altAngle), -sin(altAngle), sin(altAngle), cos(altAngle));
-      vec2 finalCross = altRot * crossWind;
-      vec2 finalWind = altRot * localWind;
+      // Tactile crystalline powder micro-AO and crevice tooth
+      float microAO = mix(0.56, 1.0, smoothstep(0.08, 0.90, gDMicro.b));
+      float mesoAO  = mix(0.78, 1.0, smoothstep(0.12, 0.88, gDMeso.b));
+      float totalAO = mix(1.0, microAO * mesoAO, gLodMeso);
+      snowAlbedo *= totalAO;
 
-      // 2. Continuous organic coordinate field
-      vec2 macroWarp = vec2(
-        noise2D(vWorldPosition.xz * 0.032),
-        noise2D(vWorldPosition.xz * 0.032 + vec2(5.4, 2.7))
-      ) * 3.2;
+      // Sunward crystalline facet highlight
+      float crystalGleam = smoothstep(0.52, 0.96, gDMicro.b) * 0.14 * gLodMicro;
+      snowAlbedo += vec3(crystalGleam);
 
-      vec2 warpedP = vWorldPosition.xz + macroWarp;
-      float uFlow = dot(warpedP, finalCross);
-      float vFlow = dot(warpedP, finalWind);
-
-      // 3. Dynamic opacity & length masks: lines taper out and vary in opacity across the terrain
-      float opac1 = mix(0.40, 1.0, smoothstep(0.20, 0.80, noise2D(vec2(uFlow * 0.16, vFlow * 0.065))));
-      float opac2 = mix(0.35, 1.0, smoothstep(0.25, 0.75, noise2D(vec2(uFlow * 0.11 + 3.8, vFlow * 0.045 + 1.4))));
-
-      // 4. Multi-scale curved sastrugi contours (curved organically by vFlow)
-      float sastrugi1 = sin(uFlow * 1.35 + sin(vFlow * 0.30) * 1.6) * opac1;
-      float sastrugi2 = sin(uFlow * 2.50 + sin(vFlow * 0.55) * 1.2) * opac2 * 0.55;
-      float sastrugi3 = sin(uFlow * 0.50 + sin(vFlow * 0.15) * 1.4) * 0.45;
-
-      float rawSastrugi = sastrugi1 * 0.55 + sastrugi2 * 0.25 + sastrugi3 * 0.20;
-
-      // 5. Topological placement & exposure mask:
-      float macroPatch = mix(0.55, 1.0, smoothstep(0.25, 0.75, noise2D(vWorldPosition.xz * 0.008 + vec2(2.1, 7.3))));
-      float windward = dot(slopeDir, prevWind);
-      float exposure = mix(0.70, 1.0, clamp(0.5 + 0.5 * windward, 0.0, 1.0));
-      float topoStrength = macroPatch * exposure;
-
-      float sastrugiVal = rawSastrugi * topoStrength * sastrugiFade;
-
-      // 2. High-frequency granular snow powder texture (crystalline powder grains)
-      float grainHash = fract(sin(dot(floor(vWorldPosition * 24.0), vec3(12.9898, 78.233, 45.164))) * 43758.5453);
-      float powderGrain = (grainHash - 0.5) * 0.045 * nearFade;
-
-      // Day vs Night Snow Albedo:
-      // Day: Soft warm ivory/cream
-      // Night: Serene soft pastel silvery moonlit snow
-      vec3 daySnow = vec3(0.996, 0.982, 0.970);
-      vec3 nightSnow = vec3(0.94, 0.965, 0.995);
-      vec3 pastelSnow = mix(daySnow, nightSnow, uNightFactor);
-      diffuseColor.rgb = mix(diffuseColor.rgb, pastelSnow + vec3(powderGrain), isSnow * 0.75);
+      // Combine based on rockMask and isSnow
+      vec3 finalSurfColor = mix(darkRock, snowAlbedo, gRockMask);
+      diffuseColor.rgb = mix(diffuseColor.rgb, finalSurfColor, gIsSnow * 0.85);
       `
     );
 
-    // Shading enhancements: Pronounced organic wind-drift, granular powder contrast, velvet rim, SSS, and diamond shimmer
+    // 4. Roughness map fragment: Modulate roughness across snow and rock
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <roughnessmap_fragment>',
+      /* glsl */ `
+      #include <roughnessmap_fragment>
+      roughnessFactor = mix(0.94, 0.88, gRockMask);
+      `
+    );
+
+    // 5. Normal Perturbation in View Space via Multi-Scale Procedural Snow & Organic Sastrugi
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <normal_fragment_begin>',
+      /* glsl */ `
+      #include <normal_fragment_begin>
+
+      // Multi-scale procedural sampling of uDetailTex
+      vec4 dMacro = texture2D(uDetailTex, vWorldPosition.xz * 0.35);
+
+      vec2 pMicro = (gDMicro.rg * 2.0 - 1.0) * (0.65 * gLodMicro);
+      vec2 pMeso  = (gDMeso.rg * 2.0 - 1.0) * (0.42 * gLodMeso);
+      vec2 pMacro = (dMacro.rg * 2.0 - 1.0) * (0.18 * gLodMacro);
+
+      // Subtle organic wind-drift / sastrugi modulation (gently curved and noise-warped)
+      float windAngle = -0.65; // ~37 degrees
+      vec2 windDir = vec2(cos(windAngle), sin(windAngle));
+      vec2 crossWind = vec2(-windDir.y, windDir.x);
+
+      vec2 warp = vec2(
+        noise2D(vWorldPosition.xz * 0.04),
+        noise2D(vWorldPosition.xz * 0.04 + vec2(4.2, 8.1))
+      ) * 2.8;
+
+      vec2 wp = vWorldPosition.xz + warp;
+      float uWind = dot(wp, windDir);
+      float vWind = dot(wp, crossWind);
+
+      float wave1 = sin(uWind * 0.35 + sin(vWind * 0.10) * 1.4);
+      float wave2 = sin(uWind * 0.75 + sin(vWind * 0.18) * 1.0) * 0.4;
+      float sastrugiWave = wave1 + wave2;
+
+      float sastrugiSlope = sastrugiWave * 0.06;
+      float sastrugiFade = smoothstep(2.5, 12.0, gDistToCam) * (1.0 - smoothstep(45.0, 220.0, gDistToCam));
+      vec2 pSastrugi = windDir * (sastrugiSlope * sastrugiFade);
+
+      vec2 totalPerturb = pMicro + pMeso + pMacro + pSastrugi;
+      gWorldNPerturbed = normalize(vWorldNormal + vec3(totalPerturb.x, 0.0, totalPerturb.y));
+      normal = normalize((viewMatrix * vec4(gWorldNPerturbed, 0.0)).xyz);
+      `
+    );
+
+    // 6. Lighting fragment end: Subsurface Scattering, Microfacet Glint, and Velvet Rim
     shader.fragmentShader = shader.fragmentShader.replace(
       '#include <lights_fragment_end>',
       /* glsl */ `
       #include <lights_fragment_end>
 
-      if (isSnow > 0.5) {
-        // Direct sun/moon illumination / shadow factor
-        // Softly clamps to 0 inside cast shadows (trees) while keeping full retroreflection on open slopes
+      if (gIsSnow > 0.5 && gRockMask > 0.05) {
         float directDiffuseSum = reflectedLight.directDiffuse.r + reflectedLight.directDiffuse.g + reflectedLight.directDiffuse.b;
-        float shadowFactor = smoothstep(0.06, 0.20, directDiffuseSum);
+        float shadowFactor = smoothstep(0.04, 0.18, directDiffuseSum);
 
-        // Sculptural 3D wind-drift lighting: organic sastrugi relief & shadow gating
-        // In lit areas: raking sunlight creates sharp micro-relief, warm sunlit crests, and cool self-shadowed troughs
-        // In cast shadows: omnidirectional sky ambient flattens ripples, making contour lines significantly less visible
-        float lightMod = sastrugiVal * mix(0.42, 0.32, uNightFactor);
+        vec3 camToFrag = normalize(vWorldPosition - uCameraPos);
+        vec3 viewDirWorld = -camToFrag;
 
-        // 1. Direct light sculptural relief & chromatic tint (strictly active in lit areas)
-        reflectedLight.directDiffuse *= (1.0 + lightMod * 0.85);
+        // 1. Translucent Subsurface Scattering (SSS)
+        float worldNdotL = dot(gWorldNPerturbed, uSunDir);
+        float diffuseWrap = clamp((worldNdotL + 0.45) / 1.45, 0.0, 1.0);
+        float forwardScatter = pow(clamp(dot(viewDirWorld, -uSunDir), 0.0, 1.0), 3.2) * 0.36;
 
-        vec3 crestColor = uSunColor * 0.032;
-        vec3 troughColor = uShadowColor * (-0.038);
-        vec3 sastrugiTint = mix(troughColor, crestColor, clamp(sastrugiVal * 1.5 + 0.5, 0.0, 1.0));
-        reflectedLight.directDiffuse += sastrugiTint * shadowFactor;
+        vec3 daySss = vec3(1.0, 0.92, 0.82);
+        vec3 nightSss = vec3(0.72, 0.80, 0.98);
+        vec3 sssTint = mix(daySss, nightSss, uNightFactor);
+        vec3 sssRadiance = (diffuseWrap * 0.18 + forwardScatter * 0.32) * sssTint * uSunColor * shadowFactor * gRockMask;
+        reflectedLight.directDiffuse += sssRadiance;
 
-        // 2. Indirect diffuse / ambient lighting:
-        // In lit areas: troughs catch cool sky-fill shadows
-        // In cast shadows: subtle ambient form hint (~8% scale) so contour lines remain realistically faint
-        if (lightMod < 0.0) {
-          reflectedLight.indirectDiffuse += (-lightMod) * 0.35 * uShadowColor * shadowFactor;
-        }
-        float shadowAO = sastrugiVal * 0.08 * (1.0 - shadowFactor * 0.75);
-        reflectedLight.indirectDiffuse *= (1.0 + shadowAO);
+        // 2. Soft Powdery Velvet Sheen / Grazing Rim (Forward & Backscatter)
+        float NdotV = clamp(dot(gWorldNPerturbed, viewDirWorld), 0.0, 1.0);
+        float rimSheen = pow(1.0 - NdotV, 2.5) * 0.28;
+        vec3 rimColor = mix(uShadowColor * 1.12, uSunColor * 1.08, shadowFactor);
+        reflectedLight.indirectDiffuse += rimSheen * rimColor * gRockMask;
 
-        // Granular powder micro-contrast: fine crystalline relief up close (< 75m)
-        reflectedLight.directDiffuse += powderGrain * 4.2 * reflectedLight.directDiffuse * shadowFactor;
-
-        // 1. Soft Powdery Velvet Sheen / Grazing Rim (Forward & Backscatter)
-        float NdotV = clamp(dot(geometryNormal, geometryViewDir), 0.0, 1.0);
-        float rimSheen = pow(1.0 - NdotV, 2.6);
-        vec3 rimColor = mix(uShadowColor * 1.15, uSunColor * 1.08, shadowFactor);
-        reflectedLight.indirectDiffuse += rimSheen * rimColor * 0.32;
-
-        // 2. Subsurface Scattering Terminator:
-        // Day: Soft pastel peach-cream
-        // Night: Soft pastel lavender-blue glow
-        float worldNdotL = dot(vWorldNormal, uSunDir);
-        float sss = smoothstep(-0.30, 0.10, worldNdotL) * (1.0 - smoothstep(0.10, 0.42, worldNdotL));
-        vec3 daySss = vec3(0.98, 0.82, 0.75);
-        vec3 nightSss = vec3(0.70, 0.78, 0.95);
-        vec3 sssColor = mix(daySss, nightSss, uNightFactor);
-        reflectedLight.directDiffuse += sss * sssColor * mix(0.15, 0.09, uNightFactor) * shadowFactor;
-
-        // 3. Snow Shimmer / Specular & Forward-Scatter Diamond Glints
-        // Active under direct celestial light and gently decaying over distance into a soft velvety finish
+        // 3. Microfacet Sparkle / Glint System (Section 3.2)
+        // Stochastic diamond pinpoints of light without grid alignment
         if (shadowFactor > 0.001) {
-          vec3 camToFrag = normalize(vWorldPosition - uCameraPos);
-          vec3 viewDirWorld = -camToFrag;
-          vec3 halfVecWorld = normalize(viewDirWorld + uSunDir);
+          vec3 halfVec = normalize(uSunDir + viewDirWorld);
           vec3 forwardScatterDir = normalize(-viewDirWorld + uSunDir);
 
-          // Smooth gradual distance attenuation (quadratic ease-out, zero hard cutoff)
-          // 8m (near player): 100% -> 20m: ~30% -> 28m: ~8% -> 35m (~20m ahead of player): strictly 0%
-          float d = clamp((distToCam - 8.0) / 27.0, 0.0, 1.0);
-          float distFade = (1.0 - d) * (1.0 - d);
-
-          // Big diamond glints fade slightly faster to keep midground clean
-          float dBig = clamp((distToCam - 8.0) / 16.0, 0.0, 1.0);
-          float bigDotFade = (1.0 - dBig) * (1.0 - dBig);
-
-          // Octave 1: Dense micro-glitter with pinpoint radial falloff inside crystal cell
+          // Octave 1: Dense micro-glitter (~3.5cm crystal cells, stochastically jittered)
           vec3 p1 = vWorldPosition * 24.0;
           vec3 cell1 = floor(p1);
-          vec3 fract1 = fract(p1) - vec3(0.5);
           vec3 rnd1 = hash33(cell1);
-          vec3 facetNorm1 = normalize(vWorldNormal + (rnd1 - 0.5) * 3.8);
+          vec2 jitter1 = (rnd1.yz - 0.5) * 0.65;
+          vec2 fract1 = fract(p1.xz) - vec2(0.5) - jitter1;
+          float point1 = 1.0 - smoothstep(0.0, 0.32, length(fract1));
+          vec3 nMicro1 = normalize(gWorldNPerturbed + (rnd1 - 0.5) * 2.8);
           float spec1 = max(
-            pow(max(0.0, dot(facetNorm1, halfVecWorld)), 90.0),
-            pow(max(0.0, dot(facetNorm1, forwardScatterDir)), 60.0) * 0.75
+            pow(max(0.0, dot(nMicro1, halfVec)), 65.0),
+            pow(max(0.0, dot(nMicro1, forwardScatterDir)), 45.0) * 0.70
           );
-          float point1 = 1.0 - smoothstep(0.0, 0.40, length(fract1));
-          float sparkle1 = spec1 * point1 * step(0.68, rnd1.x) * 12.0 * distFade;
+          float glint1 = spec1 * point1 * step(0.82, rnd1.x) * 26.0;
 
-          // Octave 2: Bright diamond glints with sharp crystalline highlight
-          vec3 p2 = vWorldPosition * 8.5;
+          // Octave 2: Bright diamond pinpoints (~10cm crystal clusters, stochastically jittered)
+          vec3 p2 = vWorldPosition * 10.0;
           vec3 cell2 = floor(p2);
-          vec3 fract2 = fract(p2) - vec3(0.5);
           vec3 rnd2 = hash33(cell2);
-          vec3 facetNorm2 = normalize(vWorldNormal + (rnd2 - 0.5) * 2.8);
+          vec2 jitter2 = (rnd2.xz - 0.5) * 0.65;
+          vec2 fract2 = fract(p2.xz) - vec2(0.5) - jitter2;
+          float point2 = 1.0 - smoothstep(0.0, 0.30, length(fract2));
+          vec3 nMicro2 = normalize(gWorldNPerturbed + (rnd2 - 0.5) * 2.2);
           float spec2 = max(
-            pow(max(0.0, dot(facetNorm2, halfVecWorld)), 60.0),
-            pow(max(0.0, dot(facetNorm2, forwardScatterDir)), 45.0) * 0.85
+            pow(max(0.0, dot(nMicro2, halfVec)), 50.0),
+            pow(max(0.0, dot(nMicro2, forwardScatterDir)), 38.0) * 0.80
           );
-          float point2 = 1.0 - smoothstep(0.0, 0.36, length(fract2));
-          float sparkle2 = spec2 * point2 * step(0.75, rnd2.y) * 24.0 * bigDotFade;
+          float glint2 = spec2 * point2 * step(0.88, rnd2.y) * 42.0;
 
-          // Octave 3: Ultra-fine surface crystalline dust
-          vec3 p3 = vWorldPosition * 55.0;
-          vec3 cell3 = floor(p3);
-          vec3 fract3 = fract(p3) - vec3(0.5);
-          vec3 rnd3 = hash33(cell3);
-          vec3 facetNorm3 = normalize(vWorldNormal + (rnd3 - 0.5) * 4.2);
-          float spec3 = pow(max(0.0, dot(facetNorm3, halfVecWorld)), 130.0);
-          float point3 = 1.0 - smoothstep(0.0, 0.44, length(fract3));
-          float sparkle3 = spec3 * point3 * step(0.64, rnd3.z) * 8.0 * distFade;
+          // Grazing Fresnel enhancement & distance fade
+          float glintGrazing = 1.0 + 3.5 * pow(1.0 - NdotV, 3.0);
+          float glintFade = 1.0 - smoothstep(1.5, 60.0, gDistToCam);
 
-          float totalSparkle = (sparkle1 + sparkle2 + sparkle3) * shadowFactor;
-          // Day warm crystalline sparkle vs Night silvery moonlight diamond glints
-          vec3 daySparkle = vec3(3.6, 3.4, 3.2);
-          vec3 nightSparkle = vec3(4.5, 5.0, 5.8);
+          float totalSparkle = (glint1 + glint2) * glintGrazing * glintFade * shadowFactor * gRockMask;
+          vec3 daySparkle = vec3(3.5, 3.3, 3.1);
+          vec3 nightSparkle = vec3(4.2, 4.8, 5.6);
           vec3 sparkleColor = mix(daySparkle, nightSparkle, uNightFactor) * totalSparkle;
 
           reflectedLight.directSpecular += sparkleColor;
@@ -329,7 +295,15 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
 
   material.userData = {
     uniforms,
-    update(time: number, sunDirection: THREE.Vector3, cameraPos: THREE.Vector3, playerPos?: THREE.Vector3, nightFactor: number = 0.0, sunColor?: THREE.Color, shadowColor?: THREE.Color) {
+    update(
+      time: number,
+      sunDirection: THREE.Vector3,
+      cameraPos: THREE.Vector3,
+      playerPos?: THREE.Vector3,
+      nightFactor: number = 0.0,
+      sunColor?: THREE.Color,
+      shadowColor?: THREE.Color
+    ) {
       uniforms.uTime.value = time;
       uniforms.uSunDir.value.copy(sunDirection);
       uniforms.uCameraPos.value.copy(cameraPos);
