@@ -858,7 +858,7 @@ export class Skier {
     // If crashing, ragdoll limbs track the Verlet particles without detaching
     if (isCrashing) {
       const pts = this.gmaPhysics.ragdoll.points;
-      if (pts.length >= 17) {
+      if (pts.length >= 21) {
         // 1. Root translates strictly with pelvis particle
         this.root.position.copy(pts[0].pos);
         this.skierCharacter.root.position.set(0, 0, 0);
@@ -866,24 +866,43 @@ export class Skier {
 
         // 2. Compute 3D Torso / Pelvis Orientation
         // Up: Pelvis (0) -> Chest (2)
-        const upVec = new THREE.Vector3().subVectors(pts[2].pos, pts[0].pos).normalize();
-        // Right: Left Hip (11) -> Right Hip (14)
-        const rightVec = new THREE.Vector3().subVectors(pts[14].pos, pts[11].pos).normalize();
-        // Forward: Right x Up (faces -Z in model frame)
-        const fwdVec = new THREE.Vector3().crossVectors(rightVec, upVec).normalize();
-        rightVec.crossVectors(upVec, fwdVec).normalize();
+        const uUp = new THREE.Vector3().subVectors(pts[2].pos, pts[0].pos).normalize();
+        if (uUp.lengthSq() < 0.5) uUp.set(0, 1, 0);
 
-        const basisMat = new THREE.Matrix4().makeBasis(rightVec, upVec, fwdVec.clone().negate());
+        // Lateral Right: Left Hip (11) -> Right Hip (14)
+        const uHipLat = new THREE.Vector3().subVectors(pts[14].pos, pts[11].pos).normalize();
+        if (uHipLat.lengthSq() < 0.5) uHipLat.set(1, 0, 0);
+
+        // Character Back: uHipLat x uUp (orthogonal to chest)
+        const uBack = new THREE.Vector3().crossVectors(uHipLat, uUp).normalize();
+        if (uBack.lengthSq() < 0.5) {
+          uBack.set(0, 0, 1);
+          if (Math.abs(uUp.dot(uBack)) > 0.9) uBack.set(1, 0, 0);
+          uBack.crossVectors(uBack, uUp).normalize();
+        }
+
+        // Re-orthogonalize Right: Up x Back
+        const uRight = new THREE.Vector3().crossVectors(uUp, uBack).normalize();
+
+        // Right-handed basis for visualRoot: X = uRight, Y = uUp, Z = uBack
+        // Note: SkierCharacter.root has rotation.y = Math.PI, mapping its local +Z (facing/toes/goggles)
+        // to visualRoot's -Z (-uBack = uFront) and local +X (left) to visualRoot's -X (-uRight = uLeft).
+        // det([uRight, uUp, uBack]) is strictly +1 (no reflection / squashing).
+        const basisMat = new THREE.Matrix4().makeBasis(uRight, uUp, uBack);
         this.visualRoot.quaternion.setFromRotationMatrix(basisMat);
+        this.visualRoot.updateMatrixWorld(true);
 
         // 3. Helper to orient a child joint's rotation without translating joint sockets
         const parentQuatInv = new THREE.Quaternion();
         const localTarget = new THREE.Vector3();
         const orientJoint = (joint: THREE.Group | undefined, defaultAxis: THREE.Vector3, worldDir: THREE.Vector3) => {
           if (!joint || !joint.parent) return;
+          if (worldDir.lengthSq() < 1e-4) return;
+          joint.parent.updateMatrixWorld(true);
           joint.parent.getWorldQuaternion(parentQuatInv).invert();
           localTarget.copy(worldDir).applyQuaternion(parentQuatInv).normalize();
           joint.quaternion.setFromUnitVectors(defaultAxis, localTarget);
+          joint.updateMatrixWorld(true);
         };
 
         const axisY = new THREE.Vector3(0, 1, 0);
@@ -905,13 +924,59 @@ export class Skier {
         orientJoint(this.skierCharacter.joints.rightShoulder, axisNegX, new THREE.Vector3().subVectors(pts[9].pos, pts[8].pos));
         orientJoint(this.skierCharacter.joints.rightElbow, axisNegX, new THREE.Vector3().subVectors(pts[10].pos, pts[9].pos));
 
-        // Left Leg: Waist and Knees rigidly attached, bones orient towards knee and foot
+        // Left Leg: Waist and Knees rigidly attached
+        const lShin = new THREE.Vector3().subVectors(pts[13].pos, pts[12].pos);
         orientJoint(this.skierCharacter.joints.leftHip, axisNegY, new THREE.Vector3().subVectors(pts[12].pos, pts[11].pos));
-        orientJoint(this.skierCharacter.joints.leftKnee, axisNegY, new THREE.Vector3().subVectors(pts[13].pos, pts[12].pos));
+        orientJoint(this.skierCharacter.joints.leftKnee, axisNegY, lShin);
 
-        // Right Leg: Waist and Knees rigidly attached, bones orient towards knee and foot
+        // Right Leg: Waist and Knees rigidly attached
+        const rShin = new THREE.Vector3().subVectors(pts[16].pos, pts[15].pos);
         orientJoint(this.skierCharacter.joints.rightHip, axisNegY, new THREE.Vector3().subVectors(pts[15].pos, pts[14].pos));
-        orientJoint(this.skierCharacter.joints.rightKnee, axisNegY, new THREE.Vector3().subVectors(pts[16].pos, pts[15].pos));
+        orientJoint(this.skierCharacter.joints.rightKnee, axisNegY, rShin);
+
+        // 4. Orient Ankles so skis strictly match the physical simulated ski particles (Tip and Tail)
+        const orientAnkle = (
+          ankle: THREE.Group | undefined,
+          kneePos: THREE.Vector3,
+          footPos: THREE.Vector3,
+          tipPos: THREE.Vector3,
+          tailPos: THREE.Vector3
+        ) => {
+          if (!ankle || !ankle.parent) return;
+
+          // Forward vector along ski from tail particle to tip particle (physical ski direction)
+          const fwd = new THREE.Vector3().subVectors(tipPos, tailPos).normalize();
+          if (fwd.lengthSq() < 0.5) fwd.set(0, 0, 1);
+
+          // Leg up vector from foot to knee
+          const legUp = new THREE.Vector3().subVectors(kneePos, footPos).normalize();
+          if (legUp.lengthSq() < 0.5) legUp.set(0, 1, 0);
+
+          // Strictly right-handed orthonormal basis: X = right, Y = norm, Z = fwd (det = +1.0)
+          const right = new THREE.Vector3().crossVectors(legUp, fwd).normalize();
+          if (right.lengthSq() < 0.5) {
+            right.set(1, 0, 0);
+            if (Math.abs(fwd.dot(right)) > 0.9) right.set(0, 1, 0);
+            right.crossVectors(right, fwd).normalize();
+          }
+          const norm = new THREE.Vector3().crossVectors(fwd, right).normalize();
+
+          const targetMat = new THREE.Matrix4().makeBasis(right, norm, fwd);
+          const targetQuat = new THREE.Quaternion().setFromRotationMatrix(targetMat);
+
+          ankle.parent.updateMatrixWorld(true);
+          const parentInv = new THREE.Quaternion();
+          ankle.parent.getWorldQuaternion(parentInv).invert();
+          ankle.quaternion.copy(parentInv.multiply(targetQuat));
+          ankle.updateMatrixWorld(true);
+        };
+
+        orientAnkle(this.skierCharacter.joints.leftAnkle, pts[12].pos, pts[13].pos, pts[17].pos, pts[18].pos);
+        orientAnkle(this.skierCharacter.joints.rightAnkle, pts[15].pos, pts[16].pos, pts[19].pos, pts[20].pos);
+
+        // Tuck poles along forearms during ragdoll tumble
+        if (this.skierCharacter.joints.leftPole) this.skierCharacter.joints.leftPole.rotation.set(0.6, 0, 0);
+        if (this.skierCharacter.joints.rightPole) this.skierCharacter.joints.rightPole.rotation.set(0.6, 0, 0);
       }
       this.triggerCrashSpray();
     } else {

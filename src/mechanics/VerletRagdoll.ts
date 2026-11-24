@@ -21,6 +21,31 @@ export class VerletRagdollSolver {
   public points: VerletPoint[] = [];
   public sticks: VerletStick[] = [];
 
+  // Anatomical collision radii matching character geometry (jacket, beanie, boots, skis):
+  public static readonly RADIUS_MAP: number[] = [
+    0.22, // 0: Pelvis
+    0.20, // 1: Spine / Waist
+    0.24, // 2: Chest
+    0.15, // 3: Neck
+    0.20, // 4: Head (beanie & goggles)
+    0.16, // 5: L Shoulder
+    0.13, // 6: L Elbow
+    0.13, // 7: L Hand
+    0.16, // 8: R Shoulder
+    0.13, // 9: R Elbow
+    0.13, // 10: R Hand
+    0.18, // 11: L Hip
+    0.14, // 12: L Knee
+    0.16, // 13: L Foot
+    0.18, // 14: R Hip
+    0.14, // 15: R Knee
+    0.16, // 16: R Foot
+    0.12, // 17: L Ski Tip
+    0.12, // 18: L Ski Tail
+    0.12, // 19: R Ski Tip
+    0.12  // 20: R Ski Tail
+  ];
+
   // Tuned parameters for realistic snow wipeouts & tumbling:
   private readonly timeStep = 0.02;         // 50 Hz
   private readonly gravityMag = 9.81;        // Authentic 9.81 m/s^2 downward gravity
@@ -34,6 +59,8 @@ export class VerletRagdollSolver {
   public active: boolean = false;
   public timer: number = 0.0;
   private terrainSampler: ((x: number, z: number) => number) | null = null;
+  private static readonly STRIDE = 24;
+  private connectedSticks: Uint8Array = new Uint8Array(24 * 24);
 
   constructor() {}
 
@@ -98,14 +125,27 @@ export class VerletRagdollSolver {
     addPoint(up.clone().multiplyScalar(0.75).add(right.clone().multiplyScalar(0.35)));
 
     // Left Leg (11: L Hip, 12: L Knee, 13: L Foot)
-    addPoint(up.clone().multiplyScalar(0.80).sub(right.clone().multiplyScalar(0.14)));
+    const lHipPos = up.clone().multiplyScalar(0.80).sub(right.clone().multiplyScalar(0.14));
+    const lFootPos = up.clone().multiplyScalar(0.12).sub(right.clone().multiplyScalar(0.14));
+    addPoint(lHipPos);
     addPoint(up.clone().multiplyScalar(0.46).sub(right.clone().multiplyScalar(0.14)));
-    addPoint(up.clone().multiplyScalar(0.12).sub(right.clone().multiplyScalar(0.14)));
+    addPoint(lFootPos);
 
     // Right Leg (14: R Hip, 15: R Knee, 16: R Foot)
-    addPoint(up.clone().multiplyScalar(0.80).add(right.clone().multiplyScalar(0.14)));
+    const rHipPos = up.clone().multiplyScalar(0.80).add(right.clone().multiplyScalar(0.14));
+    const rFootPos = up.clone().multiplyScalar(0.12).add(right.clone().multiplyScalar(0.14));
+    addPoint(rHipPos);
     addPoint(up.clone().multiplyScalar(0.46).add(right.clone().multiplyScalar(0.14)));
-    addPoint(up.clone().multiplyScalar(0.12).add(right.clone().multiplyScalar(0.14)));
+    addPoint(rFootPos);
+
+    // Alpine Skis: 1.46m rigid planks locked to boots & shins
+    // 17: Left Ski Tip (+0.78m forward), 18: Left Ski Tail (-0.68m back)
+    addPoint(lFootPos.clone().add(forwardDir.clone().multiplyScalar(0.78)).sub(up.clone().multiplyScalar(0.08)));
+    addPoint(lFootPos.clone().sub(forwardDir.clone().multiplyScalar(0.68)).sub(up.clone().multiplyScalar(0.08)));
+
+    // 19: Right Ski Tip (+0.78m forward), 20: Right Ski Tail (-0.68m back)
+    addPoint(rFootPos.clone().add(forwardDir.clone().multiplyScalar(0.78)).sub(up.clone().multiplyScalar(0.08)));
+    addPoint(rFootPos.clone().sub(forwardDir.clone().multiplyScalar(0.68)).sub(up.clone().multiplyScalar(0.08)));
 
     const addStick = (i0: number, i1: number) => {
       const len = this.points[i0].pos.distanceTo(this.points[i1].pos);
@@ -148,6 +188,27 @@ export class VerletRagdollSolver {
     addStick(11, 14);// L Hip - R Hip
     addStick(1, 11); // Spine - L Hip
     addStick(1, 14); // Spine - R Hip
+
+    // Left Ski Rigid Tetrahedron Structure (Foot + Knee + Tip + Tail)
+    addStick(13, 17);// L Foot - L Ski Tip
+    addStick(13, 18);// L Foot - L Ski Tail
+    addStick(17, 18);// L Ski Tip - L Ski Tail (rigid ski plank spine)
+    addStick(12, 17);// L Knee - L Ski Tip (boot binding pitch lock)
+    addStick(12, 18);// L Knee - L Ski Tail (boot binding pitch lock)
+
+    // Right Ski Rigid Tetrahedron Structure (Foot + Knee + Tip + Tail)
+    addStick(16, 19);// R Foot - R Ski Tip
+    addStick(16, 20);// R Foot - R Ski Tail
+    addStick(19, 20);// R Ski Tip - R Ski Tail (rigid ski plank spine)
+    addStick(15, 19);// R Knee - R Ski Tip (boot binding pitch lock)
+    addStick(15, 20);// R Knee - R Ski Tail (boot binding pitch lock)
+
+    // Cache direct stick connection lookup table for fast O(1) self-collision filtering
+    this.connectedSticks.fill(0);
+    for (const stick of this.sticks) {
+      this.connectedSticks[stick.p0 * VerletRagdollSolver.STRIDE + stick.p1] = 1;
+      this.connectedSticks[stick.p1 * VerletRagdollSolver.STRIDE + stick.p0] = 1;
+    }
   }
 
   public stepSimulation(groundY: number): void {
@@ -179,8 +240,134 @@ export class VerletRagdollSolver {
     }
   }
 
+  /**
+   * Resolves particle-particle self-collisions so hands, feet, head, torso and skis
+   * cannot pass through each other.
+   */
+  private resolveSelfCollisions(): void {
+    const pts = this.points;
+    const radii = VerletRagdollSolver.RADIUS_MAP;
+    const count = pts.length;
+    const stride = VerletRagdollSolver.STRIDE;
+
+    for (let i = 0; i < count; i++) {
+      const pA = pts[i];
+      const rA = radii[i] || 0.15;
+
+      for (let j = i + 1; j < count; j++) {
+        // Skip pairs directly connected by rigid sticks (bones/binding rods)
+        if (this.connectedSticks[i * stride + j] === 1) continue;
+
+        const pB = pts[j];
+        const rB = radii[j] || 0.15;
+
+        // Anatomical hinge thresholds:
+        let minDist = rA + rB;
+        if ((i === 2 && j === 4) || (i === 4 && j === 2)) {
+          // Chest (2) vs Head (4): Head stops when chin contacts chest (0.28m), preventing head penetration
+          minDist = 0.28;
+        } else if ((i === 5 && j === 7) || (i === 7 && j === 5) || (i === 8 && j === 10) || (i === 10 && j === 8)) {
+          // Shoulder vs Hand: full natural elbow flexion limit
+          minDist = 0.14;
+        } else if ((i === 11 && j === 13) || (i === 13 && j === 11) || (i === 14 && j === 16) || (i === 16 && j === 14)) {
+          // Hip vs Foot: full natural knee flexion limit
+          minDist = 0.18;
+        }
+
+        const dx = pB.pos.x - pA.pos.x;
+        const dy = pB.pos.y - pA.pos.y;
+        const dz = pB.pos.z - pA.pos.z;
+        const distSq = dx * dx + dy * dy + dz * dz;
+
+        if (distSq < minDist * minDist && distSq > 1e-6) {
+          const dist = Math.sqrt(distSq);
+          const overlap = minDist - dist;
+          const nx = dx / dist;
+          const ny = dy / dist;
+          const nz = dz / dist;
+          const push = overlap * 0.5;
+
+          if (!pA.pinned) {
+            pA.pos.x -= nx * push;
+            pA.pos.y -= ny * push;
+            pA.pos.z -= nz * push;
+          }
+          if (!pB.pinned) {
+            pB.pos.x += nx * push;
+            pB.pos.y += ny * push;
+            pB.pos.z += nz * push;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Resolves terrain heightfield collision for all particles.
+   * Clamps particle above snow elevation and optionally reflects normal momentum.
+   */
+  private resolveGroundCollisions(fallbackGroundY: number, applyDynamics: boolean): void {
+    const radii = VerletRagdollSolver.RADIUS_MAP;
+
+    for (let i = 0; i < this.points.length; i++) {
+      const pt = this.points[i];
+      const floorY = this.terrainSampler ? this.terrainSampler(pt.pos.x, pt.pos.z) : fallbackGroundY;
+      const radius = radii[i] || 0.16;
+
+      if (pt.pos.y < floorY + radius) {
+        pt.pos.y = floorY + radius;
+
+        if (applyDynamics) {
+          // Local slope normal via finite differences
+          let nx = 0, ny = 1, nz = 0;
+          if (this.terrainSampler) {
+            const eps = 0.25;
+            const hL = this.terrainSampler(pt.pos.x - eps, pt.pos.z);
+            const hR = this.terrainSampler(pt.pos.x + eps, pt.pos.z);
+            const hD = this.terrainSampler(pt.pos.x, pt.pos.z - eps);
+            const hU = this.terrainSampler(pt.pos.x, pt.pos.z + eps);
+            const gx = (hR - hL) / (2 * eps);
+            const gz = (hU - hD) / (2 * eps);
+            const invLen = 1.0 / Math.sqrt(gx * gx + 1.0 + gz * gz);
+            nx = -gx * invLen;
+            ny = invLen;
+            nz = -gz * invLen;
+          }
+
+          const vx = pt.pos.x - pt.prevPos.x;
+          const vy = pt.pos.y - pt.prevPos.y;
+          const vz = pt.pos.z - pt.prevPos.z;
+
+          const vDotN = vx * nx + vy * ny + vz * nz;
+          if (vDotN < 0) {
+            // Decompose normal and tangential velocity
+            const vNormX = nx * vDotN;
+            const vNormY = ny * vDotN;
+            const vNormZ = nz * vDotN;
+
+            const vTanX = vx - vNormX;
+            const vTanY = vy - vNormY;
+            const vTanZ = vz - vNormZ;
+
+            // Snow damping on normal bounce, high friction on tangent slide
+            const frictionFactor = Math.max(0.0, 1.0 - this.groundFriction);
+            const newVx = vTanX * frictionFactor - vNormX * this.groundBounce;
+            const newVy = vTanY * frictionFactor - vNormY * this.groundBounce;
+            const newVz = vTanZ * frictionFactor - vNormZ * this.groundBounce;
+
+            pt.prevPos.x = pt.pos.x - newVx;
+            pt.prevPos.y = pt.pos.y - newVy;
+            pt.prevPos.z = pt.pos.z - newVz;
+          }
+        }
+      }
+    }
+  }
+
   private satisfyConstraints(fallbackGroundY: number): void {
-    // 1. Stick distance constraint relaxation (multi-pass for anatomical integrity)
+    // Coupled multi-pass relaxation:
+    // Ground collision and self-collision are evaluated on EVERY relaxation pass
+    // so sticks can NEVER pull a particle below the snow surface.
     for (let iter = 0; iter < this.stickIterations; ++iter) {
       for (const stick of this.sticks) {
         const p0 = this.points[stick.p0];
@@ -210,60 +397,13 @@ export class VerletRagdollSolver {
           p1.pos.z -= offZ;
         }
       }
-    }
 
-    // 2. Full 3D Continuous Snow Terrain Heightfield Collision:
-    // Samples true undulating mountain elevation and slope normal at every particle's exact (x, z)
-    const particleRadius = 0.14;
+      // Self-collision (hands vs head, torso, knees)
+      this.resolveSelfCollisions();
 
-    for (const pt of this.points) {
-      const floorY = this.terrainSampler ? this.terrainSampler(pt.pos.x, pt.pos.z) : fallbackGroundY;
-
-      if (pt.pos.y < floorY + particleRadius) {
-        pt.pos.y = floorY + particleRadius;
-
-        // Local slope normal via finite differences
-        let nx = 0, ny = 1, nz = 0;
-        if (this.terrainSampler) {
-          const eps = 0.25;
-          const hL = this.terrainSampler(pt.pos.x - eps, pt.pos.z);
-          const hR = this.terrainSampler(pt.pos.x + eps, pt.pos.z);
-          const hD = this.terrainSampler(pt.pos.x, pt.pos.z - eps);
-          const hU = this.terrainSampler(pt.pos.x, pt.pos.z + eps);
-          const gx = (hR - hL) / (2 * eps);
-          const gz = (hU - hD) / (2 * eps);
-          const invLen = 1.0 / Math.sqrt(gx * gx + 1.0 + gz * gz);
-          nx = -gx * invLen;
-          ny = invLen;
-          nz = -gz * invLen;
-        }
-
-        const vx = pt.pos.x - pt.prevPos.x;
-        const vy = pt.pos.y - pt.prevPos.y;
-        const vz = pt.pos.z - pt.prevPos.z;
-
-        const vDotN = vx * nx + vy * ny + vz * nz;
-        if (vDotN < 0) {
-          // Decompose normal and tangential velocity
-          const vNormX = nx * vDotN;
-          const vNormY = ny * vDotN;
-          const vNormZ = nz * vDotN;
-
-          const vTanX = vx - vNormX;
-          const vTanY = vy - vNormY;
-          const vTanZ = vz - vNormZ;
-
-          // Snow damping on normal bounce, high friction on tangent slide
-          const frictionFactor = Math.max(0.0, 1.0 - this.groundFriction);
-          const newVx = vTanX * frictionFactor - vNormX * this.groundBounce;
-          const newVy = vTanY * frictionFactor - vNormY * this.groundBounce;
-          const newVz = vTanZ * frictionFactor - vNormZ * this.groundBounce;
-
-          pt.prevPos.x = pt.pos.x - newVx;
-          pt.prevPos.y = pt.pos.y - newVy;
-          pt.prevPos.z = pt.pos.z - newVz;
-        }
-      }
+      // Ground collision on every pass to prevent stick-induced snow penetration
+      const isFinal = (iter === this.stickIterations - 1);
+      this.resolveGroundCollisions(fallbackGroundY, isFinal);
     }
   }
 
