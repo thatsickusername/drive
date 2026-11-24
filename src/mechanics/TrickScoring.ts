@@ -227,21 +227,21 @@ export class TrickScoringSystem {
     let landingMultiplier = 1.0;
     let forwardSpeedBoost = 0.0;
 
-    // Soft speed ceiling: full boost below 50 km/h (14 m/s), diminishing to 0 at 75 km/h (21 m/s)
-    // Prevents runaway compounding acceleration when chaining multiple tricks (stops 150 km/h exploits)
-    const diminishingFactor = Math.min(1.0, Math.max(0.0, 1.0 - Math.max(0.0, entrySpeed - 14.0) / 7.0));
+    // Soft speed ceiling: full boost below 40 km/h (11 m/s), diminishing to 0 at 65 km/h (18 m/s)
+    // Tamed landing impulse so landing tricks gives a subtle nudge without leaping from 50 to 70+ km/h
+    const diminishingFactor = Math.min(1.0, Math.max(0.0, 1.0 - Math.max(0.0, entrySpeed - 11.0) / 7.0));
 
     if (landing === LandingQuality.Perfect) {
       landingMultiplier = 1.5;
-      const baseBoost = title ? 2.0 : 0.8;
+      const baseBoost = title ? 0.8 : 0.4;
       forwardSpeedBoost = baseBoost * diminishingFactor;
     } else if (landing === LandingQuality.Good) {
       landingMultiplier = 1.2;
-      const baseBoost = title ? 1.3 : 0.5;
+      const baseBoost = title ? 0.5 : 0.25;
       forwardSpeedBoost = baseBoost * diminishingFactor;
     } else if (landing === LandingQuality.Sketchy) {
       landingMultiplier = 0.7;
-      forwardSpeedBoost = (title ? 0.4 : 0.0) * diminishingFactor;
+      forwardSpeedBoost = (title ? 0.2 : 0.0) * diminishingFactor;
     }
 
     const totalScore = Math.floor((baseScore + this.currentScore) * landingMultiplier * comboElements);

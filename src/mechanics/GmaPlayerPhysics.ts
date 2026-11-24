@@ -284,10 +284,10 @@ export class GmaPlayerPhysics {
         this._gParallel.subVectors(this._gVec, this._gNormal);
         const downslopeMag = this._gParallel.length();
         if (downslopeMag > 0.1 && downwardFallSpeed > 0.5) {
-          // Transfer up to 25% of downward fall speed into downhill drive, clamped to max 1.2 m/s (~4.3 km/h)
+          // Transfer subtle downward fall speed into downhill drive, clamped to max 0.5 m/s (~1.8 km/h)
           const slopeRatio = Math.min(1.0, downslopeMag / 4.5);
-          const rawTransfer = downwardFallSpeed * 0.25 * slopeRatio;
-          const transfer = Math.min(1.2, rawTransfer);
+          const rawTransfer = downwardFallSpeed * 0.15 * slopeRatio;
+          const transfer = Math.min(0.5, rawTransfer);
           this.velocity.addScaledVector(this._gParallel, transfer / downslopeMag);
         }
 
@@ -464,8 +464,8 @@ export class GmaPlayerPhysics {
     if (this.state === MovementState.Standing || curSpeed < this.config.maxStandingVelocity) {
       if (stakePressed || (currentSteerSign !== 0 && curSpeed < 0.2)) {
         this.state = MovementState.Skiing;
-        // Pushes player forward with standingToSkiingPushVelocity (3.0 m/s = 10.8 km/h)
-        const pushPower = stakePressed ? this.config.standingToSkiingPushVelocity : 1.5;
+        // Pushes player forward with standingToSkiingPushVelocity (2.0 m/s = 7.2 km/h)
+        const pushPower = stakePressed ? this.config.standingToSkiingPushVelocity : 1.0;
         this.velocity.addScaledVector(this.forwardDir, pushPower);
       } else if (absSteer > 0.05) {
         this.state = MovementState.Skiing;
@@ -619,8 +619,8 @@ export class GmaPlayerPhysics {
     this._gNormal.copy(this.groundNormal).multiplyScalar(normalComp);
     this._gParallel.subVectors(this._gVec, this._gNormal);
 
-    // Tangential fall-line gravity acceleration (90% efficiency with subtle slope displacement resistance)
-    this.velocity.addScaledVector(this._gParallel, dt * 0.90);
+    // Tangential fall-line gravity acceleration (80% efficiency with natural slope displacement resistance)
+    this.velocity.addScaledVector(this._gParallel, dt * 0.80);
 
     // Continuous adhesive normal pull: F_pull = -n * 5.0 m/s^2 (GMA contour adhesion)
     // Eliminates unnatural airborne bouncing when skiing over small crests, wind lips, and undulating rollers

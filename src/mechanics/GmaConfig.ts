@@ -157,7 +157,7 @@ export function createDefaultPlayerConfig(): PlayerConfig {
 
     maxStandingVelocity: 1.0,
     skiingToStandingVelocity: 3.0,
-    standingToSkiingPushVelocity: 3.0,
+    standingToSkiingPushVelocity: 2.0,
     standingToSkiingVelocity: 1.0,
 
     jump_strength: 2.8,
@@ -215,7 +215,7 @@ export function createDefaultPlayerConfig(): PlayerConfig {
     tackle_min_velocity: 10.0,
 
     slideturn_boost_timepoint: 0.5,
-    slideturn_boost_velocity: 2.0,
+    slideturn_boost_velocity: 1.4,
 
     turn_cap_deg_standard: 30.0,
     drift_penalty_standard: 1.0,
