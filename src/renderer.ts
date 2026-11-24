@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { SkyDome } from './world/SkyDome';
 import { AirborneSparkles } from './world/AirborneSparkles';
+import { DayNightCycle } from './world/DayNightCycle';
 
 export type LightingMode = 'day' | 'golden' | 'night';
 
@@ -15,12 +16,20 @@ export class Renderer {
   public sparkles: AirborneSparkles;
   public readonly sunDir = new THREE.Vector3(140, 110, -50).normalize();
 
-  public lightingMode: LightingMode = 'day';
+  public cycle: DayNightCycle = new DayNightCycle();
+  public autoCycle: boolean = true;
+
+  public get lightingMode(): LightingMode {
+    const p = this.cycle.currentPhase;
+    if (p === 'day') return 'day';
+    if (p === 'night') return 'night';
+    return 'golden';
+  }
   public get isNightMode(): boolean {
-    return this.lightingMode === 'night';
+    return this.cycle.currentPhase === 'night';
   }
   public get isGoldenMode(): boolean {
-    return this.lightingMode === 'golden';
+    return this.cycle.currentPhase === 'sunset' || this.cycle.currentPhase === 'sunrise';
   }
 
   public lightingFactor: number = 0.0; // 0.0 = Day, 1.0 = Golden, 2.0 = Night
@@ -120,12 +129,14 @@ export class Renderer {
   }
 
   public setLightingMode(mode: LightingMode, instant: boolean = false): void {
-    this.lightingMode = mode;
     if (mode === 'golden') {
+      this.cycle.jumpToPhase('sunset', true);
       this.targetLightingFactor = 1.0;
     } else if (mode === 'night') {
+      this.cycle.jumpToPhase('night', false);
       this.targetLightingFactor = 2.0;
     } else {
+      this.cycle.jumpToPhase('day', false);
       this.targetLightingFactor = 0.0;
     }
     if (instant) {
@@ -135,13 +146,8 @@ export class Renderer {
   }
 
   public toggleLightingMode(): LightingMode {
-    if (this.lightingMode === 'day') {
-      this.setLightingMode('golden');
-    } else if (this.lightingMode === 'golden') {
-      this.setLightingMode('night');
-    } else {
-      this.setLightingMode('day');
-    }
+    this.cycle.advanceToNextPhase();
+    this.targetLightingFactor = this.cycle.lightingFactor;
     return this.lightingMode;
   }
 
@@ -206,9 +212,14 @@ export class Renderer {
   }
 
   public updateLighting(time: number, targetPos: THREE.Vector3, cameraPos: THREE.Vector3, delta: number = 0.016): void {
-    if (Math.abs(this.lightingFactor - this.targetLightingFactor) > 0.0005) {
-      this.lightingFactor = THREE.MathUtils.damp(this.lightingFactor, this.targetLightingFactor, 7.5, delta);
+    if (this.autoCycle && !this.cycle.isPaused) {
+      this.lightingFactor = this.cycle.update(delta);
       this.applyLightingLerp(this.lightingFactor);
+    } else {
+      if (Math.abs(this.lightingFactor - this.targetLightingFactor) > 0.0005) {
+        this.lightingFactor = THREE.MathUtils.damp(this.lightingFactor, this.targetLightingFactor, 7.5, delta);
+        this.applyLightingLerp(this.lightingFactor);
+      }
     }
 
     // Keep high-resolution shadow map centered on player

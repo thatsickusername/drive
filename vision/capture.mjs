@@ -128,7 +128,7 @@ async function run() {
     const isNight = target.includes('2') || scenario.includes('night') || getArg('lighting') === 'night';
     const isGolden = target.includes('3') || scenario.includes('golden') || getArg('lighting') === 'golden' || getArg('lighting') === 'goldenhour';
     const lightingQuery = isGolden ? '&lighting=golden' : (isNight ? '&lighting=night' : '');
-    const navUrl = `http://localhost:5173?nohud=1${lightingQuery}`;
+    const navUrl = `http://localhost:5173?nohud=1&pause=1${lightingQuery}`;
     console.log(`[vision] Navigating to ${navUrl}...`);
     await page.goto(navUrl, { waitUntil: 'networkidle' });
 
@@ -142,10 +142,13 @@ async function run() {
       const toggle = document.getElementById('lighting-toggle-container');
       if (toggle) toggle.style.display = 'none';
       if (window.game) {
+        window.game.renderer.cycle.isPaused = true;
         if (isGolden) {
           window.game.renderer.setLightingMode('golden', true);
         } else if (isNight) {
           window.game.renderer.setLightingMode('night', true);
+        } else {
+          window.game.renderer.setLightingMode('day', true);
         }
       }
     }, { isNight, isGolden });

@@ -102,6 +102,10 @@ class Game {
       else if (e.code === 'KeyO') this.cameraTuner.toggle();
       else if (e.code === 'KeyH') this.toggleHUD();
       else if (e.code === 'KeyL' || e.code === 'KeyN') this.toggleLighting();
+      else if (e.code === 'KeyP') {
+        this.renderer.cycle.togglePause();
+        this.updateLightingToggleUI();
+      }
     });
 
     // 8. Setup HUD, Lighting Toggle Switch & Camera Tuner Overlay
@@ -110,10 +114,18 @@ class Game {
     if (window.location.search.includes('nohud')) {
       this.toggleHUD();
     }
-    if (window.location.search.includes('golden') || window.location.search.includes('lighting=golden') || window.location.search.includes('lighting=goldenhour')) {
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.has('timescale')) {
+      const ts = parseFloat(searchParams.get('timescale') || '1');
+      if (!isNaN(ts)) this.renderer.cycle.timeScale = ts;
+    }
+    if (searchParams.has('pause') || searchParams.get('cycle') === '0' || searchParams.get('cycle') === 'pause') {
+      this.renderer.cycle.isPaused = true;
+    }
+    if (searchParams.has('golden') || searchParams.get('lighting') === 'golden' || searchParams.get('lighting') === 'goldenhour') {
       this.renderer.setLightingMode('golden', true);
       this.updateLightingToggleUI();
-    } else if (window.location.search.includes('night') || window.location.search.includes('lighting=night')) {
+    } else if (searchParams.has('night') || searchParams.get('lighting') === 'night') {
       this.renderer.setLightingMode('night', true);
       this.updateLightingToggleUI();
     }
@@ -254,6 +266,7 @@ class Game {
     if (this.isHudVisible && currentTime - this.lastHudUpdateTime >= 33) {
       this.lastHudUpdateTime = currentTime;
       this.updateHUD();
+      this.updateLightingToggleUI();
     }
 
     // 3. Update Day/Golden/Night Lighting, SkyDome, Snow Shimmer and Sparkles
@@ -334,9 +347,10 @@ class Game {
           box-shadow: 0 1px 4px rgba(0,0,0,0.4);
         "></div>
       </div>
-      <span id="toggle-label" style="min-width: 75px; letter-spacing: 0.2px;">☀️ Day</span>
+      <span id="toggle-label" style="min-width: 125px; letter-spacing: 0.2px;">☀️ Day</span>
       <span style="font-size: 10px; opacity: 0.6; padding: 2px 6px; background: rgba(255,255,255,0.12); border-radius: 6px;">L</span>
     `;
+    this.lightingToggleElement.title = 'Click to advance phase | [L]/[N] Advance | [P] Pause/Resume';
 
     this.lightingToggleElement.addEventListener('click', () => {
       this.toggleLighting();
@@ -362,26 +376,34 @@ class Game {
   }
 
   public updateLightingToggleUI(): void {
-    const mode = this.renderer.lightingMode;
+    const cycle = this.renderer.cycle;
+    const phase = cycle.currentPhase;
+    const timeStr = cycle.phaseFormattedTime;
     const track = document.getElementById('toggle-track');
     const thumb = document.getElementById('toggle-thumb');
     const label = document.getElementById('toggle-label');
     if (track && thumb && label) {
-      if (mode === 'night') {
+      // Smoothly place thumb according to continuous lighting factor (0.0 to 2.0 mapped to 0px to 34px)
+      const thumbX = THREE.MathUtils.clamp((this.renderer.lightingFactor / 2.0) * 34, 0, 34);
+      thumb.style.transform = `translateX(${thumbX.toFixed(1)}px)`;
+
+      const pauseIndicator = cycle.isPaused ? ' <span style="font-size:10px; opacity:0.8;">⏸</span>' : '';
+      if (phase === 'night') {
         track.style.background = '#2563eb';
-        thumb.style.transform = 'translateX(34px)';
         thumb.style.background = '#e0f2fe';
-        label.innerHTML = '🌙 Night';
-      } else if (mode === 'golden') {
+        label.innerHTML = `🌙 Night <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
+      } else if (phase === 'sunset') {
         track.style.background = '#ea580c';
-        thumb.style.transform = 'translateX(17px)';
         thumb.style.background = '#fef08a';
-        label.innerHTML = '🌅 Golden';
+        label.innerHTML = `🌅 Sunset <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
+      } else if (phase === 'sunrise') {
+        track.style.background = '#d97706';
+        thumb.style.background = '#fef08a';
+        label.innerHTML = `🌅 Sunrise <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
       } else {
         track.style.background = '#334155';
-        thumb.style.transform = 'translateX(0px)';
         thumb.style.background = '#f8fafc';
-        label.innerHTML = '☀️ Day';
+        label.innerHTML = `☀️ Day <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
       }
     }
   }
