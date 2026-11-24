@@ -81,12 +81,12 @@ export interface CameraSettings {
 export const defaultCameraSettings: CameraSettings = {
   mode: 'BEHIND',              // Default behind chase camera
   fov: 60.0,
-  behindDistance: 7.2,         // Optimal distance matching reference framing
-  behindPitch: 16.5,           // Low cinematic chase pitch framing skier & trail (deg)
-  behindMinPitch: 8.0,         // Lower angle limit
-  behindMaxPitch: 35.0,        // Upper angle limit
-  behindLookAheadDist: 3.2,    // Look-ahead lead (m)
-  behindLookAheadHeight: 0.2,  // Look-ahead at skier feet/trail to reveal trail in foreground
+  behindDistance: 8.4,         // Optimal distance matching acceptance criteria
+  behindPitch: 22.5,           // Optimal low cinematic chase pitch (deg)
+  behindMinPitch: 10.0,        // Lower angle limit
+  behindMaxPitch: 45.0,        // Upper angle limit
+  behindLookAheadDist: 4.8,    // Look-ahead lead (m)
+  behindLookAheadHeight: 1.4,  // Look-ahead target height (m)
   behindFollowSpeed: 2.5,      // Heading smoothing speed
   topdownDistance: 38.0,       // Topdown zoom (m)
   topdownPitch: 48.0,          // Topdown pitch (deg)
