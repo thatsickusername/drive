@@ -87,7 +87,7 @@ export interface PlayerConfig {
   tackle_min_velocity: number; // 10.0
 
   slideturn_boost_timepoint: number; // 0.5s
-  slideturn_boost_velocity: number; // 2.0 m/s
+  slideturn_boost_velocity: number; // 1.0 m/s
 
   turn_cap_deg_standard: number;
   drift_penalty_standard: number;
@@ -215,7 +215,7 @@ export function createDefaultPlayerConfig(): PlayerConfig {
     tackle_min_velocity: 10.0,
 
     slideturn_boost_timepoint: 0.5,
-    slideturn_boost_velocity: 1.4,
+    slideturn_boost_velocity: 1.0,
 
     turn_cap_deg_standard: 30.0,
     drift_penalty_standard: 1.0,
