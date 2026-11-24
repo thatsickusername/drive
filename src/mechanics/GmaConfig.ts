@@ -32,10 +32,13 @@ export interface PlayerConfig {
   standingToSkiingPushVelocity: number;
   standingToSkiingVelocity: number;
 
-  jump_strength: number; // 4.0 m/s
+  jump_strength: number; // Snappy pop impulse (2.4 m/s)
   trick_hover_zforce: number; // 0.5 m/s^2
-  air_friction: number; // 0.006 per tick
+  air_friction: number; // Airborne air drag rate (0.05/s)
   air_bend_down_rad: number;
+  glide_air_friction: number; // Glide fall air drag rate (0.02/s)
+  air_gravity: number; // Weighted airborne gravity (20.0 m/s^2)
+  glide_gravity: number; // Modest aerodynamic glide gravity (14.0 m/s^2)
 
   ground_friction_base: number; // 1.0
   ground_friction_switch_no_twintips: number; // 10.0
@@ -156,10 +159,13 @@ export function createDefaultPlayerConfig(): PlayerConfig {
     standingToSkiingPushVelocity: 3.0,
     standingToSkiingVelocity: 1.0,
 
-    jump_strength: 4.0,
+    jump_strength: 2.4,
     trick_hover_zforce: 0.5,
-    air_friction: 0.006,
+    air_friction: 0.05,
     air_bend_down_rad: 0.24,
+    glide_air_friction: 0.02,
+    air_gravity: 20.0,
+    glide_gravity: 14.0,
 
     ground_friction_base: 1.0,
     ground_friction_switch_no_twintips: 10.0,

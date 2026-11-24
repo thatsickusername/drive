@@ -897,12 +897,14 @@ export interface SkierAnimParams {
   tuck?: boolean;
   inputLeft?: boolean;
   inputRight?: boolean;
+  isGliding?: boolean;
 }
 
 export class SkierAnimator {
   private skier: SkierCharacter;
   private animTime = 0;
   private carveBlend = 0; // 0 = idle, 1 = carve
+  private glideSpread = 0.0; // 0 = normal, 1 = glide legs separated
 
   // Dedicated deterministic instant pole plant state
   private activePlantSide: 'left' | 'right' | 'none' = 'none';
@@ -1230,16 +1232,30 @@ export class SkierAnimator {
       this.targets.spine.rx += isPower ? 0.12 : -0.04;
     }
 
-    // 6. Special Overrides: Airborne Flight Stance
+    // Glide spread animation blend
+    const targetGlideSpread = (!params.isGrounded && params.isGliding) ? 1.0 : 0.0;
+    this.glideSpread = THREE.MathUtils.damp(this.glideSpread, targetGlideSpread, 12.0, clampedDt);
+
+    // 6. Special Overrides: Airborne Flight Stance & Glide Fall
     if (!params.isGrounded) {
-      this.targets.leftShoulder.rz = -1.42;
-      this.targets.rightShoulder.rz = 1.42;
-      this.targets.leftShoulder.rx = -0.22;
-      this.targets.rightShoulder.rx = -0.22;
-      this.targets.leftKnee.rx = 0.55;
-      this.targets.rightKnee.rx = 0.55;
-      this.targets.leftHip.rx = -0.42;
-      this.targets.rightHip.rx = -0.42;
+      if (params.isGliding || this.glideSpread > 0.01) {
+        // Glide fall stance: Use idle ski animation with legs separated slightly more to see a visual difference
+        const spreadAngle = 0.26 * this.glideSpread;
+        this.targets.leftHip.rz = spreadAngle;
+        this.targets.rightHip.rz = -spreadAngle;
+        this.targets.leftAnkle.rz = -spreadAngle * 0.75;
+        this.targets.rightAnkle.rz = spreadAngle * 0.75;
+      } else {
+        // Standard ballistic jump flight stance
+        this.targets.leftShoulder.rz = -1.42;
+        this.targets.rightShoulder.rz = 1.42;
+        this.targets.leftShoulder.rx = -0.22;
+        this.targets.rightShoulder.rx = -0.22;
+        this.targets.leftKnee.rx = 0.55;
+        this.targets.rightKnee.rx = 0.55;
+        this.targets.leftHip.rx = -0.42;
+        this.targets.rightHip.rx = -0.42;
+      }
     }
 
     // 7. Special Overrides: Drift Hockey Stop
@@ -1266,5 +1282,14 @@ export class SkierAnimator {
     this.skier.joints.hips.position.y = this.hipY;
     this.skier.joints.hips.position.x += (this.hipPosTarget.x - this.skier.joints.hips.position.x) * blendRate;
     this.skier.joints.hips.position.z += (this.hipPosTarget.z - this.skier.joints.hips.position.z) * blendRate;
+
+    // Distinct visual separation of legs during glide fall
+    const hipSpreadOffset = 0.075 * this.glideSpread;
+    if (this.skier.joints.leftHip) {
+      this.skier.joints.leftHip.position.x = 0.114 + hipSpreadOffset;
+    }
+    if (this.skier.joints.rightHip) {
+      this.skier.joints.rightHip.position.x = -0.114 - hipSpreadOffset;
+    }
   }
 }

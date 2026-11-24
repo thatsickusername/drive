@@ -459,7 +459,11 @@ class Game {
     if (this.player.movementState === 'Crashing') {
       stateBadge = '<span style="color:#ef4444;font-weight:bold;">☠ CRASH RAGDOLL (50Hz Verlet)</span>';
     } else if (!this.player.isGrounded) {
-      stateBadge = `<span style="color:#f59e0b;font-weight:bold;">▲ AIRBORNE (${this.player.airTimer.toFixed(1)}s)</span>`;
+      if (this.player.isGliding) {
+        stateBadge = `<span style="color:#38bdf8;font-weight:bold;">✈ GLIDE FALL (${this.player.airTimer.toFixed(1)}s) [HOLD SPACE]</span>`;
+      } else {
+        stateBadge = `<span style="color:#f59e0b;font-weight:bold;">▲ AIRBORNE (${this.player.airTimer.toFixed(1)}s)</span>`;
+      }
     } else if (this.player.turnType === 'SlideTurn') {
       stateBadge = `<span style="color:#f97316;font-weight:bold;">≋ SLIDE TURN (+2m/s boost: ${(this.player.carveCharge * 100).toFixed(0)}%)</span>`;
     } else if (this.player.turnType === 'SharpTurn') {
@@ -509,7 +513,7 @@ class Game {
         • <strong>A / D (Left / Right)</strong>: Carve &amp; Auto Pole-Plant on flats/turns<br />
         • <strong>Shift + A / D</strong>: <strong>Slide Turn (Drift)</strong> | <strong>Ctrl + A / D</strong>: <strong>Sharp Turn</strong><br />
         • <strong>Hold A + D (or S)</strong>: <strong>Snowplow Brake</strong> (or <strong>Hockey Drift Stop</strong> when cornering)<br />
-        • <strong>Space / Gamepad A</strong>: <strong>Jump Pop</strong> | <strong>In Air</strong>: <strong>A / D</strong> Spins, <strong>W / S</strong> Flips<br />
+        • <strong>Space / Gamepad A</strong>: <strong>Jump Pop</strong> (Hold Space for <strong>Glide Fall</strong>) | <strong>In Air</strong>: <strong>A / D</strong> Spins, <strong>W / S</strong> Flips<br />
         • <strong>V</strong>: Camera Mode | <strong>O</strong>: Camera Studio | <strong>C</strong>: Fly-Cam | <strong>1-6</strong>: Peaks
       </div>
     `;

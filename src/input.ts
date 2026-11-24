@@ -8,7 +8,6 @@ export class UnifiedInputController {
   public onToggleReverseTurnRequested?: () => void;
 
   private keyState: { [code: string]: boolean } = {};
-  private prevBoarderJump: boolean = false;
   private prevStakeKey: boolean = false;
   private prevLeftKey: boolean = false;
   private prevRightKey: boolean = false;
@@ -80,9 +79,9 @@ export class UnifiedInputController {
     let left = kA && !bothPressed;
     let right = kD && !bothPressed;
 
-    // Edge-triggered jump (prevents continuous holding from spamming ticks)
-    let jump = kSpace && !this.prevBoarderJump;
-    this.prevBoarderJump = kSpace;
+    // Space is held continuously: takeoff pop is edge-triggered by GmaPlayerPhysics,
+    // while holding Space in the air enables glide fall (reduced air drag & lift).
+    let jump = kSpace;
 
     // Turn initiation edges (pressing A or D)
     const leftEdge = left && !this.prevLeftKey;

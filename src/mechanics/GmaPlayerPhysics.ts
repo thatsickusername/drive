@@ -48,6 +48,7 @@ export class GmaPlayerPhysics {
   public slideTurnBoostTriggered: boolean = false;
   public driftMilestoneIndex: number = 0;
   public sharpTurnSpinBoostActive: boolean = false;
+  public isGliding: boolean = false;
   public isStaking: boolean = false;
   public isStakingDamped: boolean = false;
   public stakingPoleTimer: number = 0;
@@ -317,6 +318,7 @@ export class GmaPlayerPhysics {
         this.airPitch = 0;
         this.airRoll = 0;
         this.sharpTurnSpinBoostActive = false;
+        this.isGliding = false;
       }
 
       this.updateGroundPhysics(
@@ -334,7 +336,7 @@ export class GmaPlayerPhysics {
     } else {
       this.state = MovementState.Airborne;
       this.airTime += dt;
-      this.updateAirbornePhysics(dt, steerInput, spinInput, flipInput, rollInput);
+      this.updateAirbornePhysics(dt, steerInput, spinInput, flipInput, rollInput, jumpPressed);
     }
     this.prevJumpPressed = jumpPressed;
     this.prevStakePressed = stakePressed;
@@ -663,9 +665,10 @@ export class GmaPlayerPhysics {
     // 8. Jump Execution (strictly edge-triggered one-shot impulse)
     const isJumpTriggered = jumpPressed && !this.prevJumpPressed;
     if (isJumpTriggered) {
-      this.velocity.y = Math.max(this.velocity.y, 0.0) + this.config.jump_strength; // +4.0 m/s
+      this.velocity.y = Math.max(this.velocity.y, 0.0) + this.config.jump_strength; // +2.4 m/s (snappy grounded ski pop)
       this.state = MovementState.Airborne;
       this.airTime = 0.0;
+      this.isGliding = jumpPressed;
       if (this.currentTurnType === TurnType.SharpTurn) {
         this.sharpTurnSpinBoostActive = true;
       }
@@ -688,20 +691,38 @@ export class GmaPlayerPhysics {
     steerInput: number,
     spinInput: number,
     flipInput: number,
-    rollInput: number
+    rollInput: number,
+    jumpPressed: boolean = false
   ): void {
-    // 1. Gravity and Hover Lift
-    this.velocity.addScaledVector(this._gVec, dt);
+    // 1. Gravity and Airborne Dynamics
+    this.isGliding = jumpPressed;
+    const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+
+    // Crisp, grounded gravity: 20.0 m/s^2 for normal jumps eliminates moon-gravity floatiness
+    // In glide mode, downward gravity is 14.0 m/s^2 (modest aerodynamic extension, definitely pulls down and falls)
+    const effectiveGravityY = this.isGliding
+      ? (this.config.glide_gravity ?? 14.0)
+      : (this.config.air_gravity ?? 20.0);
+    this.velocity.y -= effectiveGravityY * dt;
+
+    // Air drag: preserves forward momentum while keeping jump distances realistic
+    const effectiveAirDrag = this.isGliding
+      ? (this.config.glide_air_friction ?? 0.02)
+      : (this.config.air_friction ?? 0.05);
+    this.velocity.multiplyScalar(Math.exp(-effectiveAirDrag * dt));
+
+    // Subtle aerodynamic air banking when gliding with forward speed
+    if (this.isGliding && horizSpeed > 1.0) {
+      const bankRate = Math.min(1.0, 1.2 * dt);
+      this.velocity.x += (this.forwardDir.x * horizSpeed - this.velocity.x) * bankRate;
+      this.velocity.z += (this.forwardDir.z * horizSpeed - this.velocity.z) * bankRate;
+    }
 
     const spinCmd = Math.abs(spinInput) > 0.05 ? spinInput : steerInput;
     const isTricking = Math.abs(spinCmd) > 0.05 || Math.abs(flipInput) > 0.05 || Math.abs(rollInput) > 0.05;
     if (isTricking) {
       this.velocity.y += this.config.trick_hover_zforce * dt;
     }
-
-    // Air Drag: During airborne phases (mechanics/PlayerPhysics.cpp:259):
-    // velocity_ *= (1.0 - config_.air_friction); // air_friction: 0.006
-    this.velocity.multiplyScalar(1.0 - this.config.air_friction);
 
     // 2. Aerial Rotations (Spins, Flips, Rolls)
     // Invert spinCmd sign so air rotation aligns 1:1 with ground steering convention

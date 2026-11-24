@@ -596,6 +596,10 @@ export class Skier {
     return this.gmaPhysics.state;
   }
 
+  public get isGliding(): boolean {
+    return this.gmaPhysics.isGliding;
+  }
+
   public toggleSport(): SportType {
     this.gmaPhysics.sport = this.gmaPhysics.sport === SportType.Skis ? SportType.Snowboard : SportType.Skis;
     this.updateSportVisuals();
@@ -889,7 +893,8 @@ export class Skier {
         isDrifting: this.isDrifting,
         tuck: !!input.forward && this.speed > 8,
         inputLeft: !!input.left || (input.steerX !== undefined && input.steerX < -0.25),
-        inputRight: !!input.right || (input.steerX !== undefined && input.steerX > 0.25)
+        inputRight: !!input.right || (input.steerX !== undefined && input.steerX > 0.25),
+        isGliding: this.gmaPhysics.isGliding
       });
 
       // 3. Foot Grounding & Ski Elevation Clamping:
