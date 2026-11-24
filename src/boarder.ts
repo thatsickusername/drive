@@ -459,6 +459,7 @@ export class Skier {
 
   private wasGrounded = false;
   private wasCrashing = false;
+  private wasCrashingPhysics = false;
   private prevJumpInput = false;
 
   // Audio, Trail Ribbon and Particles
@@ -654,7 +655,8 @@ export class Skier {
     this.groundDistance = 0;
     this.airTimer = 0;
     this.isGrounded = false;
-    if (this.trailRibbon) this.trailRibbon.reset();
+    this.wasCrashingPhysics = false;
+    if (this.trailRibbon) this.trailRibbon.onRespawn();
     this.root.position.set(x, bodyY, z);
     this.visualRoot.quaternion.setFromAxisAngle(this._up, yaw);
     this.skierCharacter.resetPose();
@@ -787,10 +789,16 @@ export class Skier {
     // 5. Update Cached State
     this.yaw = this.gmaPhysics.currentHeadingAngle;
     this.speed = this.gmaPhysics.speed;
-    this.isGrounded = this.gmaPhysics.state !== MovementState.Airborne && this.gmaPhysics.state !== MovementState.Crashing;
-    if (this.trailRibbon && this.gmaPhysics.state === MovementState.Crashing) {
-      this.trailRibbon.onCrash();
+    const isCrashing = this.gmaPhysics.state === MovementState.Crashing;
+    this.isGrounded = this.gmaPhysics.state !== MovementState.Airborne && !isCrashing;
+    if (this.trailRibbon) {
+      if (isCrashing && !this.wasCrashingPhysics) {
+        this.trailRibbon.onCrash();
+      } else if (!isCrashing && this.wasCrashingPhysics) {
+        this.trailRibbon.onRespawn();
+      }
     }
+    this.wasCrashingPhysics = isCrashing;
     this.isDrifting = this.gmaPhysics.currentTurnType === TurnType.SlideTurn || this.gmaPhysics.currentTurnType === TurnType.OverTurn || input.brake;
     this.isSlashing = this.gmaPhysics.currentTurnType === TurnType.SharpTurn;
     this._forward.copy(this.gmaPhysics.forwardDir);

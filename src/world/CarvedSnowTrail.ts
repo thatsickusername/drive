@@ -136,7 +136,19 @@ export class CarvedSnowTrail {
   }
 
   public onCrash(): void {
-    this.pendingJumpGap = false;
+    this.pendingJumpGap = true;
+    if (this.count > 0) {
+      this.applyTrailCaps();
+      this.notifyGeometryUpdate();
+    }
+  }
+
+  public onRespawn(): void {
+    this.pendingJumpGap = true;
+    if (this.count > 0) {
+      this.applyTrailCaps();
+      this.notifyGeometryUpdate();
+    }
   }
 
   private applyTrailCaps(): void {
@@ -309,7 +321,7 @@ export class CarvedSnowTrail {
 
     const dist = pos.distanceTo(this.lastEmitPos);
     if (dist >= this.emitDist || this.pendingJumpGap) {
-      const isJumpLanding = this.pendingJumpGap;
+      const isJumpLanding = this.pendingJumpGap && this.count > 0;
       this.lastEmitPos.copy(pos);
       if (isJumpLanding) {
         this.cumulativeDistance += this.emitDist;
