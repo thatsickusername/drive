@@ -85,6 +85,7 @@ export class GmaPlayerPhysics {
   // Ragdoll recovery timer
   public crashRecoveryTimer: number = 0;
   public jumpActionTriggered: boolean = false;
+  public landingGraceTimer: number = 0;
   private prevJumpPressed: boolean = false;
   private prevStakePressed: boolean = false;
 
@@ -124,6 +125,7 @@ export class GmaPlayerPhysics {
     this.snowDepthPos = 0;
     this.snowDepthVel = 0;
     this.jumpActionTriggered = false;
+    this.landingGraceTimer = 0;
 
     this.angularVelocitySpin = 0;
     this.angularVelocityFlip = 0;
@@ -256,6 +258,10 @@ export class GmaPlayerPhysics {
       return;
     }
 
+    if (this.landingGraceTimer > 0) {
+      this.landingGraceTimer = Math.max(0, this.landingGraceTimer - dt);
+    }
+
     // Authentic GMA Ground Contact: Elevation proximity without erroneous vertical ascent cancellation
     const isTakeoffLockout = this.state === MovementState.Airborne && this.airTime < 0.08;
     const groundedTolerance = (this.state === MovementState.Airborne) ? 0.12 : 0.40;
@@ -269,6 +275,19 @@ export class GmaPlayerPhysics {
         if (impactSpeed > this.config.crash_magnitude_ground) {
           this.triggerCrash('Ground impact exceeded crash threshold (26.0 m/s)');
           return;
+        }
+
+        // Transition slope momentum transfer: convert downward fall speed into downslope drive
+        const downwardFallSpeed = Math.max(0, -this.velocity.y);
+        const normalComp = this._gVec.dot(this.groundNormal);
+        this._gNormal.copy(this.groundNormal).multiplyScalar(normalComp);
+        this._gParallel.subVectors(this._gVec, this._gNormal);
+        const downslopeMag = this._gParallel.length();
+        if (downslopeMag > 0.1 && downwardFallSpeed > 0.5) {
+          // Transfer up to 35% of downward fall speed into downhill drive, scaled by slope gradient
+          const slopeRatio = Math.min(1.0, downslopeMag / 4.5);
+          const transfer = downwardFallSpeed * 0.35 * slopeRatio;
+          this.velocity.addScaledVector(this._gParallel, transfer / downslopeMag);
         }
 
         // Absorb downward normal velocity (snow damping with zero outward bounce)
@@ -306,10 +325,21 @@ export class GmaPlayerPhysics {
           return;
         }
 
-        // Finalize score and apply controlled forward speed boost (+2.0 m/s max)
-        const scoreResult = this.trickScoring.finalizeScore(landingQuality);
+        // Finalize score and apply controlled forward speed boost with entry momentum scaling
+        const scoreResult = this.trickScoring.finalizeScore(landingQuality, horizSpeed);
         if (scoreResult.forwardSpeedBoost > 0) {
           this.velocity.addScaledVector(this.forwardDir, scoreResult.forwardSpeedBoost);
+        }
+
+        // Touchdown landing grace window: protect speed from edge-scrubbing and drift penalties
+        this.landingGraceTimer = 0.30; // 300ms grace window
+
+        // Align heading gently to travel direction if landing was Good/Perfect
+        if (horizSpeed > 1.5 && (landingQuality === LandingQuality.Perfect || landingQuality === LandingQuality.Good)) {
+          const travelHeading = Math.atan2(-this.velocity.x, -this.velocity.z);
+          this.currentHeadingAngle = travelHeading;
+          this.forwardDir.set(-Math.sin(travelHeading), 0, -Math.cos(travelHeading));
+          this.forwardDir.addScaledVector(this.groundNormal, -this.forwardDir.dot(this.groundNormal)).normalize();
         }
 
         this.state = MovementState.Skiing;
@@ -541,6 +571,10 @@ export class GmaPlayerPhysics {
       }
     }
 
+    if (this.landingGraceTimer > 0) {
+      driftFriction = 0.0;
+    }
+
     // 4. Update Heading with GMA Turn Angle Clamping relative to horizontal momentum
     const isPowder = surfaceType === 'POWDER' ? 1.0 : 0.0;
     const turnRadiusScale = 1.0 + 0.45 * isPowder;
@@ -615,14 +649,20 @@ export class GmaPlayerPhysics {
       effectiveFriction += this.config.breaking_power; // 2.5
     }
 
-    // Backward Riding: Maximum backward speed is capped at 12 m/s with a friction of 15.0
-    if (isSwitch) {
+    // Backward Riding: Maximum backward speed is capped at 12 m/s with a friction of 15.0 only for non-twintip skis
+    if (isSwitch && !this.hasTwintips && this.sport !== SportType.Snowboard) {
       effectiveFriction += this.config.backward_friction; // 15.0
+    }
+
+    // Hydrodynamic ski glide efficiency: as speed increases, straight-line glide friction reduces (meltwater film lubrication)
+    const groundSpeed = this.velocity.length();
+    if (absSteer <= 0.05 && groundSpeed > 4.0) {
+      const speedT = THREE.MathUtils.clamp((groundSpeed - 4.0) / 16.0, 0.0, 1.0);
+      effectiveFriction *= (1.0 - 0.50 * speedT);
     }
 
     // Authentic GMA ground friction + aerodynamic drag (player.air_friction: 0.006)
     // Pitch-Gated Powder Drag Governor (SNOW_SHADING_AND_INTERACTION.md Section 5.2)
-    const groundSpeed = this.velocity.length();
     const speedRatio = groundSpeed / 30.0;
     const aeroDrag = this.config.air_friction * (speedRatio * speedRatio) * 3.5;
 
@@ -635,14 +675,19 @@ export class GmaPlayerPhysics {
       powderK = isPowder * THREE.MathUtils.clamp((gAlong - tan8) / (tan20 - tan8), 0.0, 1.0);
     }
 
+    // When player carries good momentum (> 25 km/h / ~7 m/s), reduce powder drag penalty on flat terrain
+    if (groundSpeed > 7.0) {
+      powderK *= 0.5;
+    }
+
     const effectiveAeroDrag = aeroDrag * (1.0 + 0.25 * powderK);
     const effectiveMaterialFriction = materialFriction * (1.0 + 0.30 * powderK);
     const totalFriction = (effectiveFriction + driftFriction) * effectiveMaterialFriction + effectiveAeroDrag;
     const damping = Math.exp(-totalFriction * dt);
     this.velocity.multiplyScalar(damping);
 
-    // Hard backward speed clamp (player.collissions.backward.max_velocity: 12.0 m/s)
-    if (isSwitch && this.velocity.length() > this.config.backward_max_velocity) {
+    // Hard backward speed clamp ONLY applies to non-twintip equipment
+    if (isSwitch && !this.hasTwintips && this.sport !== SportType.Snowboard && this.velocity.length() > this.config.backward_max_velocity) {
       this.velocity.setLength(this.config.backward_max_velocity);
     }
 
@@ -657,17 +702,19 @@ export class GmaPlayerPhysics {
       this._velDir.multiplyScalar(1.0 - grip).addScaledVector(this._targetDir, grip).normalize();
       this.velocity.copy(this._velDir).multiplyScalar(alignSpeed);
 
-      // Edge scrub: carving displaces snow and scrubs kinetic energy
-      if (absSteer > 0.05 && alignSpeed > 1.0) {
+      // Edge scrub: carving displaces snow and scrubs kinetic energy (bypassed during landing grace period)
+      if (this.landingGraceTimer <= 0 && absSteer > 0.05 && alignSpeed > 1.0) {
         const edgeScrub = 0.015 * absSteer * alignSpeed * (1.0 + 0.5 * isPowder) * dt;
         this.velocity.multiplyScalar(Math.max(0.5, 1.0 - edgeScrub));
       }
     }
 
-    // 8. Jump Execution (strictly edge-triggered one-shot impulse)
+    // 8. Jump Execution (strictly edge-triggered one-shot impulse with speed-scaled pop)
     const isJumpTriggered = jumpPressed && !this.prevJumpPressed;
     if (isJumpTriggered) {
-      this.velocity.y = Math.max(this.velocity.y, 0.0) + this.config.jump_strength; // +2.4 m/s (snappy grounded ski pop)
+      const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
+      const speedPopBonus = horizSpeed * (this.config.jump_speed_ratio ?? 0.06);
+      this.velocity.y = Math.max(this.velocity.y, 0.0) + this.config.jump_strength + speedPopBonus;
       this.state = MovementState.Airborne;
       this.airTime = 0.0;
       this.isGliding = jumpPressed;
@@ -701,28 +748,29 @@ export class GmaPlayerPhysics {
     this.isGliding = jumpPressed;
     const horizSpeed = Math.hypot(this.velocity.x, this.velocity.z);
 
-    // Crisp, grounded gravity: 20.0 m/s^2 for normal jumps eliminates moon-gravity floatiness
-    // In glide mode, downward gravity is 14.0 m/s^2 (modest aerodynamic extension, definitely pulls down and falls)
+    // Crisp, grounded gravity: 16.0 m/s^2 for normal jumps eliminates moon-gravity floatiness while keeping trajectory natural
+    // In glide mode, downward gravity is 12.0 m/s^2 (modest aerodynamic extension, definitely pulls down and falls)
     const effectiveGravityY = this.isGliding
-      ? (this.config.glide_gravity ?? 14.0)
-      : (this.config.air_gravity ?? 20.0);
+      ? (this.config.glide_gravity ?? 12.0)
+      : (this.config.air_gravity ?? 16.0);
     this.velocity.y -= effectiveGravityY * dt;
 
     // Air drag: preserves forward momentum while keeping jump distances realistic
     const effectiveAirDrag = this.isGliding
       ? (this.config.glide_air_friction ?? 0.02)
-      : (this.config.air_friction ?? 0.05);
+      : (this.config.air_friction ?? 0.03);
     this.velocity.multiplyScalar(Math.exp(-effectiveAirDrag * dt));
 
-    // Subtle aerodynamic air banking when gliding with forward speed
-    if (this.isGliding && horizSpeed > 1.0) {
+    const spinCmd = Math.abs(spinInput) > 0.05 ? spinInput : steerInput;
+    const isTricking = Math.abs(spinCmd) > 0.05 || Math.abs(flipInput) > 0.05 || Math.abs(rollInput) > 0.05;
+
+    // Subtle aerodynamic air banking ONLY when actively gliding in a straight line (decoupled during tricks)
+    if (this.isGliding && !isTricking && horizSpeed > 1.0) {
       const bankRate = Math.min(1.0, 1.2 * dt);
       this.velocity.x += (this.forwardDir.x * horizSpeed - this.velocity.x) * bankRate;
       this.velocity.z += (this.forwardDir.z * horizSpeed - this.velocity.z) * bankRate;
     }
 
-    const spinCmd = Math.abs(spinInput) > 0.05 ? spinInput : steerInput;
-    const isTricking = Math.abs(spinCmd) > 0.05 || Math.abs(flipInput) > 0.05 || Math.abs(rollInput) > 0.05;
     if (isTricking) {
       this.velocity.y += this.config.trick_hover_zforce * dt;
     }

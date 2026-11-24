@@ -205,7 +205,7 @@ export class TrickScoringSystem {
     return { title, baseScore, comboElements };
   }
 
-  public finalizeScore(landing: LandingQuality): ScoreFinalization {
+  public finalizeScore(landing: LandingQuality, entrySpeed: number = 0): ScoreFinalization {
     if (landing === LandingQuality.Crash) {
       const result: ScoreFinalization = {
         totalScore: 0,
@@ -229,11 +229,11 @@ export class TrickScoringSystem {
 
     if (landing === LandingQuality.Perfect) {
       landingMultiplier = 1.5;
-      // Controlled +2.0 m/s boost for clean/perfect landing
-      forwardSpeedBoost = title ? 2.0 : 0.8;
+      // Controlled boost: base boost + 12% entry momentum scaling for fluid speed retention
+      forwardSpeedBoost = title ? Math.max(2.2, 1.2 + entrySpeed * 0.12) : 1.0;
     } else if (landing === LandingQuality.Good) {
       landingMultiplier = 1.2;
-      forwardSpeedBoost = title ? 1.3 : 0.4;
+      forwardSpeedBoost = title ? Math.max(1.4, 0.8 + entrySpeed * 0.08) : 0.6;
     } else if (landing === LandingQuality.Sketchy) {
       landingMultiplier = 0.7;
       forwardSpeedBoost = title ? 0.5 : 0.0;
