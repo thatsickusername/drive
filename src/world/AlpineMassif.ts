@@ -19,7 +19,7 @@ export class AlpineMassif {
   public readonly chunksAcross = 6;
 
   private terrainMaterial: THREE.MeshStandardMaterial;
-  public readonly sunDir = new THREE.Vector3(-190, 130, -50).normalize();
+  public readonly sunDir = new THREE.Vector3(140, 110, -50).normalize();
 
   constructor(
     private scene: THREE.Scene,

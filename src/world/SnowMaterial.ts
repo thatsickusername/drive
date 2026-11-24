@@ -8,7 +8,7 @@ export interface SnowMaterialOptions {
 }
 
 export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.MeshStandardMaterial {
-  const sunDir = options.sunDir || new THREE.Vector3(-190, 130, -50).normalize();
+  const sunDir = options.sunDir || new THREE.Vector3(140, 110, -50).normalize();
   const sunColor = options.sunColor || new THREE.Color(0xfff6ec);
   const shadowColor = options.shadowColor || new THREE.Color(0x9ca9cb);
 
@@ -142,8 +142,8 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
 
       // Rock albedo & striations
       vec3 darkRock = vec3(0.24, 0.22, 0.21) * mix(0.85, 1.15, rNoise2);
-      // Physically-calibrated fresh alpine powder snow albedo
-      vec3 daySnow = vec3(0.84, 0.83, 0.82);
+      // Physically-calibrated fresh alpine powder snow albedo (pure luminous alpine white)
+      vec3 daySnow = vec3(0.96, 0.965, 0.98);
       vec3 nightSnow = vec3(0.80, 0.83, 0.88);
       vec3 snowAlbedo = mix(daySnow, nightSnow, uNightFactor);
 
@@ -185,29 +185,14 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       vec2 pMeso  = (gDMeso.rg * 2.0 - 1.0) * (0.42 * gLodMeso);
       vec2 pMacro = (dMacro.rg * 2.0 - 1.0) * (0.18 * gLodMacro);
 
-      // Subtle organic wind-drift / sastrugi modulation (gently curved and noise-warped)
-      float windAngle = -0.65; // ~37 degrees
-      vec2 windDir = vec2(cos(windAngle), sin(windAngle));
-      vec2 crossWind = vec2(-windDir.y, windDir.x);
+      // Realistic groomed corduroy and subtle alpine powder drift (Section 2.1)
+      float corduroy = sin(vWorldPosition.x * 24.0) * 0.010;
+      float drift1 = (noise2D(vWorldPosition.xz * 0.06) - 0.5) * 0.015;
+      float drift2 = (noise2D(vWorldPosition.xz * 0.18 + vec2(1.2, 3.4)) - 0.5) * 0.008;
+      float terrainDetailFade = smoothstep(1.5, 6.0, gDistToCam) * (1.0 - smoothstep(40.0, 180.0, gDistToCam));
+      vec2 pGroomed = vec2(corduroy + drift1, drift2) * terrainDetailFade;
 
-      vec2 warp = vec2(
-        noise2D(vWorldPosition.xz * 0.04),
-        noise2D(vWorldPosition.xz * 0.04 + vec2(4.2, 8.1))
-      ) * 2.8;
-
-      vec2 wp = vWorldPosition.xz + warp;
-      float uWind = dot(wp, windDir);
-      float vWind = dot(wp, crossWind);
-
-      float wave1 = sin(uWind * 0.35 + sin(vWind * 0.10) * 1.4);
-      float wave2 = sin(uWind * 0.75 + sin(vWind * 0.18) * 1.0) * 0.4;
-      float sastrugiWave = wave1 + wave2;
-
-      float sastrugiSlope = sastrugiWave * 0.06;
-      float sastrugiFade = smoothstep(2.5, 12.0, gDistToCam) * (1.0 - smoothstep(45.0, 220.0, gDistToCam));
-      vec2 pSastrugi = windDir * (sastrugiSlope * sastrugiFade);
-
-      vec2 totalPerturb = pMicro + pMeso + pMacro + pSastrugi;
+      vec2 totalPerturb = pMicro + pMeso + pMacro + pGroomed;
       gWorldNPerturbed = normalize(vWorldNormal + vec3(totalPerturb.x, 0.0, totalPerturb.y));
       normal = normalize((viewMatrix * vec4(gWorldNPerturbed, 0.0)).xyz);
       `

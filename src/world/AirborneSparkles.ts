@@ -56,8 +56,8 @@ export class AirborneSparkles {
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
         gl_Position = projectionMatrix * mvPosition;
 
-        // Size attenuation
-        gl_PointSize = (aScale * 56.0) / -mvPosition.z;
+        // Size attenuation - fine crystalline diamond dust
+        gl_PointSize = clamp((aScale * 18.0) / -mvPosition.z, 0.5, 3.2);
 
         // Twinkling animation
         float twinkle = sin(uTime * 3.2 + aPhase) * 0.5 + 0.5;
@@ -80,7 +80,7 @@ export class AirborneSparkles {
         float core = smoothstep(0.60, 0.0, r);
         float shape = clamp(core * 0.8 + flare * 0.9, 0.0, 1.0);
 
-        gl_FragColor = vec4(uColor * 1.4, shape * vAlpha);
+        gl_FragColor = vec4(uColor * 1.2, shape * vAlpha * 0.45);
       }
     `;
 

@@ -666,12 +666,12 @@ export class DynamicCameraDirector {
       // When skiing downhill, normalDotFwd < 0, atan2 gives negative pitch angle
       slopePitchRad = Math.atan2(-normalDotFwd, slopeNormal.y);
     }
-    // Dynamic slope adjustment: when going downhill (slopePitchRad < 0), elevate pitch to stay clear above uphill slope
+    // Dynamic slope adjustment: when going downhill (slopePitchRad < 0), lower pitch slightly to follow fall-line
     // When going uphill (slopePitchRad > 0), lower pitch so camera looks up towards the crest
     const dynamicSlopePitch = THREE.MathUtils.clamp(
-      -slopePitchRad * 0.70,
-      -THREE.MathUtils.degToRad(18),
-      THREE.MathUtils.degToRad(28)
+      -slopePitchRad * 0.15,
+      -THREE.MathUtils.degToRad(8),
+      THREE.MathUtils.degToRad(8)
     ) * slopeFactor;
     this.smoothedBehindSlopePitch = THREE.MathUtils.damp(
       this.smoothedBehindSlopePitch,
@@ -680,13 +680,13 @@ export class DynamicCameraDirector {
       dt
     );
 
-    // 3. Pitch bounds: resting angle transitions from 10° on flat ground up to settings.behindPitch on slopes
-    const flatPitchRad = THREE.MathUtils.degToRad(10.0);
+    // 3. Pitch bounds: resting angle transitions from flat ground up to settings.behindPitch on slopes
+    const flatPitchRad = THREE.MathUtils.degToRad(12.0);
     const slopeBasePitchRad = THREE.MathUtils.degToRad(this.settings.behindPitch);
     const basePitchRad = THREE.MathUtils.lerp(flatPitchRad, slopeBasePitchRad, slopeFactor);
 
-    const minPitchRad = THREE.MathUtils.degToRad(Math.min(this.settings.behindMinPitch, 10.0));
-    const maxPitchRad = THREE.MathUtils.degToRad(this.settings.behindMaxPitch + 15.0); // allow dynamic elevation on steep downhills
+    const minPitchRad = THREE.MathUtils.degToRad(this.settings.behindMinPitch);
+    const maxPitchRad = THREE.MathUtils.degToRad(this.settings.behindMaxPitch);
     const targetPitch = THREE.MathUtils.clamp(
       basePitchRad + this.smoothedBehindSlopePitch + this.manualPitchOffset,
       minPitchRad,

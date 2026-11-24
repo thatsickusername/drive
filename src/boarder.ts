@@ -526,6 +526,9 @@ export class Skier {
     // 3. Build Snow Spray Particle System & Trail Ribbon
     this.initSnowSpray(scene);
     this.trailRibbon = new CarvedSnowTrail(scene);
+    if (this.terrainSampler) {
+      this.trailRibbon.setTerrainSampler(this.terrainSampler);
+    }
 
     // 4. Setup Audio gesture trigger
     const initAudio = () => {
@@ -890,20 +893,19 @@ export class Skier {
       });
 
       // 3. Foot Grounding & Ski Elevation Clamping:
-      // Keep ski boards consistently on top of the powder snow surface (+0.046m above hard pack).
-      // Automatically compensates for hip crouch/tuck drop so feet and skis NEVER sink into the snow.
+      // Skis sit inside the carved rut floor (+0.016m) nestled between raised displaced snow berms.
+      // Automatically compensates for hip crouch/tuck drop so feet and skis remain physically grounded in the track.
       const crouchComp = this.animator.crouchOffset;
-      const baseElev = -this.cfg.sphereRadius + 0.084 + crouchComp;
+      const baseElev = -this.cfg.sphereRadius + 0.016 + crouchComp;
       this.skierCharacter.root.position.y = baseElev;
 
       // 4. Multi-Point Terrain Clearance Clamping:
       // Checks all 16 contact points of the skis (shovel tips, front edges, mid edges, tails).
-      // If slope pitch or convexity threatens to submerge any portion of the ski board,
-      // dynamically elevate the visual root along the surface normal so skis stay 100% visible and above snow/trails.
+      // Keep ski bases naturally planted inside the rut floor without floating or submerging.
       if (this.isGrounded && this.terrainSampler) {
         this.skierCharacter.root.updateMatrixWorld(true);
         let maxPenetration = 0.0;
-        const targetClearance = 0.046; // Ski base stays at least 4.6cm above hard collision terrain
+        const targetClearance = 0.016; // Ski base sits directly inside carved rut channel
         const contacts = this.skierCharacter.footContacts;
 
         for (let i = 0; i < contacts.length; i++) {
@@ -977,6 +979,9 @@ export class Skier {
 
   public setTerrainSampler(sampler: (x: number, z: number) => number): void {
     this.terrainSampler = sampler;
+    if (this.trailRibbon) {
+      this.trailRibbon.setTerrainSampler(sampler);
+    }
   }
 
   private triggerCrashSpray(): void {

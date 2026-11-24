@@ -146,7 +146,15 @@ async function run() {
     await page.waitForTimeout(1500);
 
     // Apply scenario
-    if (scenario.includes('carve') || scenario.includes('steer')) {
+    if (target.includes('reference') || scenario.includes('reference')) {
+      console.log('[vision] Executing scenario: Teleport to spawn 1 (Main Summit Glacier Chute) and shred downhill matching reference...');
+      await page.keyboard.press('Digit1');
+      await page.waitForTimeout(500);
+      await page.keyboard.down('KeyW');
+      await page.waitForTimeout(2200);
+      await page.keyboard.up('KeyW');
+      await page.waitForTimeout(6500);
+    } else if (scenario.includes('carve') || scenario.includes('steer')) {
       console.log('[vision] Executing scenario: Teleport to spawn 1 and hold carve steering...');
       await page.keyboard.press('Digit1');
       await page.waitForTimeout(1200);
@@ -160,6 +168,10 @@ async function run() {
       await page.keyboard.press('Digit4');
       // Wait for player to slide down slope 4
       await page.waitForTimeout(3000);
+    } else if (target.includes('reference') || scenario.includes('reference')) {
+      console.log('[vision] Executing scenario: Teleport to spawn 2 (West Peak) and shred downhill matching reference...');
+      await page.keyboard.press('Digit2');
+      await page.waitForTimeout(4000);
     } else if (scenario.includes('trail') || scenario.includes('acceptance')) {
       console.log('[vision] Executing scenario: Teleport to spawn 2 (West Peak) and carve right matching acceptance criteria...');
       await page.keyboard.press('Digit2');

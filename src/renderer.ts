@@ -11,7 +11,7 @@ export class Renderer {
   public fillLight: THREE.DirectionalLight;
   public skyDome: SkyDome;
   public sparkles: AirborneSparkles;
-  public readonly sunDir = new THREE.Vector3(-190, 130, -50).normalize();
+  public readonly sunDir = new THREE.Vector3(140, 110, -50).normalize();
 
   public isNightMode: boolean = false;
   public nightFactor: number = 0.0;
@@ -66,7 +66,7 @@ export class Renderer {
 
     // Directional celestial light (Sun by day, Moon by night)
     this.dirLight = new THREE.DirectionalLight(0xfff6ec, 2.05);
-    this.dirLight.position.set(-190, 130, -50);
+    this.dirLight.position.set(140, 110, -50);
     this.dirLight.castShadow = true;
     this.dirLight.shadow.mapSize.width = 2048;
     this.dirLight.shadow.mapSize.height = 2048;
