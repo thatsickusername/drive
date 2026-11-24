@@ -117,7 +117,8 @@ export class CarvedSnowTrail {
     isGrounded: boolean,
     slipAngleDeg: number,
     speed: number,
-    isDrifting: boolean
+    isDrifting: boolean,
+    carveTurn: number = 0.0
   ): void {
     // 1. Airtime handling & segment decay
     if (!isGrounded || speed < 0.8) {
@@ -150,13 +151,49 @@ export class CarvedSnowTrail {
       // Powder surface reference elevation (+0.035m)
       const powderSurfaceY = 0.035;
 
+      // Dynamic Asymmetric Snow Accumulation during Carving & Turning:
+      // When carving left (carveTurn < 0), centrifugal force pushes churned snow to the RIGHT (outer edge).
+      // When carving right (carveTurn > 0), centrifugal force pushes churned snow to the LEFT (outer edge).
+      // Scaled proportionally with player speed: faster speed = higher and wider thrown snow berm.
+      const speedFactor = THREE.MathUtils.clamp(speed / 14.0, 0.4, 2.2);
+      const turnEffort = THREE.MathUtils.clamp(carveTurn, -1.0, 1.0);
+      const carveFactor = turnEffort * speedFactor;
+
+      let leftBermExtraH = 0.0;
+      let leftBermExtraW = 0.0;
+      let rightBermExtraH = 0.0;
+      let rightBermExtraW = 0.0;
+
+      if (carveFactor < 0.0) {
+        // Carving Left: Throw snow to the Right outside edge
+        const rightPush = Math.min(2.0, -carveFactor);
+        rightBermExtraH = rightPush * 0.024; // Up to +4.8cm higher outside berm
+        rightBermExtraW = rightPush * 0.048; // Up to +9.6cm wider displaced snow outside
+        leftBermExtraH = -rightPush * 0.005; // Slightly compressed inside edge
+      } else if (carveFactor > 0.0) {
+        // Carving Right: Throw snow to the Left outside edge
+        const leftPush = Math.min(2.0, carveFactor);
+        leftBermExtraH = leftPush * 0.024;  // Up to +4.8cm higher outside berm
+        leftBermExtraW = leftPush * 0.048;  // Up to +9.6cm wider displaced snow outside
+        rightBermExtraH = -leftPush * 0.005; // Slightly compressed inside edge
+      }
+
+      // Drift / skid / hockey stop adds extra symmetric pushed snow volume
+      const driftExtraH = isDrifting ? 0.012 : 0.0;
+      const driftExtraW = isDrifting ? 0.030 : 0.0;
+
       // Soft natural micro-wobble along the berm crest
       const wobble = Math.sin(this.cumulativeDistance * 8.0) * 0.003 + Math.cos(this.cumulativeDistance * 18.0) * 0.002;
-      // Soft displaced berm crest (+0.028m above powder surface, 5.3cm total elevation above rut floor)
       const bermHeight = (isDrifting ? 0.035 : 0.028) + wobble;
-      const bermY = powderSurfaceY + bermHeight;
-      // Smoothly rounded shoulder roll (intermediate height between berm and floor)
-      const shoulderY = rutFloorY + (bermY - rutFloorY) * 0.62;
+
+      const leftBermHeight = powderSurfaceY + bermHeight + leftBermExtraH + driftExtraH;
+      const leftBermWidth = bermWidth + leftBermExtraW + driftExtraW;
+      const leftShoulderY = rutFloorY + (leftBermHeight - rutFloorY) * 0.62;
+
+      const rightBermHeight = powderSurfaceY + bermHeight + rightBermExtraH + driftExtraH;
+      const rightBermWidth = bermWidth + rightBermExtraW + driftExtraW;
+      const rightShoulderY = rutFloorY + (rightBermHeight - rutFloorY) * 0.62;
+
       // Gentle center median spine between skis (4.1cm above rut floor)
       const medianY = powderSurfaceY + 0.016;
       const innerShoulderY = rutFloorY + (medianY - rutFloorY) * 0.60;
@@ -193,13 +230,13 @@ export class CarvedSnowTrail {
       // 19 cross-sectional nodes forming a continuous, soft, parabolic-curved snow sculpture
       const nodes = [
         // 0: Outer left feather (softly blends into untouched snow)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + bermWidth * 1.6), h: 0.008, u: 0.00, alpha: 0.0, isRut: false, wallTilt: 0.0 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 1.6), h: 0.008, u: 0.00, alpha: 0.0, isRut: false, wallTilt: 0.0 },
         // 1: Outer left flank (gentle outer ramp)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + bermWidth * 0.85), h: powderSurfaceY + 0.006, u: 0.05, alpha: 0.65, isRut: false, wallTilt: -0.30 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.85), h: powderSurfaceY + 0.006 + leftBermExtraH * 0.5, u: 0.05, alpha: 0.65, isRut: false, wallTilt: -0.30 },
         // 2: Left berm crest (smooth rounded peak)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + bermWidth * 0.35), h: bermY, u: 0.10, alpha: 1.0, isRut: false, wallTilt: -0.15 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.35), h: leftBermHeight, u: 0.10, alpha: 1.0, isRut: false, wallTilt: -0.15 },
         // 3: Left outer rounded shoulder (soft S-curve roll down into rut)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + shoulderDx * 0.4), h: shoulderY, u: 0.15, alpha: 1.0, isRut: false, wallTilt: 0.55 },
+        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + (shoulderDx + leftBermExtraW * 0.25) * 0.4), h: leftShoulderY, u: 0.15, alpha: 1.0, isRut: false, wallTilt: 0.55 },
         // 4: Left rut outer bowl edge (shallow concave dip)
         { cx: leftCenterX, cz: leftCenterZ, lat: -halfWidth * 0.70, h: rutFloorY + 0.006, u: 0.20, alpha: 1.0, isRut: true, wallTilt: 0.35 },
         // 5: Left rut floor center (ski base trough)
@@ -225,13 +262,13 @@ export class CarvedSnowTrail {
         // 14: Right rut outer bowl edge
         { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth * 0.70, h: rutFloorY + 0.006, u: 0.80, alpha: 1.0, isRut: true, wallTilt: -0.35 },
         // 15: Right outer rounded shoulder (soft S-curve roll up to berm)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + shoulderDx * 0.4, h: shoulderY, u: 0.85, alpha: 1.0, isRut: false, wallTilt: -0.55 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + (shoulderDx + rightBermExtraW * 0.25) * 0.4, h: rightShoulderY, u: 0.85, alpha: 1.0, isRut: false, wallTilt: -0.55 },
         // 16: Right berm crest (smooth rounded peak)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + bermWidth * 0.35, h: bermY, u: 0.90, alpha: 1.0, isRut: false, wallTilt: 0.15 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.35, h: rightBermHeight, u: 0.90, alpha: 1.0, isRut: false, wallTilt: 0.15 },
         // 17: Outer right flank (gentle outer ramp)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + bermWidth * 0.85, h: powderSurfaceY + 0.006, u: 0.95, alpha: 0.65, isRut: false, wallTilt: 0.30 },
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.85, h: powderSurfaceY + 0.006 + rightBermExtraH * 0.5, u: 0.95, alpha: 0.65, isRut: false, wallTilt: 0.30 },
         // 18: Outer right feather (softly blends into untouched snow)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + bermWidth * 1.6, h: 0.008, u: 1.00, alpha: 0.0, isRut: false, wallTilt: 0.0 }
+        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 1.6, h: 0.008, u: 1.00, alpha: 0.0, isRut: false, wallTilt: 0.0 }
       ];
 
       // Populate new slice at index 0..18
@@ -270,6 +307,30 @@ export class CarvedSnowTrail {
 
         // Touchdown handling: zero alpha across air gaps
         this.alphas[i] = isFreshTouchdown ? 0.0 : node.alpha;
+      }
+
+      // Soft Leading-Edge Head Blend:
+      // Smoothly blend opacity across the leading 5 segments (0m to 1.0m behind contact point)
+      // so the trail softly and seamlessly emerges from beneath the ski bases without an abrupt geometric start cut.
+      const headSteps = 5;
+      const headAlphaWeights = [0.0, 0.22, 0.55, 0.82, 0.95];
+      for (let s = 0; s < Math.min(this.count, headSteps); s++) {
+        const headA = headAlphaWeights[s];
+        const offset = s * this.VERTS_PER_SEG;
+        for (let v = 0; v < this.VERTS_PER_SEG; v++) {
+          const idx = offset + v;
+          if (v === 0 || v === 18) {
+            this.alphas[idx] = 0.0;
+          } else {
+            this.alphas[idx] = headA;
+          }
+        }
+      }
+      if (this.count > headSteps) {
+        const offset = headSteps * this.VERTS_PER_SEG;
+        for (let v = 1; v < this.VERTS_PER_SEG - 1; v++) {
+          this.alphas[offset + v] = 1.0;
+        }
       }
 
       this.count = Math.min(this.count + 1, this.maxSegments);

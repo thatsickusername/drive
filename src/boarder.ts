@@ -955,7 +955,8 @@ export class Skier {
         this.isGrounded,
         this.slipAngleDeg,
         this.speed,
-        this.isDrifting
+        this.isDrifting,
+        this.leanAngle
       );
     }
     this.audio.update(this.speed, this.vLateral, this.isGrounded, this.isDrifting, this.gripUtilization);

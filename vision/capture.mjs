@@ -147,13 +147,16 @@ async function run() {
 
     // Apply scenario
     if (target.includes('reference') || scenario.includes('reference')) {
-      console.log('[vision] Executing scenario: Teleport to spawn 1 (Main Summit Glacier Chute) and shred downhill matching reference...');
+      console.log('[vision] Executing scenario: Teleport to spawn 1 (Glacier Chute), accelerate with W, and carve left with A...');
       await page.keyboard.press('Digit1');
       await page.waitForTimeout(500);
       await page.keyboard.down('KeyW');
-      await page.waitForTimeout(2200);
+      await page.waitForTimeout(1800);
       await page.keyboard.up('KeyW');
-      await page.waitForTimeout(6500);
+      await page.keyboard.down('KeyA');
+      await page.waitForTimeout(1200);
+      await page.keyboard.up('KeyA');
+      await page.waitForTimeout(4000);
     } else if (scenario.includes('carve') || scenario.includes('steer')) {
       console.log('[vision] Executing scenario: Teleport to spawn 1 and hold carve steering...');
       await page.keyboard.press('Digit1');
