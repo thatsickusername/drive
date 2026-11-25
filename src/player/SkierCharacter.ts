@@ -1160,10 +1160,10 @@ export class SkierAnimator {
     // Drift Carve: lower pelvis, sit slightly back/down, stronger yaw across fall line & deeper lean
     const driftCarveHipX = 0.20 * s;
     const driftCarveHipZ = -0.02 * p;
-    const driftCarveHipsRx = 0.12 + 0.08 * p;
+    const driftCarveHipsRx = 0.14 + 0.09 * p;
     const driftCarveHipsRy = 0.46 * s;
     const driftCarveHipsRz = -0.36 * s;
-    const driftCrouchDrop = 0.11 * p;
+    const driftCrouchDrop = 0.14 * p;
 
     const carveHipX = THREE.MathUtils.lerp(stdCarveHipX, driftCarveHipX, db);
     const carveHipZ = THREE.MathUtils.lerp(stdCarveHipZ, driftCarveHipZ, db);
@@ -1218,11 +1218,11 @@ export class SkierAnimator {
     const stdCarveRThigh = stdBaseThigh - 0.22 * rightTurn + 0.06 * leftTurn;
     const stdCarveRShin = stdBaseShin + 0.12 * rightTurn - 0.04 * leftTurn;
 
-    const driftBaseThigh = -0.52 - 0.18 * p;
-    const driftBaseShin = 0.42 + 0.14 * p;
-    const driftCarveLThigh = driftBaseThigh - 0.22 * leftTurn + 0.05 * rightTurn;
+    const driftBaseThigh = -0.62 - 0.20 * p; // deeper knee bend
+    const driftBaseShin = 0.52 + 0.16 * p;
+    const driftCarveLThigh = driftBaseThigh - 0.22 * leftTurn + 0.08 * rightTurn;
     const driftCarveLShin = driftBaseShin + 0.12 * leftTurn - 0.04 * rightTurn;
-    const driftCarveRThigh = driftBaseThigh - 0.22 * rightTurn + 0.05 * leftTurn;
+    const driftCarveRThigh = driftBaseThigh - 0.22 * rightTurn + 0.08 * leftTurn;
     const driftCarveRShin = driftBaseShin + 0.12 * rightTurn - 0.04 * leftTurn;
 
     const carveLThigh = THREE.MathUtils.lerp(stdCarveLThigh, driftCarveLThigh, db);
@@ -1230,13 +1230,14 @@ export class SkierAnimator {
     const carveRThigh = THREE.MathUtils.lerp(stdCarveRThigh, driftCarveRThigh, db);
     const carveRShin = THREE.MathUtils.lerp(stdCarveRShin, driftCarveRShin, db);
 
-    const carveLeftHipRz = THREE.MathUtils.lerp(-0.14 * s, -0.14 * s + 0.22 * rightTurn, db);
-    const carveLeftHipRy = THREE.MathUtils.lerp(0, -0.06 * rightTurn, db);
-    const carveLeftAnkleRz = THREE.MathUtils.lerp(0.04 * s, 0.04 * s - 0.12 * rightTurn, db);
+    // Non-carving outside leg pushed further outward (+0.34 / -0.34) with tail-drift flare and aligned ankle canting
+    const carveLeftHipRz = THREE.MathUtils.lerp(-0.14 * s, -0.14 * s + 0.34 * rightTurn, db);
+    const carveLeftHipRy = THREE.MathUtils.lerp(0, -0.09 * rightTurn, db);
+    const carveLeftAnkleRz = THREE.MathUtils.lerp(0.04 * s, 0.04 * s - 0.18 * rightTurn, db);
 
-    const carveRightHipRz = THREE.MathUtils.lerp(-0.14 * s, -0.14 * s - 0.22 * leftTurn, db);
-    const carveRightHipRy = THREE.MathUtils.lerp(0, 0.06 * leftTurn, db);
-    const carveRightAnkleRz = THREE.MathUtils.lerp(0.04 * s, 0.04 * s + 0.12 * leftTurn, db);
+    const carveRightHipRz = THREE.MathUtils.lerp(-0.14 * s, -0.14 * s - 0.34 * leftTurn, db);
+    const carveRightHipRy = THREE.MathUtils.lerp(0, 0.09 * leftTurn, db);
+    const carveRightAnkleRz = THREE.MathUtils.lerp(0.04 * s, 0.04 * s + 0.18 * leftTurn, db);
 
     // 3. Blend Idle vs Carving
     const cb = this.carveBlend;
