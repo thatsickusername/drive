@@ -302,9 +302,7 @@ export class NetworkManager {
   public setTerrainSampler(sampler: (x: number, z: number) => number): void {
     this.terrainSampler = sampler;
     for (const remote of this.remoteSkiers.values()) {
-      if (remote.trail) {
-        remote.trail.setTerrainSampler(sampler);
-      }
+      remote.setTerrainSampler(sampler);
     }
   }
 }

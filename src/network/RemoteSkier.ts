@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { buildSkierCharacter, SkierCharacter } from '../player/character/SkierRig';
+import { buildSkierCharacter, SkierCharacter, applyRagdollPose } from '../player/character/SkierRig';
 import { SkierAnimator } from '../player/character/SkierAnimator';
 import { PALETTES } from '../player/character/SkierPalette';
 import { CarvedSnowTrail } from '../world/trails/CarvedSnowTrail';
+import { VerletRagdollSolver } from '../mechanics/VerletRagdoll';
 
 export type RemoteJumpVariation = 'jump' | 'grab' | 'shifty' | 'daffy' | 'mutegrab' | 'ironcross' | 'nordic';
 
@@ -61,6 +62,10 @@ export class RemoteSkier {
   private currentJumpVariation: RemoteJumpVariation = 'jump';
   private wasCrashing = false;
 
+  // 50Hz Verlet Ragdoll Physics for authentic crash tumbles
+  private ragdoll = new VerletRagdollSolver();
+  private terrainSampler: ((x: number, z: number) => number) | null = null;
+
   // Snow Spray Particle System (glistening plumes during carving, drifting, and braking)
   private sprayParticles: THREE.Points | null = null;
   private readonly sprayCount = 90;
@@ -93,11 +98,19 @@ export class RemoteSkier {
 
     this.trail = new CarvedSnowTrail(scene);
     if (terrainSampler) {
-      this.trail.setTerrainSampler(terrainSampler);
+      this.setTerrainSampler(terrainSampler);
     }
 
     this.initSnowSpray(scene);
     this.createNameTag(pKey);
+  }
+
+  public setTerrainSampler(sampler: (x: number, z: number) => number): void {
+    this.terrainSampler = sampler;
+    this.ragdoll.setTerrainSampler(sampler);
+    if (this.trail) {
+      this.trail.setTerrainSampler(sampler);
+    }
   }
 
   private initSnowSpray(scene: THREE.Scene): void {
@@ -217,6 +230,9 @@ export class RemoteSkier {
     camera: THREE.Camera,
     terrainSampler?: (x: number, z: number) => number
   ): void {
+    if (terrainSampler && !this.terrainSampler) {
+      this.setTerrainSampler(terrainSampler);
+    }
     const now = performance.now() * 0.001;
     if (this.renderTime === 0) {
       this.renderTime = now - this.interpDelay;
@@ -280,30 +296,32 @@ export class RemoteSkier {
 
     // Crash state transitions
     const isCrashing = this.movementState === 3;
-    if (isCrashing && !this.wasCrashing) {
+    if (isCrashing && (!this.wasCrashing || !this.ragdoll.active)) {
       if (this.trail) this.trail.onCrash();
+      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.currentQuat);
+      const linvel = fwd.clone().multiplyScalar(Math.max(4.0, this.currentSpeed));
+      if (this.terrainSampler) {
+        this.ragdoll.setTerrainSampler(this.terrainSampler);
+      }
+      this.ragdoll.initializeSkeleton(this.currentPos, fwd, linvel);
+      if (this.ragdoll.points.length > 0) {
+        this.ragdoll.points[0].pinned = true;
+      }
     } else if (!isCrashing && this.wasCrashing) {
+      this.ragdoll.active = false;
       this.skierRig.resetPose();
       if (this.trail) this.trail.onRespawn();
     }
     this.wasCrashing = isCrashing;
 
     if (isCrashing) {
-      this.animator.update({
-        dt,
-        speed: this.currentSpeed,
-        leanAngle: 0,
-        isGrounded: this.isGrounded,
-        isStaking: false,
-        isDrifting: false,
-        isGliding: false
-      });
-      if (this.skierRig.joints.hips) {
-        this.skierRig.joints.hips.rotation.x = Math.sin(now * 8) * 0.5;
-        this.skierRig.joints.hips.rotation.z = Math.cos(now * 6) * 0.4;
-      }
-      if (this.skierRig.joints.spine) {
-        this.skierRig.joints.spine.rotation.x = 0.6;
+      if (this.ragdoll.points.length >= 21) {
+        this.ragdoll.points[0].pos.copy(this.currentPos);
+        const groundY = this.terrainSampler ? this.terrainSampler(this.currentPos.x, this.currentPos.z) : this.currentPos.y;
+        this.ragdoll.stepSimulation(groundY);
+
+        this.root.position.copy(this.ragdoll.points[0].pos);
+        applyRagdollPose(this.skierRig, this.root, this.ragdoll.points);
       }
     } else {
       // Dynamic procedural animation update

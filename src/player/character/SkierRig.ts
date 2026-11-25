@@ -612,3 +612,128 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
 
   return { root, joints, materials, footContacts, skis, setPalette, resetPose };
 }
+
+// Persistent pre-allocated scratch objects for zero-allocation ragdoll posing
+const _uUp = new THREE.Vector3();
+const _uHipLat = new THREE.Vector3();
+const _uBack = new THREE.Vector3();
+const _uRight = new THREE.Vector3();
+const _basisMat = new THREE.Matrix4();
+const _parentQuatInv = new THREE.Quaternion();
+const _localTarget = new THREE.Vector3();
+const _axisY = new THREE.Vector3(0, 1, 0);
+const _axisNegY = new THREE.Vector3(0, -1, 0);
+const _axisX = new THREE.Vector3(1, 0, 0);
+const _axisNegX = new THREE.Vector3(-1, 0, 0);
+const _worldDir = new THREE.Vector3();
+const _fwd = new THREE.Vector3();
+const _legUp = new THREE.Vector3();
+const _ankleRight = new THREE.Vector3();
+const _ankleNorm = new THREE.Vector3();
+const _targetMat = new THREE.Matrix4();
+const _targetQuat = new THREE.Quaternion();
+
+function orientJoint(
+  joint: THREE.Group | undefined,
+  defaultAxis: THREE.Vector3,
+  worldDir: THREE.Vector3
+): void {
+  if (!joint || !joint.parent) return;
+  if (worldDir.lengthSq() < 1e-4) return;
+  joint.parent.updateMatrixWorld(true);
+  joint.parent.getWorldQuaternion(_parentQuatInv).invert();
+  _localTarget.copy(worldDir).applyQuaternion(_parentQuatInv).normalize();
+  joint.quaternion.setFromUnitVectors(defaultAxis, _localTarget);
+  joint.updateMatrixWorld(true);
+}
+
+function orientAnkle(
+  ankle: THREE.Group | undefined,
+  kneePos: THREE.Vector3,
+  footPos: THREE.Vector3,
+  tipPos: THREE.Vector3,
+  tailPos: THREE.Vector3
+): void {
+  if (!ankle || !ankle.parent) return;
+
+  _fwd.subVectors(tipPos, tailPos).normalize();
+  if (_fwd.lengthSq() < 0.5) _fwd.set(0, 0, 1);
+
+  _legUp.subVectors(kneePos, footPos).normalize();
+  if (_legUp.lengthSq() < 0.5) _legUp.set(0, 1, 0);
+
+  _ankleRight.crossVectors(_legUp, _fwd).normalize();
+  if (_ankleRight.lengthSq() < 0.5) {
+    _ankleRight.set(1, 0, 0);
+    if (Math.abs(_fwd.dot(_ankleRight)) > 0.9) _ankleRight.set(0, 1, 0);
+    _ankleRight.crossVectors(_ankleRight, _fwd).normalize();
+  }
+  _ankleNorm.crossVectors(_fwd, _ankleRight).normalize();
+
+  _targetMat.makeBasis(_ankleRight, _ankleNorm, _fwd);
+  _targetQuat.setFromRotationMatrix(_targetMat);
+
+  ankle.parent.updateMatrixWorld(true);
+  ankle.parent.getWorldQuaternion(_parentQuatInv).invert();
+  ankle.quaternion.copy(_parentQuatInv.multiply(_targetQuat));
+  ankle.updateMatrixWorld(true);
+}
+
+/**
+ * Maps 21 Verlet ragdoll simulation particles directly to character joints and skis.
+ */
+export function applyRagdollPose(
+  character: SkierCharacter,
+  visualNode: THREE.Group,
+  pts: { pos: THREE.Vector3 }[]
+): void {
+  if (pts.length < 21) return;
+
+  // Root joints seated at pelvis particle
+  character.root.position.set(0, 0, 0);
+  character.joints.hips.position.set(0, 0, 0);
+
+  // 1. Torso / Pelvis orientation basis
+  _uUp.subVectors(pts[2].pos, pts[0].pos).normalize();
+  if (_uUp.lengthSq() < 0.5) _uUp.set(0, 1, 0);
+
+  _uHipLat.subVectors(pts[14].pos, pts[11].pos).normalize();
+  if (_uHipLat.lengthSq() < 0.5) _uHipLat.set(1, 0, 0);
+
+  _uBack.crossVectors(_uHipLat, _uUp).normalize();
+  if (_uBack.lengthSq() < 0.5) {
+    _uBack.set(0, 0, 1);
+    if (Math.abs(_uUp.dot(_uBack)) > 0.9) _uBack.set(1, 0, 0);
+    _uBack.crossVectors(_uBack, _uUp).normalize();
+  }
+
+  _uRight.crossVectors(_uUp, _uBack).normalize();
+
+  _basisMat.makeBasis(_uRight, _uUp, _uBack);
+  visualNode.quaternion.setFromRotationMatrix(_basisMat);
+  visualNode.updateMatrixWorld(true);
+
+  // 2. Spine & Neck
+  orientJoint(character.joints.spine, _axisY, _worldDir.subVectors(pts[2].pos, pts[0].pos));
+  orientJoint(character.joints.neck, _axisY, _worldDir.subVectors(pts[4].pos, pts[3].pos));
+
+  // 3. Arms
+  orientJoint(character.joints.leftShoulder, _axisX, _worldDir.subVectors(pts[6].pos, pts[5].pos));
+  orientJoint(character.joints.leftElbow, _axisX, _worldDir.subVectors(pts[7].pos, pts[6].pos));
+  orientJoint(character.joints.rightShoulder, _axisNegX, _worldDir.subVectors(pts[9].pos, pts[8].pos));
+  orientJoint(character.joints.rightElbow, _axisNegX, _worldDir.subVectors(pts[10].pos, pts[9].pos));
+
+  // 4. Legs
+  orientJoint(character.joints.leftHip, _axisNegY, _worldDir.subVectors(pts[12].pos, pts[11].pos));
+  orientJoint(character.joints.leftKnee, _axisNegY, _worldDir.subVectors(pts[13].pos, pts[12].pos));
+  orientJoint(character.joints.rightHip, _axisNegY, _worldDir.subVectors(pts[15].pos, pts[14].pos));
+  orientJoint(character.joints.rightKnee, _axisNegY, _worldDir.subVectors(pts[16].pos, pts[15].pos));
+
+  // 5. Ankles / Skis
+  orientAnkle(character.joints.leftAnkle, pts[12].pos, pts[13].pos, pts[17].pos, pts[18].pos);
+  orientAnkle(character.joints.rightAnkle, pts[15].pos, pts[16].pos, pts[19].pos, pts[20].pos);
+
+  // 6. Tuck poles along forearms during ragdoll tumble
+  if (character.joints.leftPole) character.joints.leftPole.rotation.set(0.6, 0, 0);
+  if (character.joints.rightPole) character.joints.rightPole.rotation.set(0.6, 0, 0);
+}
