@@ -1,110 +1,178 @@
-# Grand Mountain Adventure (GMA) Master Alignment & Realignment Plan
+# Alpine Freeride: Master Refactoring, Modularization & Multiplayer Blueprint
 
-## Core Technical Premise
-This document details the exact, gap-free plan to align this simulation with the extracted **Grand Mountain Adventure Wonderlands** engine (`mechanics/`). All equations, piecewise curves, constants, and control pipelines strictly reflect the extracted C++ physics implementation (`PlayerPhysics.cpp`, `Controls.cpp`) and configuration files (`player.yaml`, `camera.yaml`, `trick_score.yaml`, `posture_ski.yaml`).
+> **Architecture Status:** Production Refactoring & Realtime Multiplayer Implementation  
+> **Target Subsystems:** WebGL / Three.js, Rapier3D WASM, Procedural Terrain, Alpine Physics, WebSocket Multiplayer  
 
 ---
 
-## GMA Extracted Core Reference Specifications
+## 1. Technical Premise & Objectives
 
-| Subsystem | Parameter / Constant | GMA Extracted Value | Source Origin |
+This document establishes the end-to-end plan to transform the codebase from a hybrid prototype (carrying leftover assets from a legacy off-road car engine) into a clean, modular, production-grade alpine skiing simulation with realtime multiplayer synchronization.
+
+### Primary Directives
+1. **Dead Code Purge:** Completely eliminate 26 unreferenced legacy files in `src/world/` and the obsolete `slow_roads_extracted_core/` asset directory.
+2. **Modular Architecture:** Decompose the 1,688-line `SkierCharacter.ts`, 1,137-line `boarder.ts`, and monolithic `main.ts` into single-responsibility domain modules.
+3. **Multiplayer Skier Architecture:** Re-architect `server/index.js` and build client network synchronizers for binary-packed skier state, remote skier interpolation, remote carved snow tracks, and trick broadcasts.
+
+---
+
+## 2. Phase 1: Dead Code & Legacy Asset Removal (Zero Regression)
+
+### 2.1 Files Purged from `src/world/`
+All 26 files have zero callers and zero runtime dependencies:
+* `src/world/slowroads/` (14 files: `alea.js`, `baseTileCache.js`, `biomePresets.js`, `catmullRomCurve3.js`, `hillsMidlineGenerator.js`, `index.js`, `layeredHeightmap.js`, `midlineSpatialIndex.js`, `perlin.js`, `roadMesh.js`, `roadSurveyor.js`, `roadTerrainBlender.js`, `terrainMesh.js`, `vector3.js`)
+* `src/world/managers/` (`RoadMeshManager.ts`, `TerrainChunk.ts`, `TerrainManager.ts`)
+* `src/world/generators/` (`terrainWorker.ts`, `structurePlacer.ts`, `foliageSpawner.ts`)
+* `src/world/math/` (`slowRoadsCore.ts`, `splineCarver.ts`, `noiseLayers.ts` — *retained: `prng.ts`*)
+* `src/world/config/terrainConfig.ts`
+* `src/world/biomes/biomeEvaluator.ts`
+* `src/world/Phase1TestSlope.ts`
+
+### 2.2 Legacy Repositories & Spikes Purged
+* `slow_roads_extracted_core/` (52MB of legacy bike/car 3D models and surveyor demos).
+* `src/player/TrickEngine.ts` (Dead proxy layer superseded by authentic GMA `TrickScoringSystem`).
+
+### 2.3 Verification Gate
+* Execute `npm run build` (`tsc && vite build`) to prove zero module resolution errors.
+
+---
+
+## 3. Phase 2: Modular Subsystem Decomposition
+
+```text
+src/
+├── main.ts                          # Lightweight application bootstrap (<30 lines)
+├── core/
+│   ├── Game.ts                      # Game loop coordinator & 60Hz physics accumulator
+│   ├── Renderer.ts                  # Three.js scene, lighting, ACES tonemapping & fog
+│   ├── PhysicsEngine.ts             # Rapier3D WASM initialization & step driver
+│   └── InputController.ts           # Unified keyboard & gamepad polling
+├── player/
+│   ├── SkierController.ts           # Kinematic/dynamic actor (replaces monolithic boarder.ts)
+│   └── character/
+│       ├── SkierPalette.ts          # Outfit color palettes (coral, ochre, glacier, pine)
+│       ├── SkierGeometry.ts         # Procedural lofted jacket, collar, skis & boots
+│       ├── SkierRig.ts              # Hierarchical bone rig assembly & joint anchoring
+│       └── SkierAnimator.ts         # Procedural IK, poling gait, carving lean & ragdoll blend
+├── mechanics/                       # Pure Grand Mountain Adventure Physics Engine
+│   ├── GmaPlayerPhysics.ts          # 333Hz carving, fall-line gravity & momentum
+│   ├── ControlsProcessor.ts         # Nonlinear steering curves & deadzones
+│   ├── TrickScoring.ts              # Aerial recognition, combo multipliers & stomps
+│   ├── VerletRagdoll.ts             # 50Hz particle crash & tumble solver
+│   ├── PiecewiseCurve.ts            # Speed-dependent turn & drift splines
+│   └── GmaConfig.ts                 # GMA constants, thresholds & enums
+├── world/
+│   ├── AlpineMassif.ts              # 6x6 chunked mesh generator & Rapier colliders
+│   ├── AlpineHeightfield.ts         # 5-layer procedural slope math
+│   ├── shaders/
+│   │   ├── SnowMaterial.ts          # Micro-sparkle PBR snow shader
+│   │   ├── SnowTrailMaterial.ts     # Normal-perturbed carved rut shader
+│   │   └── DetailTexture.ts         # Procedural noise normal maps
+│   ├── trails/
+│   │   └── CarvedSnowTrail.ts       # Dynamic ski track ribbon mesh painter
+│   ├── environment/
+│   │   ├── SkyDome.ts               # Atmospheric gradient sky dome
+│   │   ├── DayNightCycle.ts         # Solar azimuth/elevation & color grading
+│   │   └── AirborneSparkles.ts      # Sun glint particle system
+│   └── math/
+│       └── prng.ts                  # Seeded cyrb128 + mulberry32 PRNG
+├── camera/
+│   ├── CameraDirector.ts            # Dynamic chase cam & GMA isometric tilt-shift
+│   ├── CameraTunerOverlay.ts        # Runtime interactive parameter tuning GUI
+│   └── CameraConfig.ts              # Camera offsets, FOV widening & smoothing
+├── audio/
+│   └── SnowAudio.ts                 # Web Audio procedural wind, carve & thump synth
+└── ui/
+    ├── HudOverlay.ts                # Speedometer, altitude, carve charge & trick HUD
+    └── LightingControls.ts          # Day / Golden Hour / Night mode toggle widget
+```
+
+### 2.1 Audio Decoupling
+* Extract `SnowAudio` out of `src/boarder.ts` into `src/audio/SnowAudio.ts`.
+* Expose clean lifecycle: `init()`, `update(speed, vLateral, isGrounded, isDrifting, grip)`, `playLandThump()`, `playPolePlant()`.
+
+### 2.2 Character Monolith Modularization
+* Split `src/player/SkierCharacter.ts` (1,688 lines) into:
+  1. `src/player/character/SkierPalette.ts` (~60 lines): Palette structures and preset definitions.
+  2. `src/player/character/SkierGeometry.ts` (~250 lines): Procedural buffer geometries (`createLoftedGeometry`, `createFlaredCollarGeometry`, `createAlpineSki`).
+  3. `src/player/character/SkierRig.ts` (~300 lines): Object hierarchy, materials, ski attachments, pole pivots.
+  4. `src/player/character/SkierAnimator.ts` (~700 lines): Procedural IK, poling stride, carving body roll, aero tuck, air spin/flip rotations, ragdoll pose transitions.
+
+### 2.3 Player Controller Modernization
+* Rename `src/boarder.ts` to `src/player/SkierController.ts`.
+* Eliminate dead `SnowTrailRibbon` class.
+* Directly expose `GmaPlayerPhysics.trickScoring` to UI, removing the redundant `TrickEngine` proxy layer.
+
+### 2.4 Application Core & UI Extraction
+* Move game loop, physics stepping, and hotkeys from `main.ts` into `src/core/Game.ts`.
+* Move HUD generation, speedometer, and trick banners into `src/ui/HudOverlay.ts`.
+* Reduce `src/main.ts` to an entry script under 30 lines.
+
+---
+
+## 4. Phase 3: Multiplayer Server & Skier Synchronization Engine
+
+### 4.1 Networking Premise & Architecture
+Transform the legacy 4x4 car relay server (`server/index.js`) into a high-performance, low-latency WebSocket synchronization system for skiers across the 2.4 km × 2.4 km Alvdalen mountain.
+
+```mermaid
+sequenceDiagram
+    participant C1 as Local Skier (Client 1)
+    participant S as WebSocket Relay (server/index.js)
+    participant C2 as Remote Skier (Client 2)
+
+    C1->>S: Join Room (Resort Lobby / Session)
+    S-->>C1: Room Assigned, Client ID, Spawn Assignment
+    Note over C1,S: 20Hz Binary State Transmission (28 Bytes)
+    C1->>S: [Packet: Pos(12B), Quat(8B), Vel(4B), State/Turn(2B), Trick(2B)]
+    S->>C2: Relay Binary Transform
+    Note over C2: RemoteSkier Hermite Interpolation & Carved Track Mesh
+```
+
+### 4.2 Binary Packet Schema (28 Bytes / Tick @ 20Hz)
+To achieve zero-allocation, bandwidth-efficient streaming for mobile and web:
+
+| Field | Offset | Type | Description |
 | :--- | :--- | :--- | :--- |
-| **Physics Sub-step** | `player.deltatime` | `0.003s` (333.3 Hz fixed) | `player.yaml:21` |
-| **Collision Capsule** | `player.radius` | `0.3m` | `player.yaml:22` |
-| **Forward Throttle** | **None** | `Controls.cpp:18` | No forward gas pedal; L/R steering only |
-| **Steering Deadzone**| `DEADZONE` | `0.08` | `Controls.cpp:20` |
-| **Steering Curve** | Quadratic | $\operatorname{sign}(x) \cdot ((|x|-0.08)/0.92)^2$ | `Controls.cpp:28` |
-| **Flat Staking Trigger**| L/R Alternation | $|x| > 0.08$ on $[-20^\circ, 20^\circ]$ | `player.yaml:80` |
-| **Pole Down Duration**| `player.staking.pole_down` | `0.5s` | `player.yaml:80` |
-| **Staking Power** | Base / Initial Kick | $15.0\text{ m/s}^2$ ($+5.0\text{ m/s}^2$ standstill) | `player.yaml:82-83` |
-| **Staking Velocity Cap**| `staking.max_vel` | $0.7 \times 15.0 = 10.5\text{ m/s}$ ($37.8\text{ km/h}$) | `player.yaml:79` |
-| **Steep Slope Boost** | `speedboost.steep_slope` | $2.0\times$ fall-line acceleration | `player.yaml:31` |
-| **Slide Turn Boost** | Impulse at 0.5s | $+2.0\text{ m/s}$ burst | `player.yaml:146-147` |
-| **Drift Milestones** | Durations / Boosts | $[0.7, 1.4, 2.1]\text{s} \to [0.5, 1.2, 1.8]\times$ | `player.yaml:29-30` |
-| **Standard Turn Cap**| `turn_cap_deg.standardturn` | $30.0^\circ$ cap, $98\%$ edge bite grip | `player.yaml:151` |
-| **Sharp Turn Gate** | `duration.sharpturn` | $0.3\text{s}$ gate, $50.0^\circ$ cap | `player.yaml:162-163` |
-| **Sharp Jump Boost** | `rotationboost.sharp_turn_boost` | $2.0\times$ airborne spin acceleration | `player.yaml:41` |
-| **Switch Ski Penalty**| `switch_and_no_twintips` | $10.0\times$ friction drag, $30^\circ$ cap | `player.yaml:58` |
-| **Snowplow Brake** | `player.breaking.power` | $2.5$ deceleration | `player.yaml:73` |
-| **Jump Strength** | `player.jump_strenght` | $+4.0\text{ m/s}$ vertical impulse | `player.yaml:67` |
-| **Trick Hover Lift** | `player.trick_hover_zforce` | $+0.5\text{ m/s}^2$ continuous upward lift | `player.yaml:65` |
-| **Camera View** | Screen Y / Degree Range | $0.15$ (bottom 15%), $38^\circ\text{–}80^\circ$ pitch | `camera.yaml:14-17` |
+| `clientId` | 0 | `uint8` | Unique player slot / ID (1–64) |
+| `posX` | 1 | `float32` | World X coordinate (m) |
+| `posY` | 5 | `float32` | World Y elevation (m) |
+| `posZ` | 9 | `float32` | World Z coordinate (m) |
+| `yaw` | 13 | `int16` | Quantized heading ($-\pi$ to $\pi$ $\to$ `[-32768, 32767]`) |
+| `pitch` | 15 | `int16` | Quantized terrain pitch |
+| `roll` | 17 | `int16` | Quantized carve lean / trick roll |
+| `speed` | 19 | `uint16` | Speed in $0.01\text{ m/s}$ (up to $655\text{ m/s}$) |
+| `turnType` | 21 | `uint8` | Standard, Sharp, Slide, Overturn |
+| `movementState` | 22 | `uint8` | Standing, Gliding, Airborne, Crashing |
+| `paletteId` | 23 | `uint8` | Outfit color index (0–3) |
+| `trickId` | 24 | `uint8` | Active aerial grab / spin id |
+| `flags` | 25 | `uint8` | Bit 0: Grounded, Bit 1: Twintips, Bit 2: Staking, Bit 3: Brake |
+| *Reserved* | 26 | `uint16` | Future expansion / ping timestamp |
+
+### 4.3 Server Modernization (`server/index.js`)
+* Replace hardcoded 4x4 car slots (`Olive Green`, `Rescue Orange`, etc.) with dynamic skier session management.
+* Support multiple room instances (`default-resort`, custom room codes).
+* Broadcast join/leave lifecycle events with assigned outfit palettes.
+* Broadcast binary transforms to all other peers in the room with `ws._socket.setNoDelay(true)`.
+
+### 4.4 Client Network Subsystem
+* `src/network/NetworkManager.ts`: Handles WebSocket connection, reconnection backoff, packet serialization/deserialization.
+* `src/network/RemoteSkier.ts`:
+  * Manages remote player instances with `SkierRig` and `SkierAnimator`.
+  * Employs snapshot interpolation (Hermite position smoothing, SLERP quaternion rotation) across a 100ms jitter buffer.
+  * Drives dedicated `CarvedSnowTrail` instances for each remote skier so their ski ruts appear on the snow in real time.
+  * Renders remote skier name tags and trick popups.
 
 ---
 
-## Phase 1: Pure GMA Movement, Momentum & Carving Realignment
+## 5. Phase 4: Production Deployment & Verification
 
-Ensure the physics loop strictly replicates GMA downhill acceleration, skate wiggling on flats, sidecut carving, and high-speed momentum.
+### 5.1 Configuration & Docs Alignment
+* Update `package.json`: Rebrand name from `drive-game` to `alpine-freeride-game`.
+* Update `render.yaml` & `DEPLOYMENT.md`: Replace `off-road-4x4-coop` branding with `alpine-freeride`.
+* Update `PROJECT.md`: Comprehensive technical document reflecting only active alpine skiing and procedural massif systems.
 
-- [x] **1.1 Steep Slope Acceleration Multiplier (`speedboost.steep_slope: 2.0`)**
-  - [x] On downhill slopes steeper than $20^\circ$, scale fall-line gravitational acceleration smoothly up to $2.0\times$ (`player.speedboost.steep_slope: 2`).
-  - [x] Allow downhill skiers to accelerate organically from $40\rightarrow 70\rightarrow 100+\text{ km/h}$ down alpine chutes without artificial ceilings.
-- [x] **1.2 Authentic Flat Snow Skate & Wiggle Dynamics**
-  - [x] Enforce pure left/right stick waggle propulsion on flat snow ($|x| > 0.08$ alternation).
-  - [x] Pole down duration: $0.5\text{s}$ per plant (`player.staking.pole_down: 0.5`).
-  - [x] Standstill push kick: $+20.0\text{ m/s}^2$ ($15.0 + 5.0$) when $v < 1.0\text{ m/s}$.
-  - [x] Curve gently around the planted pole while pushing, transitioning into fluid skate stride.
-- [x] **1.3 Sidecut Edge Bite & Momentum Preservation**
-  - [x] Carving across the fall line aligns velocity to ski heading with $98\%$ edge grip without loss of tangential kinetic energy.
-  - [x] Slide Turn (Key E / Gamepad B) drops grip to $85\%$ to permit transverse snow sliding and sprays, injecting $+2.0\text{ m/s}$ at $0.5\text{s}$ and milestone boosts.
-- [x] **1.4 Snowplow Wedge Braking**
-  - [x] Holding Key S / Gamepad Left Trigger applies active $2.5\times$ deceleration, bringing skis to a halt within 1–2s.
-
----
-
-## Phase 2: Dynamic Third-Person Chase Camera (Race-Car Style)
-
-Dynamic third-person chase camera trailing closely behind the skier with speed-based dynamic FOV, carve lead-in offset, asymmetric elastic lag, and airborne touchdown pitch.
-
-- [x] **2.1 Close Third-Person Follow Geometry**
-  - [x] Base follow distance: 5.2m to 4.2m with responsive tight tracking.
-- [x] **2.2 High-Velocity Dynamic FOV Expansion**
-  - [x] 55° idle widening to 80° at speed + carve pump kick surges.
-- [x] **2.3 Carve Apex Lead-In & Asymmetric Elastic Lag**
-  - [x] Lookahead target biases into turn apex with asymmetric forward/lateral lag dampening.
-
----
-
-## Phase 3: Aerial Trick Engine & Freestyle Ski Grabs (`trick_score.yaml`)
-
-Implement GMA's aerial hangtime, 3-axis rotation dynamics, safety grabs, and scoring multiplier engine.
-
-- [ ] **3.1 Airborne Dynamics & Hover Lift (`player.trick_hover_zforce: 0.5`)**
-  - [ ] Jump pop: instant $+4.0\text{ m/s}$ vertical impulse (`player.jump_strenght: 4.0`).
-  - [ ] Trick Hover Z-Force: $+0.5\text{ m/s}^2$ continuous upward lift while executing spins, flips, or rolls.
-  - [ ] Air forward aerodynamic tuck: rotate skier $13.7^\circ$ forward (`player.air_bend_down_rad: 0.24`).
-- [ ] **3.2 Three-Axis Aerial Rotations (Spins, Flips, Rolls)**
-  - [ ] Right stick X / Keys: Spin (Yaw) at $10.0\text{ rad/s}^2$ accel, $15.0\text{ rad/s}^2$ decel.
-  - [ ] Right stick Y / Keys: Flip (Frontflip/Backflip) at $8.0\text{ rad/s}^2$ accel, $8.0\text{ rad/s}^2$ decel.
-  - [ ] Lincoln Loop / Cork: Roll at $8.0\text{ rad/s}^2$ accel (`cork.speed: 2.0`, `cork.max_offset: 1.0`).
-- [ ] **3.3 Freestyle Ski Grabs & Scoring System**
-  - [ ] Authentic grabs: Safety Grab, Mute, Japan, Tail Grab.
-  - [ ] Combo multiplier calculation, airtime points, and touchdown alignment evaluation (`trick_score.yaml`).
-
----
-
-## Phase 4: Verlet Ragdoll Crash Solver & Recovery (`verlet.yaml`)
-
-Replicate GMA's 50 Hz particle Verlet ragdoll solver during high-impact wipeouts and cliff drops.
-
-- [ ] **4.1 Crash Impact Thresholds**
-  - [ ] Ground crash threshold: $26.0\text{ m/s}$ normal impact (`player.collissions.ground.crash_mag: 26.0`).
-  - [ ] Obstacle crash threshold: $40.0\text{ m/s}$ impact (`player.collissions.object.crash_mag: 40.0`).
-  - [ ] Touchdown misalignment wipeouts (landing sideways $> 45^\circ$).
-- [ ] **4.2 50 Hz Verlet Particle Skeleton Solver**
-  - [ ] 7-node articulated ragdoll skeleton running 5 relaxation iterations per step.
-  - [ ] Ground bounce restitution $0.3$, friction $0.8$, gravity $29.43\text{ m/s}^2$, and 2.5s recovery.
-
----
-
-## Phase 5: Audio, Visual FX & Environmental Polish
-
-Replicate GMA's signature audio feedback, dual ski trail ribbons, and instanced pine grove rendering.
-
-- [ ] **5.1 Procedural Snow Audio Synthesis**
-  - [ ] Slicing high-frequency edge sound during clean high-speed carves.
-  - [ ] Deep hollow snowplow roar during slide turns and snowplow braking.
-  - [ ] Wind rush noise dynamically mapped to airspeed ($0\text{–}120\text{ km/h}$).
-- [ ] **5.2 Dual Ski Trail Ribbons & Snow Spray Particles**
-  - [ ] Dual independent ski track ribbons on snow surface.
-  - [ ] Directional snow spray plumes bursting laterally from carved edges.
+### 5.2 Verification Gates
+1. **Compilation Gate:** `npm run build` cleanly succeeds with zero warnings.
+2. **Visual Parity Gate:** `node vision/capture.mjs` confirms layout, colors, and animations match reference captures.
+3. **Multiplayer Local Gate:** Open two browser tabs on `http://localhost:3001` to verify dual-skier synchronization, carving trails, and trick scoring.
