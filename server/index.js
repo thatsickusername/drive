@@ -10,12 +10,8 @@ const DIST_DIR = path.resolve(__dirname, '../dist');
 
 const PORT = process.env.PORT || 3001;
 
-const SLOTS = [
-  { slotIndex: 0, spawnPos: [-3.0, 1.05, 0.0], spawnYaw: 0, colorHex: 0x1b4332, colorName: 'Olive Green' },
-  { slotIndex: 1, spawnPos: [3.0, 1.05, 0.0], spawnYaw: 0, colorHex: 0xd35400, colorName: 'Rescue Orange' },
-  { slotIndex: 2, spawnPos: [-6.0, 1.05, 0.0], spawnYaw: 0, colorHex: 0xc2b280, colorName: 'Expedition Sand' },
-  { slotIndex: 3, spawnPos: [6.0, 1.05, 0.0], spawnYaw: 0, colorHex: 0x2980b9, colorName: 'Glacier Blue' }
-];
+const PALETTE_NAMES = ['Coral Flare', 'Golden Ochre', 'Glacier Teal', 'Alpine Pine'];
+const MAX_SLOTS = 64;
 
 const MIME_TYPES = {
   '.html': 'text/html',
@@ -42,7 +38,7 @@ const server = http.createServer((req, res) => {
   const safeRelativePath = path.normalize(urlPath).replace(/^(\.\.[/\\])+/, '');
   let targetPath = path.join(DIST_DIR, safeRelativePath === '/' || safeRelativePath === '\\' ? 'index.html' : safeRelativePath);
 
-  // If file doesn't exist or is a folder, fallback to index.html for SPA routing
+  // Fallback to index.html for SPA routing if not found or is directory
   if (!fs.existsSync(targetPath) || fs.statSync(targetPath).isDirectory()) {
     targetPath = path.join(DIST_DIR, 'index.html');
   }
@@ -61,41 +57,44 @@ const server = http.createServer((req, res) => {
   }
 
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Off-Road 4x4 Co-op Server is running. Run `npm run build` to generate production client assets.');
+  res.end('Alpine Freeride Server running. Run `npm run build` to build client assets.');
 });
 
 const wss = new WebSocketServer({ server });
 
 /**
- * @typedef {Object} ClientSession
- * @property {string} id
+ * @typedef {Object} SkierSession
+ * @property {number} id
  * @property {string} room
  * @property {number} slotIndex
- * @property {Object} slot
+ * @property {number} paletteId
+ * @property {string} paletteName
  * @property {WebSocket} ws
  */
 
-/** @type {Map<string, Map<string, ClientSession>>} */
+/** @type {Map<string, Map<number, SkierSession>>} */
 const rooms = new Map();
 
-let nextClientId = 1;
-
 wss.on('connection', (ws) => {
-  // Disable Nagle's algorithm for immediate low-latency packet delivery
   if (ws._socket) {
     ws._socket.setNoDelay(true);
   }
 
-  const clientId = `p_${nextClientId++}_${Math.random().toString(36).substring(2, 6)}`;
-  /** @type {ClientSession | null} */
+  /** @type {SkierSession | null} */
   let currentSession = null;
 
   ws.on('message', (raw, isBinary) => {
-    // 1. High-Performance Zero-Copy Binary Relay for vehicle transforms
+    // 1. High-Performance Zero-Copy 28-Byte Binary Relay for skier transforms @ 20Hz
     if (isBinary) {
       if (!currentSession) return;
       const roomMembers = rooms.get(currentSession.room);
       if (!roomMembers) return;
+
+      // Stamp the sender's verified clientId at offset 0 if buffer matches 28B schema
+      if (Buffer.isBuffer(raw) && raw.length >= 28) {
+        raw.writeUInt8(currentSession.id, 0);
+      }
+
       for (const [id, peerSession] of roomMembers) {
         if (id !== currentSession.id && peerSession.ws.readyState === WebSocket.OPEN) {
           peerSession.ws.send(raw, { binary: true });
@@ -113,47 +112,62 @@ wss.on('connection', (ws) => {
     }
 
     if (msg.type === 'join') {
-      const roomCode = (msg.room || 'default').toUpperCase().trim().slice(0, 16);
+      const roomCode = (msg.room || 'default-resort').toUpperCase().trim().slice(0, 16);
       if (!rooms.has(roomCode)) {
         rooms.set(roomCode, new Map());
       }
       const roomMembers = rooms.get(roomCode);
 
-      if (roomMembers.size >= SLOTS.length) {
+      if (roomMembers.size >= MAX_SLOTS) {
         ws.send(JSON.stringify({ type: 'room_full', room: roomCode }));
         return;
       }
 
-      // Pick the lowest available slot index
+      // Pick the lowest available slot index (0 to 63)
       const occupiedSlots = new Set([...roomMembers.values()].map((s) => s.slotIndex));
       let assignedIndex = 0;
-      for (let i = 0; i < SLOTS.length; i++) {
+      for (let i = 0; i < MAX_SLOTS; i++) {
         if (!occupiedSlots.has(i)) {
           assignedIndex = i;
           break;
         }
       }
 
-      const slotConfig = { id: clientId, ...SLOTS[assignedIndex] };
+      const assignedId = assignedIndex + 1; // 1 to 64
+      const paletteId = assignedIndex % PALETTE_NAMES.length;
+      const paletteName = PALETTE_NAMES[paletteId];
+
       currentSession = {
-        id: clientId,
+        id: assignedId,
         room: roomCode,
         slotIndex: assignedIndex,
-        slot: slotConfig,
+        paletteId,
+        paletteName,
         ws
       };
 
-      roomMembers.set(clientId, currentSession);
+      roomMembers.set(assignedId, currentSession);
+
+      // Existing peers in this resort room
+      const existingPeers = [...roomMembers.values()]
+        .filter((s) => s.id !== assignedId)
+        .map((s) => ({
+          id: s.id,
+          slotIndex: s.slotIndex,
+          paletteId: s.paletteId,
+          paletteName: s.paletteName
+        }));
 
       // Notify joining player
-      const existingPeers = [...roomMembers.values()]
-        .filter((s) => s.id !== clientId)
-        .map((s) => s.slot);
-
       ws.send(
         JSON.stringify({
           type: 'init',
-          self: slotConfig,
+          self: {
+            id: assignedId,
+            slotIndex: assignedIndex,
+            paletteId,
+            paletteName
+          },
           peers: existingPeers,
           room: roomCode
         })
@@ -162,10 +176,15 @@ wss.on('connection', (ws) => {
       // Notify other peers in room
       const joinNotification = JSON.stringify({
         type: 'peer_joined',
-        peer: slotConfig
+        peer: {
+          id: assignedId,
+          slotIndex: assignedIndex,
+          paletteId,
+          paletteName
+        }
       });
       for (const [id, peerSession] of roomMembers) {
-        if (id !== clientId && peerSession.ws.readyState === WebSocket.OPEN) {
+        if (id !== assignedId && peerSession.ws.readyState === WebSocket.OPEN) {
           peerSession.ws.send(joinNotification);
         }
       }
@@ -176,15 +195,17 @@ wss.on('connection', (ws) => {
     const roomMembers = rooms.get(currentSession.room);
     if (!roomMembers) return;
 
-    if (msg.type === 'state') {
-      const relayPayload = JSON.stringify({
-        type: 'peer_state',
+    if (msg.type === 'trick') {
+      // Broadcast trick landing event to room
+      const trickPayload = JSON.stringify({
+        type: 'peer_trick',
         id: currentSession.id,
-        state: msg.state
+        name: msg.name,
+        points: msg.points
       });
       for (const [id, peerSession] of roomMembers) {
         if (id !== currentSession.id && peerSession.ws.readyState === WebSocket.OPEN) {
-          peerSession.ws.send(relayPayload);
+          peerSession.ws.send(trickPayload);
         }
       }
     } else if (msg.type === 'respawn') {
@@ -192,44 +213,42 @@ wss.on('connection', (ws) => {
         type: 'peer_respawn',
         id: currentSession.id,
         pos: msg.pos,
-        yaw: msg.yaw
+        heading: msg.heading
       });
       for (const [id, peerSession] of roomMembers) {
         if (id !== currentSession.id && peerSession.ws.readyState === WebSocket.OPEN) {
           peerSession.ws.send(respawnPayload);
         }
       }
-    } else if (msg.type === 'ping') {
-      ws.send(JSON.stringify({ type: 'pong', t: msg.t }));
     }
   });
 
-  const handleDisconnect = () => {
+  const cleanup = () => {
     if (!currentSession) return;
-    const roomCode = currentSession.room;
-    const roomMembers = rooms.get(roomCode);
+    const roomMembers = rooms.get(currentSession.room);
     if (roomMembers) {
       roomMembers.delete(currentSession.id);
-      const leaveNotification = JSON.stringify({
-        type: 'peer_left',
-        id: currentSession.id
-      });
-      for (const peerSession of roomMembers.values()) {
-        if (peerSession.ws.readyState === WebSocket.OPEN) {
-          peerSession.ws.send(leaveNotification);
-        }
-      }
       if (roomMembers.size === 0) {
-        rooms.delete(roomCode);
+        rooms.delete(currentSession.room);
+      } else {
+        const leaveNotification = JSON.stringify({
+          type: 'peer_left',
+          id: currentSession.id
+        });
+        for (const [, peerSession] of roomMembers) {
+          if (peerSession.ws.readyState === WebSocket.OPEN) {
+            peerSession.ws.send(leaveNotification);
+          }
+        }
       }
     }
     currentSession = null;
   };
 
-  ws.on('close', handleDisconnect);
-  ws.on('error', handleDisconnect);
+  ws.on('close', cleanup);
+  ws.on('error', cleanup);
 });
 
 server.listen(PORT, () => {
-  console.log(`[Multiplayer Server] Listening on port ${PORT}`);
+  console.log(`Alpine Freeride 3D Server listening on port ${PORT}`);
 });

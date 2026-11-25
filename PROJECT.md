@@ -1,152 +1,240 @@
-# Project Architecture & Handoff Guide
+# Alpine Freeride: Project Architecture & Technical Specification
+
+> **Platform:** 3D Browser-Based Alpine Freeride & Ski Simulation  
+> **Core Stack:** TypeScript, Three.js (WebGL PBR), Rapier3D (WASM Physics), Vite 5  
+> **Status:** Active Production Specification (Post-Legacy Cleanup)  
+
+---
 
 ## 1. Project Overview & Scope
-This project is a high-performance 3D browser-based simulation platform built with **TypeScript**, **Three.js** (WebGL PBR rendering), and **Rapier3D** (WebAssembly physics). 
 
-The platform supports two major simulation modes:
-1. **Alpine Freeride (Grand Mountain Adventure Ski Resort):**
-   - A single massive 2.4 km × 2.4 km tilted escarpment (Alvdalen massif) sloping from a high alpine backwall (North, $z = -1200$, 520m summit) down to a wide flat frozen river lake basin (South, $z > 850$, $y = 0$).
-   - Physics-driven snowboard freeride controller with carving, edge bite, surface-dependent friction (powder, piste, rock, ice), jump pop, and dynamic slope orientation.
-   - Real-time aerial Trick Engine scoring airtime, grabs (Mute, Indie, Nose, Tail), multi-axis spins (180°–720°), front/back flips, combo multipliers, and crash detection.
-   - Dynamic third-person chase camera with velocity-lookahead lag and debug Fly-Cam inspection mode.
-2. **Procedural Off-Road Vehicle Simulation (Legacy / Dual-Stack):**
-   - 4-wheel independent multi-probe raycast suspension, dual-range transfer case (**4H** and **4L Crawl 49.5:1**), automatic transmission with slope-lock, fluid torque converter simulation, and combined tire friction ellipse.
-   - Infinite multi-pass heightfield terrain streaming pipeline with continuous SDF trail networks, river ravines, structure pads, and WebSocket binary transform multiplayer sync.
+**Alpine Freeride** is a high-performance 3D ski and snowboard simulation inspired by *Grand Mountain Adventure* (GMA). The game simulates freeride skiing down a massive 2.4 km × 2.4 km inclined alpine massif (*Alvdalen*), dropping 520 vertical meters from high glacial peaks down into a frozen valley basin.
+
+### Key Capabilities
+* **Alpine Freeride Simulation:**
+  * Procedural low-poly skier rig with real-time inverse kinematics (poling strides, carving body lean, tucking, jump pops, aerial 3-axis spins and flips).
+  * High-fidelity physics running authentic GMA mechanics: sidecut carving, dynamic edge bite grip, transverse slide drift boosts, hockey stop braking, switch riding, and a 50 Hz Verlet particle ragdoll crash solver.
+  * Realtime aerial trick scoring system tracking airtime, grabs (Safety, Mute, Japan, Tail), spins (180°–720°), flips, combo multipliers, and landing stomps.
+* **Procedural Alpine Massif:**
+  * 2.4 km × 2.4 km inclined continuous escarpment ($x \in [-1200, 1200]$, $z \in [-1200, 1200]$) generated via a 5-layer mathematical model.
+  * 6×6 chunked Three.js meshes with Rapier3D WebAssembly heightfield colliders, skirts, vertex-colored slope biomes, and instanced pine groves.
+* **Atmospheric PBR Shading & Snow Trails:**
+  * Micro-sparkle snow surface PBR shader with leeward shadow coloring and procedural normal perturbation.
+  * Dynamic carved ski ruts generated as continuous ribbon meshes with normal-mapped rut indentation.
+  * Atmospheric sky dome, diurnal Day/Golden/Night cycle, and glistening airborne sun glint crystals.
+* **Presentation & Inspection Suite:**
+  * Dynamic third-person trailing follow camera with speed lag, asymmetric elastic damping, and FOV expansion.
+  * GMA Isometric Tilt-Shift perspective mode (`[V]` key).
+  * In-game runtime Camera Tuner Overlay (`[O]` key) and 6DOF debug Fly-Cam (`[C]` key).
+  * Instant mountain teleport hub across 6 mountain peaks (`[1]`–`[6]` hotkeys).
 
 ---
 
 ## 2. Technical Stack & Dependencies
-* **Language & Runtime:** TypeScript (strict mode enabled in `tsconfig.json`).
-* **Bundler / Dev Server:** Vite 5 (`vite`, `vite-plugin-wasm`, `vite-plugin-top-level-await`).
-* **Graphics:** `three` (^0.170.0) with ACESFilmic tone mapping, PCFSoftShadowMap, vertex-colored low-poly terrain, and procedural instanced vegetation.
-* **Physics:** `@dimforge/rapier3d-compat` (^0.21.0) running WASM multithreaded/SIMD with fixed 60Hz timestep accumulation.
-* **Procedural Math:** Seeded `cyrb128` + `mulberry32` PRNG wrapped 2D simplex noise with domain warping and smoothstep evaluators.
-* **Camera & Inputs:** Unified keyboard/gamepad controller with gamepad deadzone filtering, smooth mouse-look Euler rotation, and hotkey location teleports (1–6).
+
+* **Language & Runtime:** TypeScript 5 (Strict mode enabled in `tsconfig.json`).
+* **Bundler & Tooling:** Vite 5 with `vite-plugin-wasm` and `vite-plugin-top-level-await`.
+* **Graphics Engine:** Three.js (^0.170.0) with ACESFilmic tone mapping, PCFSoftShadowMap, custom GLSL shader materials, and buffer geometry merging.
+* **Physics Engine:** `@dimforge/rapier3d-compat` (^0.21.0) running WebAssembly with 60Hz fixed timestep accumulation.
+* **Procedural Math:** Seeded `cyrb128` + `mulberry32` PRNG with continuous 2D simplex noise and domain warping.
+* **Visual Regression Harness:** Playwright automated screenshot testing suite in `vision/`.
 
 ---
 
 ## 3. Directory & File Structure
+
+The `src/` tree contains exactly 26 active, reachable modules:
+
 ```text
 drive/
-├── .gitignore               # Tracks sources, ignores node_modules/ and dist/
-├── AGENTS.md                # Operating context guardrails & command safety rules
-├── PROJECT.md               # This project architecture & handoff specification
-├── index.html               # Main HTML entry point containing #game-canvas
-├── package.json             # NPM dependencies & build scripts
-├── tsconfig.json            # TypeScript compiler configuration
-├── vite.config.ts           # Vite bundler plugins (WASM + Top-Level Await)
+├── .gitignore                          # Git tracking exclusions
+├── AGENTS.md                           # Operating guardrails & command safety rules
+├── DEPLOYMENT.md                       # Production deployment guide
+├── Dockerfile                          # Multi-stage production container build
+├── index.html                          # Main HTML entry point containing #game-canvas
+├── package.json                        # Dependencies, scripts & build pipelines
+├── PLAN.MD                             # Refactoring roadmap & multiplayer blueprint
+├── PROJECT.md                          # This architecture specification
+├── render.yaml                         # Cloud web service deployment config
+├── tsconfig.json                       # TypeScript compiler options
+├── vite.config.ts                      # Vite WASM and top-level await plugins
 ├── server/
-│   └── index.js             # WebSocket multiplayer relay server
+│   └── index.js                        # HTTP production asset server & WebSocket relay
+├── vision/                             # Automated screenshot visual regression suite
+│   ├── capture.mjs                     # Playwright capture automation harness
+│   ├── reference/                      # Acceptance criteria baseline screenshots
+│   └── screenshots/                    # Generated test runs
+├── mechanics/                          # GMA C++ & YAML Reference Specifications
+│   ├── Controls.cpp / .hpp             # Extracted steering curve implementation
+│   ├── PlayerPhysics.cpp / .hpp        # Extracted 333Hz carving & fall-line physics
+│   ├── VerletRagdoll.cpp / .hpp        # Extracted 50Hz particle ragdoll solver
+│   ├── TrickScoring.cpp / .hpp         # Extracted trick scoring equations
+│   └── config/*.yaml                   # 34 decrypted GMA parameter files
+├── terrain_and_rendering/              # GMA Shader & Environment Reference Specs
+│   ├── shaders/Ground/*.glsl           # Decrypted ground snow & ski mark shaders
+│   ├── shaders/Items/*.glsl            # Decrypted particle & foliage shaders
+│   └── lighting_and_seasons/           # 20 environmental lighting & atmosphere presets
 └── src/
-    ├── main.ts              # Game bootstrap, main loop, HUD, hotkeys & spawn director
-    ├── boarder.ts           # Grand Mountain Adventure Snowboard Controller (GMA physics)
-    ├── physics.ts           # Rapier3D world initialization & 60Hz accumulator
-    ├── renderer.ts          # Three.js scene, camera, lighting (sun + hemi) & fog setup
-    ├── camera.ts            # Dynamic follow camera director & free-flying Fly-Cam
-    ├── input.ts             # Unified keyboard and gamepad input controller
-    ├── car.ts               # Off-road vehicle controller (raycast suspension & drivetrain)
-    ├── map.ts               # Proving ground testing map and obstacle colliders
-    ├── remote-car.ts        # Multiplayer kinematic interpolation visualization
+    ├── main.ts                         # Lightweight application bootstrap (<20 lines)
+    ├── core/
+    │   ├── Game.ts                     # Game loop coordinator & 60Hz physics accumulator
+    │   ├── Renderer.ts                 # Three.js scene, lighting, ACES tonemapping & fog
+    │   ├── PhysicsEngine.ts            # Rapier3D WASM initialization & step driver
+    │   └── InputController.ts          # Unified keyboard & gamepad polling
     ├── player/
-    │   ├── SnowboardController.ts # Legacy snowboard prototype
-    │   └── TrickEngine.ts         # Airborne trick, grab, spin, flip & score evaluator
-    ├── world/               # Procedural Alpine & Terrain Pipelines
-    │   ├── alpineHeightfield.ts   # 5-Layer Alvdalen Inclined Massif Procedural Engine
-    │   ├── AlpineMassif.ts        # 6x6 Chunked Meshes, Rapier Colliders, Ice & Pine Groves
-    │   ├── Phase1TestSlope.ts     # Minimalist debug test ramp
-    │   ├── biomes/
-    │   │   └── biomeEvaluator.ts  # Legacy slope/moisture/altitude vertex coloring
-    │   ├── config/
-    │   │   └── terrainConfig.ts   # Infinite wasteland chunk configuration
-    │   ├── generators/
-    │   │   ├── terrainWorker.ts   # Web Worker for threaded chunk generation
-    │   │   ├── structurePlacer.ts # POI sites & pad flattening
-    │   │   └── foliageSpawner.ts  # Foliage & boulder generator
-    │   ├── managers/
-    │   │   ├── TerrainChunk.ts    # Streaming chunk container
-    │   │   └── TerrainManager.ts  # Chunk streaming pool & LOD queue
+    │   ├── SkierController.ts          # Kinematic/dynamic actor
+    │   └── character/
+    │       ├── SkierPalette.ts         # Outfit color palettes (coral, ochre, glacier, pine)
+    │       ├── SkierGeometry.ts        # Procedural lofted jacket, collar, skis & boots
+    │       ├── SkierRig.ts             # Hierarchical bone rig assembly & joint anchoring
+    │       └── SkierAnimator.ts        # Procedural IK, poling gait, carving lean & ragdoll blend
+    ├── mechanics/                      # Pure GMA Physics & Kinematics Subsystem
+    │   ├── ControlsProcessor.ts        # Input deadzones, quadratic steering curves
+    │   ├── GmaConfig.ts                # Physics constants, thresholds & enums
+    │   ├── GmaPlayerPhysics.ts         # 333Hz carving, fall-line gravity & momentum
+    │   ├── PiecewiseCurve.ts           # Spline evaluations for speed-dependent turns
+    │   ├── TrickScoring.ts             # Aerial scoring, combos & landing evaluator
+    │   └── VerletRagdoll.ts            # 50Hz particle crash & recovery solver
+    ├── camera/
+    │   ├── CameraDirector.ts           # Dynamic chase cam & GMA isometric tilt-shift
+    │   ├── CameraTunerOverlay.ts       # Runtime interactive parameter tuning GUI
+    │   └── CameraConfig.ts             # Camera offsets, FOV widening & smoothing
+    ├── world/                          # Alpine Massif & Environmental Systems
+    │   ├── AlpineMassif.ts             # 6x6 chunked mesh generator & Rapier colliders
+    │   ├── alpineHeightfield.ts        # 5-layer procedural slope math
+    │   ├── shaders/
+    │   │   ├── SnowMaterial.ts         # Micro-sparkle PBR snow terrain shader
+    │   │   ├── SnowTrailMaterial.ts    # Normal-perturbed carved rut shader
+    │   │   └── DetailTexture.ts        # Procedural snow normal and roughness maps
+    │   ├── trails/
+    │   │   └── CarvedSnowTrail.ts      # Dynamic ribbon mesh painter for carved tracks
+    │   ├── environment/
+    │   │   ├── SkyDome.ts              # Atmospheric gradient sky dome
+    │   │   ├── DayNightCycle.ts        # Diurnal solar pathing & color grading
+    │   │   └── AirborneSparkles.ts     # Ambient glistening sun crystal particles
     │   └── math/
-    │       ├── prng.ts            # Deterministic cyrb128 hash + mulberry32 PRNG
-    │       ├── noiseLayers.ts     # Wasteland noise layers
-    │       └── splineCarver.ts    # Road & trail spline carver
+    │       └── prng.ts                 # Deterministic cyrb128 hash + mulberry32 PRNG
+    ├── audio/
+    │   └── SnowAudio.ts                # Procedural Web Audio wind, carve & thump synth
+    ├── ui/
+    │   ├── HudOverlay.ts               # Speedometer, altitude, carve charge & trick HUD
+    │   └── LightingControls.ts         # Day / Golden Hour / Night mode toggle widget
     └── network/
-        ├── binary-sync.ts         # Binary transform serialization
-        ├── interpolator.ts        # Snapshot interpolation buffer
-        ├── network-manager.ts     # WebSocket connection manager
-        └── protocol.ts            # Network packet schemas
+        ├── NetworkManager.ts           # WebSocket connection, 20Hz binary serialization
+        └── RemoteSkier.ts              # Remote skier interpolation, rig, animator, tracks
 ```
 
 ---
 
-## 4. Subsystem Breakdown & Implementation Details
+## 4. Subsystem Breakdown & Architecture
 
 ### 4.1 Alvdalen Alpine Massif (`src/world/alpineHeightfield.ts` & `AlpineMassif.ts`)
 
-The mountain is modeled as a 2.4 km × 2.4 km single inclined massif ($x \in [-1200, 1200]$, $z \in [-1200, 1200]$) structured into 5 procedural mathematical layers:
+The mountain is modeled as a 2.4 km × 2.4 km single inclined massif ($x \in [-1200, 1200]$, $z \in [-1200, 1200]$) constructed via 5 mathematical procedural layers:
 
 1. **Layer 1: The Tilted Wedge (Macro Slope):**
    $$t = \text{clamp}\left(\frac{850 - z}{2050}, 0, 1\right)$$
    $$h_{\text{wedge}} = 520 \cdot t^{1.45}$$
-   - Generates a steep summit backwall at $z = -1200$ (520m high) that eases continuously into a flat shoreline at $z = 850$.
-   - For $z > 850$, drops terrain to $-8\text{m}$ with low-frequency island crests above $y = 0$.
-   - High alpine backwall and side containment ridges prevent riders from flying off the map boundaries.
+   * Creates a steep summit backwall at $z = -1200$ (520m elevation) easing continuously into a flat frozen lake shoreline at $z = 850$.
+   * Drops into a lake bed at $-8\text{m}$ for $z > 850$, with island crests rising above $y = 0$.
 2. **Layer 2: The Central Dividing Gorge:**
-   - Meandering centerline: $x_{\text{center}} = \sin(z \cdot 0.0025) \cdot 90.0$.
-   - Inverted Gaussian trench flaring from 180m wide at summit to 280m at river, carving 45% of $h_{\text{wedge}}$ down to a smooth valley floor that splits the massif into West Flank and East Bowl.
-3. **Layer 3: Continuous Alpine Relief & Skiable Bowls:**
-   - Wide multi-octave FBM harmonic relief ($\lambda \approx 400\text{m}\text{–}600\text{m}$, 75m amplitude) creating natural concave powder bowls and convex spur ridges.
-   - Replaced artificial 1D global contour terracing with natural continuous downhill gradients ($18^\circ\text{–}28^\circ$) to preserve downhill momentum.
+   * Centerline: $x_{\text{center}} = \sin(z \cdot 0.0025) \cdot 90.0$.
+   * Inverted Gaussian trench flaring from 180m wide at summit to 280m at river basin, carving 45% of $h_{\text{wedge}}$ down to a skiable canyon floor that separates the West Flank from the East Bowl.
+3. **Layer 3: Alpine Relief & Concave Powder Bowls:**
+   * Multi-octave FBM harmonic relief ($\lambda \approx 400\text{m}\text{–}600\text{m}$, 75m amplitude) creating natural concave powder bowls and convex spur ridges with natural downhill flow ($18^\circ\text{–}28^\circ$).
 4. **Layer 4: Smooth Ski Chutes & Wind Lips:**
-   - Domain-warped longitudinal drainage chutes along the fall line.
-   - Undulating snow hummocks and wind lips ($\pm 2\text{m}\text{–}4\text{m}$) providing natural kicker pop without $C^0$ absolute-value crease cuts or jagged sawtooth artifacts.
+   * Domain-warped longitudinal drainage chutes along the fall line.
+   * Gentle undulating snow hummocks and wind lips ($\pm 2\text{m}\text{–}4\text{m}$) providing natural kicker jumps without sharp creases.
 5. **Layer 5: Surface Biomes & Readability Masking:**
-   - **Snow (85%+ Dominance):** Crisp white snow (`#eef3f8`) covering all slopes up to $42^\circ$.
-   - **Exposed Alpine Rock:** Warm brown-grey rock (`#6e5c52`) smoothly blended on steep precipices between $42^\circ$ and $50^\circ$, reaching full rock strata on cliffs $> 50^\circ$.
-   - **Frozen River Ice:** Blue-grey ice (`#7da3b8`) for $y \le 0.5\text{m}$, coupled with a dedicated flat ice plane mesh at $y = 0$ for $z \in [800, 1220]$.
-   - **Vegetation:** Instanced evergreen pine trees distributed via deterministic golden-angle copse clustering (groves) rather than uniform grid sampling to eliminate artificial tree rows.
+   * **Snow (85%+ Dominance):** Crisp white snow (`#eef3f8`) covering all slopes up to $38^\circ$.
+   * **Exposed Alpine Rock:** Rugged granite rock (`#443a34`) blended smoothly on steep cliffs $> 38^\circ$.
+   * **Groomed Piste Network:** Central, West Flank, and East Bowl groomed white tracks (`#ffffff`).
+   * **Frozen River Ice:** Blue-grey ice (`#729ab8`) for $y \le 0.5\text{m}$ with dedicated ice plane mesh at $y = 0$.
+   * **Vegetation:** Instanced evergreen pine trees distributed via deterministic golden-angle copse clustering.
 
-### 4.2 Grand Mountain Adventure Snowboard Controller & Trick Engine (`src/boarder.ts` & `src/player/TrickEngine.ts`)
+### 4.2 GMA Ski Physics & Kinematics (`src/boarder.ts` & `src/mechanics/`)
 
-* **Grand Mountain Adventure (GMA) Physics Engine (`src/boarder.ts`):**
-  - **Sidecut Carving Kinematics ($R_{sc} = 8.2\text{m}$):** Turning radius is dictated by the physical sidecut radius and edge roll tilt: $R = \frac{R_{sc}}{\sin(\theta_{edge}) + 0.08}$. Implements speed-dependent blending between low-speed ground pivot turning ($< 3.8\text{ m/s}$) and high-speed carved arc centripetal rotation ($\omega = \frac{v}{R}$).
-  - **Edge Bite vs. Skidded Drift:** Evaluates centripetal G-demand ($a_c = v \cdot |\omega|$) against edge grip capacity ($a_{bite} = (12.5 + 9.5\sin(\theta_{edge})) \cdot \mu_{surface}$).
-    - *Clean Carve:* Lateral slip is eliminated ($32\text{ s}^{-1}$ damp), forward speed is preserved ($> 99.8\%$), and procedural audio emits crisp high-frequency slicing.
-    - *Skid / Hockey Stop:* Transverse Coulomb drag scrubs velocity, spraying wide snow plumes and triggering deep hollow snow plowing audio.
-  - **Fall-Line Gravity & Pumping Momentum:** Projected downhill gravity $\vec{g}_\parallel = \vec{g} - (\vec{g} \cdot \vec{n})\vec{n}$ accelerates riders naturally down the fall line. Deep carving accumulates centrifugal leg strain loads; zero-crossing edge switches convert this unweighting energy into forward acceleration impulses scaled by alignment with the downhill fall-line gradient.
-  - **Multi-Point Ground Sampling:** 3-point longitudinal probe array (Center, Nose $+0.65\text{m}$, Tail $-0.65\text{m}$) prevents clipping or snagging over convex crests, rollers, and kicker transitions.
-  - **Rigorous Landing Impact Decomposition:** Completely eliminates outward bounce and spurious speed additions. Downward normal impact velocity ($\vec{v} \cdot \vec{n}$) is absorbed by snow deformation and 2nd-order hip spring compression, retaining 100% of tangential downhill momentum on transitions. Evaluates dual-axis touchdown alignment (pitch to slope normal and yaw to horizontal velocity vector), triggering severe speed scrubbing and crash wipeouts on flat drops $> 18\text{ m/s}$ or sideways touchdowns $> 46^\circ$.
-* **Trick Engine (`src/player/TrickEngine.ts`):**
-  - Monitors airborne state, tracking total airtime, rotation around all three Euler axes, and grab inputs.
-  - Recognizes classic grabs (`Indie`, `Mute`, `Nosegrab`, `Tailgrab`), spins (180°, 360°, 540°, 720°), and front/back flips.
-  - Multiplies trick points based on combo variety and cleanly detects crash landings when alignment exceeds tolerance or impact is severe.
+Replicates the physics implementation of *Grand Mountain Adventure*:
+* **Fall-Line Gravity:** Projected downhill acceleration $\vec{g}_\parallel = \vec{g} - (\vec{g} \cdot \vec{n})\vec{n}$ accelerates skiers down the slope.
+* **Sidecut Carving & Edge Grip:**
+  * Turning radius governed by edge tilt: $R = \frac{R_{sc}}{\sin(\theta_{edge}) + 0.08}$.
+  * Standard Turn ($30^\circ$ cap, $98\%$ edge bite grip).
+  * Slide Turn ($30^\circ$ cap, $85\%$ grip, $+2.0\text{ m/s}$ burst at 0.5s milestone).
+  * Sharp Turn ($50^\circ$ cap, high rotational speed).
+  * Overturn ($60^\circ$ cap, $10\times$ friction drag penalty).
+* **Flat Ground Pole Staking:**
+  * Auto pole-plant skate wiggling on flat terrain ($|x| > 0.08$ alternation).
+  * Pole down duration: $0.5\text{s}$; standstill impulse: $+20.0\text{ m/s}^2$; maximum skate velocity: $10.5\text{ m/s}$.
+* **Snowplow Wedge Braking:**
+  * Active $2.5\times$ deceleration bringing skis to a halt within 1–2 seconds.
+* **50 Hz Verlet Ragdoll Crash Solver:**
+  * 7-node articulated ragdoll skeleton running 5 relaxation iterations per step during high-impact wipeouts ($> 26\text{ m/s}$ ground impact or sideways touchdown $> 45^\circ$).
 
-### 4.3 Camera Director & Fly-Cam (`src/camera.ts`)
+### 4.3 Procedural Skier Character & Animator (`src/player/SkierCharacter.ts`)
 
-* **Snowboard Follow Camera:** Third-person trailing camera with speed-lag, orientation damping, dynamic pitch alignment, and FOV speed expansion.
-* **Fly-Cam Mode (`[C]` Key):** Free-flight debug camera with WASD strafing, Space/Shift vertical translation, mouse-look Euler navigation, coordinate HUD, and drop-rider spawn feature.
-* **Quick Teleport Hub (Hotkeys 1–6):**
-  - `1`: Main Summit Peak (Glacier Chute) `(-300, -750)`
-  - `2`: West Peak (Powder Highway) `(-610, -665)`
-  - `3`: East Park Ridge (Slopestyle Run) `(695, -410)`
-  - `4`: Central Canyon Rim (Gorge Shoulder) `(-190, -245)`
-  - `5`: Mid-Mountain Hub (Alpine Flow Cruiser) `(140, 55)`
-  - `6`: Glacial Halfpipe Gully (Super-G Finish) `(360, 50)`
+* **Procedural Low-Poly Mesh:** Fully procedural geometries (lofted jacket rings, flared collar, beanie with pom-pom, tinted goggles, alpine skis with curved tips, ski boots, poles).
+* **Color Palettes:** Coral, Ochre, Glacier, and Pine outerwear presets.
+* **Procedural Animator:** Real-time kinematic blend trees for gliding, carving lean, poling arm/leg strides, aerodynamic tucks, aerial spins, flips, and ragdoll recovery.
 
----
+### 4.4 Camera Director & Presentation (`src/camera.ts` & `src/cameraOverlay.ts`)
 
-## 5. Development & Verification Workflow
-
-### Useful Commands
-* **Start Dev Server:** `npm run dev` (starts Vite dev server at `http://localhost:5173`)
-* **Start Multiplayer Server:** `npm run server` (starts WebSocket server on port 8080)
-* **Typecheck & Production Build:** `npm run build` (`tsc && vite build`)
-* **Preview Production Bundle:** `npm run preview`
+* **Dynamic Chase Camera:** Third-person trailing follow with velocity lookahead, asymmetric elastic lag, dynamic slope pitch alignment, and high-velocity FOV expansion.
+* **GMA Isometric Tilt-Shift Mode:** Top-down orthographic/isometric perspective replicating classic mountain views.
+* **Camera Tuner Overlay:** In-game visual editor (`[O]` key) with live slider controls for follow distance, height, pitch, lag, and FOV.
+* **Fly-Cam Mode:** 6DOF free-flight camera (`[C]` key) with WASD strafe, Space/Shift vertical motion, mouse look, and drop-rider spawn feature.
 
 ---
 
-## 6. Crucial Rules for Incoming Agents
+## 5. Controls & Keybindings Reference
 
-1. **Heightfield Indexing Rule:** Rapier3D's heightfield array indexing is strictly `r * V + c` (where $r$ is along X and $c$ is along Z). Never transpose to `c * V + r`.
-2. **Continuous Mountain Flow Rule:** Never apply 1D global contour quantizers (`smoothTerrace(h)`) or $C^0$ ridged noise (`1 - abs(noise)`) directly to mountain relief. Alpine freeride requires $C^1/C^2$ smooth differentiable slopes so riders maintain continuous downhill flow and snow meshes remain free of sawtooth normal creases.
-3. **Snow Dominance Rule:** Ski resort visual readability requires 80%–90% snow coverage. Keep rock slope transition thresholds at $> 42^\circ\text{–}50^\circ$ so skiable surfaces stay white.
-4. **Terminal & Safety Guardrails:** Follow the operating context rules in [AGENTS.md](file:///C:/Users/manis/Development/drive/AGENTS.md) (silent filtered command execution, turn caps, surgical patches, no reads of excluded paths).
+| Action | Keyboard | Gamepad |
+| :--- | :--- | :--- |
+| **Carve Left / Right** | `A` / `D` or `←` / `→` | Left Stick (X-Axis) |
+| **Slide Turn (Drift)** | `Shift` + `A` / `D` | `B` Button + Left Stick |
+| **Sharp Carve** | `Ctrl` + `A` / `D` | `Right Trigger` + Left Stick |
+| **Snowplow Brake** | Hold `S` or `A` + `D` | Left Trigger |
+| **Jump Pop** | `Space` (Tap) | `A` Button |
+| **Glide Fall** | `Space` (Hold in air) | `A` Button (Hold) |
+| **Airborne Spins** | `A` / `D` (in air) | Right Stick (X-Axis) |
+| **Airborne Flips** | `W` / `S` (in air) | Right Stick (Y-Axis) |
+| **Toggle Sport (Ski/Board)** | `T` | `Y` Button |
+| **Toggle Twintip Skis** | `Y` | Right Stick Click |
+| **Switch Riding Invert** | `R` | Left Stick Click |
+| **Toggle Camera Mode** | `V` | Back / Select |
+| **Camera Tuner GUI** | `O` | — |
+| **Fly-Cam Mode** | `C` | — |
+| **Toggle Day/Night/Golden**| `L` or `N` | — |
+| **Pause Day/Night Cycle** | `P` | — |
+| **Toggle HUD** | `H` | — |
+| **Respawn at Peak** | `Backspace` or `Enter` | `Start` Button |
+| **Peak Teleports (1–6)** | `1`: Summit (Glacier Chute)<br>`2`: West Peak (Powder Highway)<br>`3`: East Park Ridge (Slopestyle)<br>`4`: Central Canyon Rim<br>`5`: Mid-Mountain Hub<br>`6`: Halfpipe Gully | D-Pad Hotkeys |
+
+---
+
+## 6. Development & Verification Workflow
+
+```bash
+# 1. Start Vite development server (localhost:5173)
+npm run dev
+
+# 2. Typecheck and compile production bundle into dist/
+npm run build
+
+# 3. Preview local production bundle (localhost:4173)
+npm run preview
+
+# 4. Start production HTTP asset server (localhost:3001)
+npm start
+
+# 5. Execute automated Playwright visual regression capture
+npm run vision:capture
+```
+
+---
+
+## 7. Architectural Invariants & Rules
+
+1. **Heightfield Indexing Invariant:** Rapier3D heightfield row/col indexing is strictly $r \times V + c$ (where $r$ is along X and $c$ is along Z). Never transpose to $c \times V + r$.
+2. **Continuous Alpine Flow Invariant:** Never apply 1D global contour quantizers or $C^0$ absolute-value crease cuts to mountain relief. Slopes must remain $C^1/C^2$ smooth and differentiable so skiers maintain continuous downhill momentum.
+3. **Snow Readability Dominance:** Ski resort visual readability requires 80%–90% snow coverage. Rock slope transition thresholds must remain at $\ge 38^\circ\text{–}42^\circ$ so skiable surfaces stay white.
+4. **Zero-Allocation Particle & Trail Geometry:** Carved snow trail ribbons and instanced pine meshes must reuse persistent pre-allocated `Float32Array` buffers to prevent garbage collection pauses during high-speed runs.

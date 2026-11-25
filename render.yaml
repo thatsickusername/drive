@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: offroad-coop-game
+    name: alpine-freeride-game
     env: node
     plan: free
     buildCommand: npm install && npm run build

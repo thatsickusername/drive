@@ -34,20 +34,20 @@ Open `http://localhost:3001` in two browser windows or different devices on your
    * **Start Command:** `npm start`
    * **Plan:** `Free`
 5. Click **Create Web Service**.
-6. Once deployed, Render provides an HTTPS URL (e.g., `https://offroad-coop.onrender.com`).
+6. Once deployed, Render provides an HTTPS URL (e.g., `https://alpine-freeride.onrender.com`).
 
 ### Option B: Railway / Fly.io / Docker
 Deploy using the included multi-stage [Dockerfile](file:///C:/Users/manis/Development/drive/Dockerfile):
 ```bash
-docker build -t offroad-coop .
-docker run -p 3001:3001 -e PORT=3001 offroad-coop
+docker build -t alpine-freeride .
+docker run -p 3001:3001 -e PORT=3001 alpine-freeride
 ```
 
 ---
 
 ## 3. How Anyone Can Join
 
-1. Visit your deployed URL (e.g., `https://offroad-coop.onrender.com`).
+1. Visit your deployed URL (e.g., `https://alpine-freeride.onrender.com`).
 2. The HUD displays your **Room Code** and a **[Copy Invite Link]** button.
 3. Send the link (`https://offroad-coop.onrender.com/?room=EXPEDITION`) to any friend on any phone, tablet, or desktop browser.
 4. When they open the link, they automatically drop into your world as **Driver 2 (Rescue Orange)** with physical collision and real-time synchronization.
