@@ -1045,6 +1045,8 @@ export class Skier {
         isGrounded: this.isGrounded,
         isStaking: this.gmaPhysics.isStaking,
         isDrifting: this.isDrifting,
+        isSlideTurn: !!input.slideTurn || this.gmaPhysics.currentTurnType === TurnType.SlideTurn,
+        isSharpTurn: !!input.sharpTurn || this.gmaPhysics.currentTurnType === TurnType.SharpTurn,
         tuck: !!input.forward && this.speed > 8,
         inputLeft: !!input.left || (input.steerX !== undefined && input.steerX < -0.25),
         inputRight: !!input.right || (input.steerX !== undefined && input.steerX > 0.25),

@@ -41,6 +41,10 @@ export class UnifiedInputController {
   private onKeyDown(e: KeyboardEvent): void {
     this.keyState[e.code] = true;
 
+    if ((e.code === 'KeyA' || e.code === 'KeyD') && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+    }
+
     if (e.code === 'KeyR') {
       if (this.onResetRequested) this.onResetRequested();
     } else if (e.code === 'KeyC') {

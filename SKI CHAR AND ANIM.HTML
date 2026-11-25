@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Minimal Low-Poly Skier — Carving, Idle, Jump & 360° Spin</title>
+    <title>Minimal Low-Poly Skier — Carving, Drift Carve, Idle, Jump & 360° Spin</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -130,10 +130,14 @@
     <div class="fixed bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 z-10 w-[calc(100%-2rem)] max-w-fit">
         <div class="glass-panel rounded-full px-3 py-2 flex flex-wrap items-center justify-center gap-1.5 sm:gap-2">
             <!-- Animation State Selector -->
-            <div class="flex items-center bg-slate-200/60 rounded-full p-0.5">
+            <div class="flex flex-wrap items-center justify-center bg-slate-200/60 rounded-full p-0.5">
                 <button data-anim="carving"
                     class="anim-btn active px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
                     Carving
+                </button>
+                <button data-anim="drift"
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
+                    Drift Carve
                 </button>
                 <button data-anim="idle"
                     class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
@@ -938,13 +942,13 @@
 
         /**
          * ============================================================================
-         * PROCEDURAL ANIMATION ENGINE (CARVING, IDLE, JUMP, 360° SPIN + BLENDING)
+         * PROCEDURAL ANIMATION ENGINE (CARVING, DRIFT, IDLE, JUMP, 360° SPIN + BLENDING)
          * ============================================================================
          */
         function createSkierAnimator(skier) {
             const { root, joints, footContacts } = skier;
 
-            let mode = 'carving'; // 'carving' | 'idle' | 'jump' | 'spin360' | 'tpose'
+            let mode = 'carving'; // 'carving' | 'drift' | 'idle' | 'jump' | 'spin360' | 'tpose'
             let isPlaying = true;
             let speed = 1.0;
             let animTime = 0;
@@ -1114,6 +1118,102 @@
             }
 
             /**
+             * ANIMATION 1B: DRIFT CARVING
+             * Based on the normal carve, but the skier bends their knees deeper to sit lower
+             * and pushes the non-carving (outside) leg slightly outward to whip a tighter,
+             * drifting curve across the fall line.
+             */
+            function evaluateDriftCarving(t) {
+                const omega = (Math.PI * 2) / 2.6;
+                const phi = t * omega;
+
+                const s = Math.sin(phi);               // +1 Left carve, -1 Right carve
+                const p = s * s;                       // Apex compression
+                const leftTurn = Math.max(0, s);
+                const rightTurn = Math.max(0, -s);
+
+                // Same synchronized pole plant -> push-back timing as normal carving
+                const leftReach = phasePulse(phi, 0.55, 0.52);
+                const leftPush = phasePulse(phi, 1.95, 0.68);
+                const rightReach = phasePulse(phi, Math.PI + 0.55, 0.52);
+                const rightPush = phasePulse(phi, Math.PI + 1.95, 0.68);
+
+                // 1. Hips (Lower, tighter drift yaw across the fall line + slightly deeper lean)
+                hipPosTarget.x = 0.20 * s;
+                hipPosTarget.z = -0.02 * p;            // Sit slightly back/down into the drift
+                targets.hips.rx = 0.12 + 0.08 * p;
+                targets.hips.ry = 0.46 * s;            // Stronger skid/drift yaw for a tighter curve
+                targets.hips.rz = -0.36 * s;
+
+                // 2. Spine (Lower crouch + stronger counter-rotation so chest stays facing downhill)
+                targets.spine.rx = 0.28 + 0.12 * p;
+                targets.spine.ry = -0.38 * s;
+                targets.spine.rz = 0.30 * s;
+
+                // 3. Neck & Head (Downhill gaze lock compensating for lower torso)
+                targets.neck.rx = -0.13 - 0.05 * p;
+                targets.neck.ry = -0.06 * s;
+                targets.neck.rz = 0.05 * s;
+
+                targets.head.rx = -0.14 - 0.04 * p;
+                targets.head.ry = -0.05 * s;
+                targets.head.rz = 0.06 * s;
+
+                // 4. Legs (Deeper knee bend to sit lower + non-carving/outside leg pushed outward)
+                const baseThigh = -0.52 - 0.18 * p;    // Sit noticeably deeper than normal carving
+                const baseShin = 0.42 + 0.14 * p;
+
+                // Left Leg (+X): inside during leftTurn, NON-CARVING (outside) during rightTurn
+                const lThigh = baseThigh - 0.22 * leftTurn + 0.05 * rightTurn;
+                const lShin = baseShin + 0.12 * leftTurn - 0.04 * rightTurn;
+                targets.leftHip.rx = lThigh - targets.hips.rx;
+                // Move Left leg slightly outward (+X) when it is the non-carving leg (rightTurn)
+                targets.leftHip.rz = -0.14 * s + 0.22 * rightTurn;
+                targets.leftHip.ry = -0.06 * rightTurn; // Subtle tail-drift flare on outside ski
+                targets.leftKnee.rx = lShin - lThigh;
+                targets.leftAnkle.rx = -lShin;
+                targets.leftAnkle.rz = 0.04 * s - 0.12 * rightTurn;
+
+                // Right Leg (-X): inside during rightTurn, NON-CARVING (outside) during leftTurn
+                const rThigh = baseThigh - 0.22 * rightTurn + 0.05 * leftTurn;
+                const rShin = baseShin + 0.12 * rightTurn - 0.04 * leftTurn;
+                targets.rightHip.rx = rThigh - targets.hips.rx;
+                // Move Right leg slightly outward (-X) when it is the non-carving leg (leftTurn)
+                targets.rightHip.rz = -0.14 * s - 0.22 * leftTurn;
+                targets.rightHip.ry = 0.06 * leftTurn; // Subtle tail-drift flare on outside ski
+                targets.rightKnee.rx = rShin - rThigh;
+                targets.rightAnkle.rx = -rShin;
+                targets.rightAnkle.rz = 0.04 * s + 0.12 * leftTurn;
+
+                // 5. Arms & Poles (Same carving pole action, slightly wider balance for the low drift)
+                targets.leftShoulder.rz = -1.10 + 0.18 * leftReach - 0.08 * leftPush - 0.04 * rightTurn;
+                targets.leftShoulder.rx = -0.12 - 0.52 * leftReach + 0.56 * leftPush;
+                targets.leftShoulder.ry = 0.08 - 0.14 * leftReach + 0.12 * leftPush;
+                targets.leftElbow.ry = -0.78 - 0.18 * leftReach + 0.52 * leftPush;
+                targets.leftElbow.rz = 0.14 + 0.05 * p;
+                targets.leftWrist.rx = 1.56 - 0.52 * leftReach + 0.18 * leftPush;
+                targets.leftWrist.rz = -0.45 + 0.62 * leftReach - 0.12 * leftPush;
+                targets.leftWrist.ry = 0.0;
+
+                targets.rightShoulder.rz = 1.10 - 0.18 * rightReach + 0.08 * rightPush + 0.04 * leftTurn;
+                targets.rightShoulder.rx = -0.12 - 0.52 * rightReach + 0.56 * rightPush;
+                targets.rightShoulder.ry = -0.08 + 0.14 * rightReach - 0.12 * rightPush;
+                targets.rightElbow.ry = 0.78 + 0.18 * rightReach - 0.52 * rightPush;
+                targets.rightElbow.rz = -0.14 - 0.05 * p;
+                targets.rightWrist.rx = 1.56 - 0.52 * rightReach + 0.18 * rightPush;
+                targets.rightWrist.rz = 0.45 - 0.62 * rightReach + 0.12 * rightPush;
+                targets.rightWrist.ry = 0.0;
+
+                if (leftReach > 0.45) return 'Drift Carve • Left Pole Plant';
+                if (leftPush > 0.45) return 'Drift Carve • Left Pole Push';
+                if (rightReach > 0.45) return 'Drift Carve • Right Pole Plant';
+                if (rightPush > 0.45) return 'Drift Carve • Right Pole Push';
+                if (s > 0.35) return 'Drift Carve • Tight Left Drift';
+                if (s < -0.35) return 'Drift Carve • Tight Right Drift';
+                return 'Drift Carve • Edge Switch';
+            }
+
+            /**
              * ANIMATION 2: IDLE SKIING
              * Athletic ready-to-glide cruising stance with multi-frequency terrain absorption,
              * breathing, subtle lateral balance sway, and poles tucked cleanly trailing behind.
@@ -1266,7 +1366,6 @@
 
                 // 5. Arms & Poles (Drop slightly on crouch, flare up/out for mid-air balance, steady on landing)
                 const armLift = 0.52 * spread + 0.18 * takeoff;
-                const armDrop = 0.14 * crouch + 0.16 * landAbsorb;
 
                 // Left Arm (+X)
                 targets.leftShoulder.rz = -1.22 + armLift - 0.08 * crouch + 0.18 * landAbsorb;
@@ -1432,6 +1531,8 @@
 
                 if (mode === 'carving') {
                     phaseText = evaluateCarving(animTime);
+                } else if (mode === 'drift') {
+                    phaseText = evaluateDriftCarving(animTime);
                 } else if (mode === 'idle') {
                     phaseText = evaluateIdleSkiing(animTime);
                 } else if (mode === 'jump') {

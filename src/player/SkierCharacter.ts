@@ -929,6 +929,8 @@ export interface SkierAnimParams {
   isGrounded: boolean;
   isStaking: boolean;
   isDrifting?: boolean;
+  isSlideTurn?: boolean;
+  isSharpTurn?: boolean;
   tuck?: boolean;
   inputLeft?: boolean;
   inputRight?: boolean;
@@ -946,6 +948,7 @@ export class SkierAnimator {
   private skier: SkierCharacter;
   private animTime = 0;
   private carveBlend = 0; // 0 = idle, 1 = carve
+  private driftCarveBlend = 0; // 0 = standard carve, 1 = drift carve (Animation 1B)
 
   // Jump (Animation 3) and 360° Spin Trick (Animation 4) states
   private airTime = 0.0;
@@ -1035,11 +1038,17 @@ export class SkierAnimator {
       this.plantTimer = 0.0;
       this.audioPlayedForCurrentStroke = false;
       this.carveBlend = Math.max(this.carveBlend, 0.85); // Instant 0th frame carve engagement
+      if (params.isSlideTurn || params.isSharpTurn) {
+        this.driftCarveBlend = Math.max(this.driftCarveBlend, 0.85);
+      }
     } else if (currentKey === 'right' && this.prevTurnKey !== 'right') {
       this.activePlantSide = 'right';
       this.plantTimer = 0.0;
       this.audioPlayedForCurrentStroke = false;
       this.carveBlend = Math.max(this.carveBlend, 0.85); // Instant 0th frame carve engagement
+      if (params.isSlideTurn || params.isSharpTurn) {
+        this.driftCarveBlend = Math.max(this.driftCarveBlend, 0.85);
+      }
     } else if (currentKey === 'none') {
       if (this.plantTimer > 0.65) {
         this.activePlantSide = 'none';
@@ -1055,6 +1064,11 @@ export class SkierAnimator {
     const isCarving = (currentKey !== 'none' || steerEffort > 0.08) && params.isGrounded;
     const targetBlend = isCarving ? 1.0 : 0.0;
     this.carveBlend = THREE.MathUtils.damp(this.carveBlend, targetBlend, currentKey !== 'none' ? 24.0 : 8.0, clampedDt);
+
+    // Slide turn (Shift + Left/Right) or Sharp turn (Ctrl + Left/Right) activates Drift Carving animation (Animation 1B)
+    const isDriftingTurn = isCarving && (!!params.isSlideTurn || !!params.isSharpTurn);
+    const targetDriftBlend = isDriftingTurn ? 1.0 : 0.0;
+    this.driftCarveBlend = THREE.MathUtils.damp(this.driftCarveBlend, targetDriftBlend, 16.0, clampedDt);
 
     this.clearTargets();
 
@@ -1086,7 +1100,7 @@ export class SkierAnimator {
     const idleRThigh = -0.28 + 0.02 * sway - (params.tuck ? 0.12 : 0);
     const idleRShin = 0.24 - 0.015 * sway + (params.tuck ? 0.10 : 0);
 
-    // 2. Evaluate Dynamic Alpine Carving Targets
+    // 2. Evaluate Dynamic Alpine Carving & Drift Carving Targets
     const s = turnDir;
     const p = s * s;
     const leftTurn = Math.max(0, s);
@@ -1133,30 +1147,96 @@ export class SkierAnimator {
       }
     }
 
-    const carveHipX = 0.16 * s;
-    const carveHipZ = 0.03 * p;
-    const carveHipsRx = 0.08 + 0.06 * p;
-    const carveHipsRy = 0.26 * s;
-    const carveHipsRz = -0.32 * s;
+    const db = this.driftCarveBlend;
 
-    const carveSpineRx = 0.24 + 0.10 * p + (params.tuck ? 0.15 : 0);
-    const carveSpineRy = -0.22 * s;
-    const carveSpineRz = 0.25 * s;
+    // Standard Carve (Animation 1) vs Drift Carve (Animation 1B)
+    const stdCarveHipX = 0.16 * s;
+    const stdCarveHipZ = 0.03 * p;
+    const stdCarveHipsRx = 0.08 + 0.06 * p;
+    const stdCarveHipsRy = 0.26 * s;
+    const stdCarveHipsRz = -0.32 * s;
+    const stdCrouchDrop = 0.035 * p;
 
-    const carveNeckRx = -0.10 - 0.04 * p;
-    const carveNeckRy = -0.05 * s;
-    const carveNeckRz = 0.04 * s;
+    // Drift Carve: lower pelvis, sit slightly back/down, stronger yaw across fall line & deeper lean
+    const driftCarveHipX = 0.20 * s;
+    const driftCarveHipZ = -0.02 * p;
+    const driftCarveHipsRx = 0.12 + 0.08 * p;
+    const driftCarveHipsRy = 0.46 * s;
+    const driftCarveHipsRz = -0.36 * s;
+    const driftCrouchDrop = 0.11 * p;
 
-    const carveHeadRx = -0.12 - 0.03 * p;
-    const carveHeadRy = -0.04 * s;
-    const carveHeadRz = 0.05 * s;
+    const carveHipX = THREE.MathUtils.lerp(stdCarveHipX, driftCarveHipX, db);
+    const carveHipZ = THREE.MathUtils.lerp(stdCarveHipZ, driftCarveHipZ, db);
+    const carveHipsRx = THREE.MathUtils.lerp(stdCarveHipsRx, driftCarveHipsRx, db);
+    const carveHipsRy = THREE.MathUtils.lerp(stdCarveHipsRy, driftCarveHipsRy, db);
+    const carveHipsRz = THREE.MathUtils.lerp(stdCarveHipsRz, driftCarveHipsRz, db);
+    const crouchDrop = THREE.MathUtils.lerp(stdCrouchDrop, driftCrouchDrop, db) + (params.tuck ? 0.08 : 0);
 
-    const baseThigh = -0.34 - 0.12 * p;
-    const baseShin = 0.26 + 0.10 * p;
-    const carveLThigh = baseThigh - 0.22 * leftTurn + 0.06 * rightTurn;
-    const carveLShin = baseShin + 0.12 * leftTurn - 0.04 * rightTurn;
-    const carveRThigh = baseThigh - 0.22 * rightTurn + 0.06 * leftTurn;
-    const carveRShin = baseShin + 0.12 * rightTurn - 0.04 * leftTurn;
+    // Spine: standard carve tuck vs drift carve deeper crouch & stronger counter-rotation
+    const stdCarveSpineRx = 0.24 + 0.10 * p + (params.tuck ? 0.15 : 0);
+    const stdCarveSpineRy = -0.22 * s;
+    const stdCarveSpineRz = 0.25 * s;
+
+    const driftCarveSpineRx = 0.28 + 0.12 * p + (params.tuck ? 0.15 : 0);
+    const driftCarveSpineRy = -0.38 * s;
+    const driftCarveSpineRz = 0.30 * s;
+
+    const carveSpineRx = THREE.MathUtils.lerp(stdCarveSpineRx, driftCarveSpineRx, db);
+    const carveSpineRy = THREE.MathUtils.lerp(stdCarveSpineRy, driftCarveSpineRy, db);
+    const carveSpineRz = THREE.MathUtils.lerp(stdCarveSpineRz, driftCarveSpineRz, db);
+
+    // Neck & Head: downhill gaze lock
+    const stdCarveNeckRx = -0.10 - 0.04 * p;
+    const stdCarveNeckRy = -0.05 * s;
+    const stdCarveNeckRz = 0.04 * s;
+
+    const stdCarveHeadRx = -0.12 - 0.03 * p;
+    const stdCarveHeadRy = -0.04 * s;
+    const stdCarveHeadRz = 0.05 * s;
+
+    const driftCarveNeckRx = -0.13 - 0.05 * p;
+    const driftCarveNeckRy = -0.06 * s;
+    const driftCarveNeckRz = 0.05 * s;
+
+    const driftCarveHeadRx = -0.14 - 0.04 * p;
+    const driftCarveHeadRy = -0.05 * s;
+    const driftCarveHeadRz = 0.06 * s;
+
+    const carveNeckRx = THREE.MathUtils.lerp(stdCarveNeckRx, driftCarveNeckRx, db);
+    const carveNeckRy = THREE.MathUtils.lerp(stdCarveNeckRy, driftCarveNeckRy, db);
+    const carveNeckRz = THREE.MathUtils.lerp(stdCarveNeckRz, driftCarveNeckRz, db);
+
+    const carveHeadRx = THREE.MathUtils.lerp(stdCarveHeadRx, driftCarveHeadRx, db);
+    const carveHeadRy = THREE.MathUtils.lerp(stdCarveHeadRy, driftCarveHeadRy, db);
+    const carveHeadRz = THREE.MathUtils.lerp(stdCarveHeadRz, driftCarveHeadRz, db);
+
+    // Legs: standard carve vs drift carve (deeper knee bend + non-carving outside leg pushed outward + tail-drift flare)
+    const stdBaseThigh = -0.34 - 0.12 * p;
+    const stdBaseShin = 0.26 + 0.10 * p;
+    const stdCarveLThigh = stdBaseThigh - 0.22 * leftTurn + 0.06 * rightTurn;
+    const stdCarveLShin = stdBaseShin + 0.12 * leftTurn - 0.04 * rightTurn;
+    const stdCarveRThigh = stdBaseThigh - 0.22 * rightTurn + 0.06 * leftTurn;
+    const stdCarveRShin = stdBaseShin + 0.12 * rightTurn - 0.04 * leftTurn;
+
+    const driftBaseThigh = -0.52 - 0.18 * p;
+    const driftBaseShin = 0.42 + 0.14 * p;
+    const driftCarveLThigh = driftBaseThigh - 0.22 * leftTurn + 0.05 * rightTurn;
+    const driftCarveLShin = driftBaseShin + 0.12 * leftTurn - 0.04 * rightTurn;
+    const driftCarveRThigh = driftBaseThigh - 0.22 * rightTurn + 0.05 * leftTurn;
+    const driftCarveRShin = driftBaseShin + 0.12 * rightTurn - 0.04 * leftTurn;
+
+    const carveLThigh = THREE.MathUtils.lerp(stdCarveLThigh, driftCarveLThigh, db);
+    const carveLShin = THREE.MathUtils.lerp(stdCarveLShin, driftCarveLShin, db);
+    const carveRThigh = THREE.MathUtils.lerp(stdCarveRThigh, driftCarveRThigh, db);
+    const carveRShin = THREE.MathUtils.lerp(stdCarveRShin, driftCarveRShin, db);
+
+    const carveLeftHipRz = THREE.MathUtils.lerp(-0.14 * s, -0.14 * s + 0.22 * rightTurn, db);
+    const carveLeftHipRy = THREE.MathUtils.lerp(0, -0.06 * rightTurn, db);
+    const carveLeftAnkleRz = THREE.MathUtils.lerp(0.04 * s, 0.04 * s - 0.12 * rightTurn, db);
+
+    const carveRightHipRz = THREE.MathUtils.lerp(-0.14 * s, -0.14 * s - 0.22 * leftTurn, db);
+    const carveRightHipRy = THREE.MathUtils.lerp(0, 0.06 * leftTurn, db);
+    const carveRightAnkleRz = THREE.MathUtils.lerp(0.04 * s, 0.04 * s + 0.12 * leftTurn, db);
 
     // 3. Blend Idle vs Carving
     const cb = this.carveBlend;
@@ -1164,7 +1244,6 @@ export class SkierAnimator {
     this.hipPosTarget.z = THREE.MathUtils.lerp(idleHipZ, carveHipZ, cb);
 
     // Stable analytical hip height: smooth crouch with knee flexion, zero vertical jitter
-    const crouchDrop = 0.035 * p + (params.tuck ? 0.08 : 0);
     this.hipPosTarget.y = 0.82 - crouchDrop;
     this.hipY = THREE.MathUtils.damp(this.hipY, this.hipPosTarget.y, 14.0, clampedDt);
 
@@ -1187,18 +1266,20 @@ export class SkierAnimator {
     const lThigh = THREE.MathUtils.lerp(idleLThigh, carveLThigh, cb);
     const lShin = THREE.MathUtils.lerp(idleLShin, carveLShin, cb);
     this.targets.leftHip.rx = lThigh - this.targets.hips.rx;
-    this.targets.leftHip.rz = THREE.MathUtils.lerp(-0.018 * sway, -0.14 * s, cb);
+    this.targets.leftHip.rz = THREE.MathUtils.lerp(-0.018 * sway, carveLeftHipRz, cb);
+    this.targets.leftHip.ry = THREE.MathUtils.lerp(0, carveLeftHipRy, cb);
     this.targets.leftKnee.rx = lShin - lThigh;
     this.targets.leftAnkle.rx = -lShin;
-    this.targets.leftAnkle.rz = THREE.MathUtils.lerp(0, 0.04 * s, cb);
+    this.targets.leftAnkle.rz = THREE.MathUtils.lerp(0, carveLeftAnkleRz, cb);
 
     const rThigh = THREE.MathUtils.lerp(idleRThigh, carveRThigh, cb);
     const rShin = THREE.MathUtils.lerp(idleRShin, carveRShin, cb);
     this.targets.rightHip.rx = rThigh - this.targets.hips.rx;
-    this.targets.rightHip.rz = THREE.MathUtils.lerp(-0.018 * sway, -0.14 * s, cb);
+    this.targets.rightHip.rz = THREE.MathUtils.lerp(-0.018 * sway, carveRightHipRz, cb);
+    this.targets.rightHip.ry = THREE.MathUtils.lerp(0, carveRightHipRy, cb);
     this.targets.rightKnee.rx = rShin - rThigh;
     this.targets.rightAnkle.rx = -rShin;
-    this.targets.rightAnkle.rz = THREE.MathUtils.lerp(0, 0.04 * s, cb);
+    this.targets.rightAnkle.rz = THREE.MathUtils.lerp(0, carveRightAnkleRz, cb);
 
     // 4. Arms & Pole Plants (Idle trailing tuck vs Carving asymmetric plant & balance)
     const idleLShoulderRz = -1.22 + 0.022 * breath;
@@ -1217,59 +1298,101 @@ export class SkierAnimator {
     const idleRWristRx = 1.60 + 0.035 * breath;
     const idleRWristRz = 0.45;
 
-    let carveLShoulderRz: number;
-    let carveLShoulderRx: number;
-    let carveLShoulderRy: number;
-    let carveLElbowRy: number;
-    let carveLElbowRz: number;
-    let carveLWristRx: number;
-    let carveLWristRz: number;
+    let stdCarveLShoulderRz: number, stdCarveLShoulderRx: number, stdCarveLShoulderRy: number;
+    let stdCarveLElbowRy: number, stdCarveLElbowRz: number, stdCarveLWristRx: number, stdCarveLWristRz: number;
+    let stdCarveRShoulderRz: number, stdCarveRShoulderRx: number, stdCarveRShoulderRy: number;
+    let stdCarveRElbowRy: number, stdCarveRElbowRz: number, stdCarveRWristRx: number, stdCarveRWristRz: number;
 
-    let carveRShoulderRz: number;
-    let carveRShoulderRx: number;
-    let carveRShoulderRy: number;
-    let carveRElbowRy: number;
-    let carveRElbowRz: number;
-    let carveRWristRx: number;
-    let carveRWristRz: number;
+    let driftCarveLShoulderRz: number, driftCarveLShoulderRx: number, driftCarveLShoulderRy: number;
+    let driftCarveLElbowRy: number, driftCarveLElbowRz: number, driftCarveLWristRx: number, driftCarveLWristRz: number;
+    let driftCarveRShoulderRz: number, driftCarveRShoulderRx: number, driftCarveRShoulderRy: number;
+    let driftCarveRElbowRy: number, driftCarveRElbowRz: number, driftCarveRWristRx: number, driftCarveRWristRz: number;
 
     if (s >= 0) {
-      // LEFT TURN: Left arm is active plant; Right arm remains strictly in idle animation
-      carveLShoulderRz = -1.16 + 0.18 * leftReach - 0.08 * leftPush;
-      carveLShoulderRx = -0.10 - 0.55 * leftReach + 0.58 * leftPush;
-      carveLShoulderRy = 0.08 - 0.16 * leftReach + 0.12 * leftPush;
-      carveLElbowRy = -0.78 - 0.20 * leftReach + 0.50 * leftPush;
-      carveLElbowRz = 0.14 + 0.05 * p;
-      carveLWristRx = 1.56 - 0.95 * leftReach + 0.18 * leftPush;
-      carveLWristRz = -0.45 + 0.62 * leftReach - 0.12 * leftPush;
+      // LEFT TURN: Left arm is active plant
+      stdCarveLShoulderRz = -1.16 + 0.18 * leftReach - 0.08 * leftPush;
+      stdCarveLShoulderRx = -0.10 - 0.55 * leftReach + 0.58 * leftPush;
+      stdCarveLShoulderRy = 0.08 - 0.16 * leftReach + 0.12 * leftPush;
+      stdCarveLElbowRy = -0.78 - 0.20 * leftReach + 0.50 * leftPush;
+      stdCarveLElbowRz = 0.14 + 0.05 * p;
+      stdCarveLWristRx = 1.56 - 0.95 * leftReach + 0.18 * leftPush;
+      stdCarveLWristRz = -0.45 + 0.62 * leftReach - 0.12 * leftPush;
 
-      // Right arm stays in idle animation (no new carve animation applied)
-      carveRShoulderRz = idleRShoulderRz;
-      carveRShoulderRx = idleRShoulderRx;
-      carveRShoulderRy = idleRShoulderRy;
-      carveRElbowRy = idleRElbowRy;
-      carveRElbowRz = idleRElbowRz;
-      carveRWristRx = idleRWristRx;
-      carveRWristRz = idleRWristRz;
+      stdCarveRShoulderRz = idleRShoulderRz;
+      stdCarveRShoulderRx = idleRShoulderRx;
+      stdCarveRShoulderRy = idleRShoulderRy;
+      stdCarveRElbowRy = idleRElbowRy;
+      stdCarveRElbowRz = idleRElbowRz;
+      stdCarveRWristRx = idleRWristRx;
+      stdCarveRWristRz = idleRWristRz;
+
+      // Drift Carve Left Turn: active left plant + wider balance right arm
+      driftCarveLShoulderRz = -1.10 + 0.18 * leftReach - 0.08 * leftPush;
+      driftCarveLShoulderRx = -0.12 - 0.52 * leftReach + 0.56 * leftPush;
+      driftCarveLShoulderRy = 0.08 - 0.14 * leftReach + 0.12 * leftPush;
+      driftCarveLElbowRy = -0.78 - 0.18 * leftReach + 0.52 * leftPush;
+      driftCarveLElbowRz = 0.14 + 0.05 * p;
+      driftCarveLWristRx = 1.56 - 0.95 * leftReach + 0.18 * leftPush;
+      driftCarveLWristRz = -0.45 + 0.62 * leftReach - 0.12 * leftPush;
+
+      driftCarveRShoulderRz = 1.10 + 0.04 * leftTurn;
+      driftCarveRShoulderRx = -0.12;
+      driftCarveRShoulderRy = -0.08;
+      driftCarveRElbowRy = 0.78;
+      driftCarveRElbowRz = -0.14 - 0.05 * p;
+      driftCarveRWristRx = 1.56;
+      driftCarveRWristRz = 0.45;
     } else {
-      // RIGHT TURN: Right arm is active plant; Left arm remains strictly in idle animation
-      carveRShoulderRz = 1.16 - 0.18 * rightReach + 0.08 * rightPush;
-      carveRShoulderRx = -0.10 - 0.55 * rightReach + 0.58 * rightPush;
-      carveRShoulderRy = -0.08 + 0.16 * rightReach - 0.12 * rightPush;
-      carveRElbowRy = 0.78 + 0.20 * rightReach - 0.50 * rightPush;
-      carveRElbowRz = -0.14 - 0.05 * p;
-      carveRWristRx = 1.56 - 0.95 * rightReach + 0.18 * rightPush;
-      carveRWristRz = 0.45 - 0.62 * rightReach + 0.12 * rightPush;
+      // RIGHT TURN: Right arm is active plant
+      stdCarveRShoulderRz = 1.16 - 0.18 * rightReach + 0.08 * rightPush;
+      stdCarveRShoulderRx = -0.10 - 0.55 * rightReach + 0.58 * rightPush;
+      stdCarveRShoulderRy = -0.08 + 0.16 * rightReach - 0.12 * rightPush;
+      stdCarveRElbowRy = 0.78 + 0.20 * rightReach - 0.50 * rightPush;
+      stdCarveRElbowRz = -0.14 - 0.05 * p;
+      stdCarveRWristRx = 1.56 - 0.95 * rightReach + 0.18 * rightPush;
+      stdCarveRWristRz = 0.45 - 0.62 * rightReach + 0.12 * rightPush;
 
-      // Left arm stays in idle animation (no new carve animation applied)
-      carveLShoulderRz = idleLShoulderRz;
-      carveLShoulderRx = idleLShoulderRx;
-      carveLShoulderRy = idleLShoulderRy;
-      carveLElbowRy = idleLElbowRy;
-      carveLElbowRz = idleLElbowRz;
-      carveLWristRx = idleLWristRx;
-      carveLWristRz = idleLWristRz;
+      stdCarveLShoulderRz = idleLShoulderRz;
+      stdCarveLShoulderRx = idleLShoulderRx;
+      stdCarveLShoulderRy = idleLShoulderRy;
+      stdCarveLElbowRy = idleLElbowRy;
+      stdCarveLElbowRz = idleLElbowRz;
+      stdCarveLWristRx = idleLWristRx;
+      stdCarveLWristRz = idleLWristRz;
+
+      // Drift Carve Right Turn: active right plant + wider balance left arm
+      driftCarveRShoulderRz = 1.10 - 0.18 * rightReach + 0.08 * rightPush;
+      driftCarveRShoulderRx = -0.12 - 0.52 * rightReach + 0.56 * rightPush;
+      driftCarveRShoulderRy = -0.08 + 0.14 * rightReach - 0.12 * rightPush;
+      driftCarveRElbowRy = 0.78 + 0.18 * rightReach - 0.52 * rightPush;
+      driftCarveRElbowRz = -0.14 - 0.05 * p;
+      driftCarveRWristRx = 1.56 - 0.95 * rightReach + 0.18 * rightPush;
+      driftCarveRWristRz = 0.45 - 0.62 * rightReach + 0.12 * rightPush;
+
+      driftCarveLShoulderRz = -1.10 - 0.04 * rightTurn;
+      driftCarveLShoulderRx = -0.12;
+      driftCarveLShoulderRy = 0.08;
+      driftCarveLElbowRy = -0.78;
+      driftCarveLElbowRz = 0.14 + 0.05 * p;
+      driftCarveLWristRx = 1.56;
+      driftCarveLWristRz = -0.45;
     }
+
+    const carveLShoulderRz = THREE.MathUtils.lerp(stdCarveLShoulderRz, driftCarveLShoulderRz, db);
+    const carveLShoulderRx = THREE.MathUtils.lerp(stdCarveLShoulderRx, driftCarveLShoulderRx, db);
+    const carveLShoulderRy = THREE.MathUtils.lerp(stdCarveLShoulderRy, driftCarveLShoulderRy, db);
+    const carveLElbowRy = THREE.MathUtils.lerp(stdCarveLElbowRy, driftCarveLElbowRy, db);
+    const carveLElbowRz = THREE.MathUtils.lerp(stdCarveLElbowRz, driftCarveLElbowRz, db);
+    const carveLWristRx = THREE.MathUtils.lerp(stdCarveLWristRx, driftCarveLWristRx, db);
+    const carveLWristRz = THREE.MathUtils.lerp(stdCarveLWristRz, driftCarveLWristRz, db);
+
+    const carveRShoulderRz = THREE.MathUtils.lerp(stdCarveRShoulderRz, driftCarveRShoulderRz, db);
+    const carveRShoulderRx = THREE.MathUtils.lerp(stdCarveRShoulderRx, driftCarveRShoulderRx, db);
+    const carveRShoulderRy = THREE.MathUtils.lerp(stdCarveRShoulderRy, driftCarveRShoulderRy, db);
+    const carveRElbowRy = THREE.MathUtils.lerp(stdCarveRElbowRy, driftCarveRElbowRy, db);
+    const carveRElbowRz = THREE.MathUtils.lerp(stdCarveRElbowRz, driftCarveRElbowRz, db);
+    const carveRWristRx = THREE.MathUtils.lerp(stdCarveRWristRx, driftCarveRWristRx, db);
+    const carveRWristRz = THREE.MathUtils.lerp(stdCarveRWristRz, driftCarveRWristRz, db);
 
     this.targets.leftShoulder.rz = THREE.MathUtils.lerp(idleLShoulderRz, carveLShoulderRz, cb);
     this.targets.leftShoulder.rx = THREE.MathUtils.lerp(idleLShoulderRx, carveLShoulderRx, cb);
@@ -1583,8 +1706,8 @@ export class SkierAnimator {
       this.hipY = THREE.MathUtils.damp(this.hipY, this.hipPosTarget.y, 18.0, clampedDt);
     }
 
-    // 7. Special Overrides: Drift Hockey Stop
-    if (params.isDrifting && params.isGrounded) {
+    // 7. Special Overrides: Drift Hockey Stop (when not in full drift carving stance)
+    if (params.isDrifting && params.isGrounded && this.driftCarveBlend < 0.2) {
       this.targets.spine.rx += 0.08;
       this.targets.leftKnee.rx += 0.12;
       this.targets.rightKnee.rx += 0.12;
