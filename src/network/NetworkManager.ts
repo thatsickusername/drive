@@ -10,6 +10,16 @@ export interface LocalSessionInfo {
   paletteName: string;
 }
 
+const JUMP_VARIATION_MAP: Record<string, number> = {
+  jump: 0,
+  grab: 1,
+  shifty: 2,
+  daffy: 3,
+  mutegrab: 4,
+  ironcross: 5,
+  nordic: 6
+};
+
 export class NetworkManager {
   private ws: WebSocket | null = null;
   private isConnected = false;
@@ -159,7 +169,7 @@ export class NetworkManager {
     let remote = this.remoteSkiers.get(peerId);
     if (!remote) {
       // Auto-register peer if not already present
-      const paletteId = view.getUint8(23);
+      const paletteId = view.getUint8(26) & 0x0f;
       this.addRemoteSkier(peerId, paletteId);
       remote = this.remoteSkiers.get(peerId);
     }
@@ -226,54 +236,59 @@ export class NetworkManager {
 
     const v = this.packetView;
     const pos = this.player.root.position;
-
-    const quantizeAngle = (rad: number) => {
-      let r = rad % (Math.PI * 2);
-      if (r > Math.PI) r -= Math.PI * 2;
-      if (r < -Math.PI) r += Math.PI * 2;
-      return Math.round((r / Math.PI) * 32767);
-    };
-
-    // Extract euler angles from visualRoot quaternion
-    const euler = new THREE.Euler().setFromQuaternion(this.player.mesh.quaternion, 'YXZ');
+    const quat = this.player.visualQuaternion;
 
     v.setUint8(0, this.localSession ? this.localSession.id : 0);
     v.setFloat32(1, pos.x, true);
     v.setFloat32(5, pos.y, true);
     v.setFloat32(9, pos.z, true);
 
-    v.setInt16(13, quantizeAngle(euler.y), true);
-    v.setInt16(15, quantizeAngle(euler.x), true);
-    v.setInt16(17, quantizeAngle(euler.z), true);
+    // Full 3D rotation unit quaternion (offsets 13..20: 8 bytes)
+    v.setInt16(13, Math.round(quat.x * 32767), true);
+    v.setInt16(15, Math.round(quat.y * 32767), true);
+    v.setInt16(17, Math.round(quat.z * 32767), true);
+    v.setInt16(19, Math.round(quat.w * 32767), true);
 
+    // Forward speed in 0.01 m/s (offsets 21..22: 2 bytes)
     const speedMps = this.player.speed;
     const speedRaw = Math.round(Math.min(655.35, Math.max(0, speedMps)) * 100);
-    v.setUint16(19, speedRaw, true);
+    v.setUint16(21, speedRaw, true);
 
-    // Turn type: 0 Standard, 1 Sharp, 2 Slide, 3 Overturn
+    // Continuous carving body lean: -1.0 to +1.0 mapped to int8 -127..127 (offset 23: 1 byte)
+    const clampedLean = Math.max(-1.0, Math.min(1.0, this.player.leanAngle));
+    v.setInt8(23, Math.round(clampedLean * 127));
+
+    // Turn type: 0 Standard, 1 Sharp, 2 Slide, 3 Overturn (offset 24: 1 byte)
     let turnType = 0;
     if (this.player.gmaPhysics.currentTurnType === TurnType.SharpTurn) turnType = 1;
     else if (this.player.isDrifting || this.player.gmaPhysics.currentTurnType === TurnType.SlideTurn) turnType = 2;
     else if (this.player.gmaPhysics.currentTurnType === TurnType.OverTurn) turnType = 3;
-    v.setUint8(21, turnType);
+    v.setUint8(24, turnType);
 
-    // Movement state: 0 Standing, 1 Gliding, 2 Airborne, 3 Crashing
+    // Movement state: 0 Standing, 1 Gliding, 2 Airborne, 3 Crashing (offset 25: 1 byte)
     let movementState = 1;
     if (this.player.gmaPhysics.state === 'Crashing') movementState = 3;
     else if (!this.player.isGrounded) movementState = 2;
     else if (speedMps < 0.2) movementState = 0;
-    v.setUint8(22, movementState);
+    v.setUint8(25, movementState);
 
-    v.setUint8(23, this.localSession ? this.localSession.paletteId : 0);
-    v.setUint8(24, 0); // Reserved trickId
+    // Style packed: low 4 bits = paletteId (0..3), high 4 bits = jumpVariation index (0..6) (offset 26: 1 byte)
+    const paletteId = (this.localSession ? this.localSession.paletteId : 0) & 0x0f;
+    const jumpVarName = this.player.animator.activeJumpVariation || 'jump';
+    const jumpVarIdx = (JUMP_VARIATION_MAP[jumpVarName] ?? 0) & 0x0f;
+    v.setUint8(26, paletteId | (jumpVarIdx << 4));
 
+    // Animated action flags (offset 27: 1 byte)
     let flags = 0;
     if (this.player.isGrounded) flags |= 0x01;
     if (this.player.gmaPhysics.hasTwintips) flags |= 0x02;
     if (this.player.gmaPhysics.isStaking) flags |= 0x04;
-    v.setUint8(25, flags);
-
-    v.setUint16(26, 0, true); // Reserved / timestamp
+    if (this.player.isTucking) flags |= 0x08;
+    if (this.player.isSpinning) flags |= 0x10;
+    if (this.player.isFrontFlipping) flags |= 0x20;
+    if (this.player.isBackFlipping) flags |= 0x40;
+    if (this.player.isGrabActive) flags |= 0x80;
+    v.setUint8(27, flags);
 
     this.ws.send(this.packetBuffer);
   }

@@ -126,6 +126,12 @@ export class SkierController {
   public wiggleTimer = 0;      // Flat ground wiggle skate timer
   public lastWiggleSign = 0;   // Flat ground wiggle alternation sign
   public airTimer = 0;         // Airborne duration in seconds
+  public isTucking = false;
+  public isSpinning = false;
+  public isFrontFlipping = false;
+  public isBackFlipping = false;
+  public isGrabActive = false;
+  public spinDir = 1.0;
 
   public smoothNormal = new THREE.Vector3(0, 1, 0);
 
@@ -244,6 +250,14 @@ export class SkierController {
 
   public get mesh(): THREE.Group {
     return this.root;
+  }
+
+  public get visualMesh(): THREE.Group {
+    return this.visualRoot;
+  }
+
+  public get visualQuaternion(): THREE.Quaternion {
+    return this.visualRoot.quaternion;
   }
 
   public get heading(): number {
@@ -573,6 +587,11 @@ export class SkierController {
 
     // If crashing, ragdoll limbs track the Verlet particles without detaching
     if (isCrashing) {
+      this.isTucking = false;
+      this.isSpinning = false;
+      this.isFrontFlipping = false;
+      this.isBackFlipping = false;
+      this.isGrabActive = false;
       const pts = this.gmaPhysics.ragdoll.points;
       if (pts.length >= 21) {
         // 1. Root translates strictly with pelvis particle
@@ -742,6 +761,13 @@ export class SkierController {
 
       const hasBackFlipInput = (!!input.brake && !input.forward) || (input.trickFlipY !== undefined && input.trickFlipY < -0.05);
       const isBackFlipping = inAir && (hasBackFlipInput || this.gmaPhysics.angularVelocityFlip < -0.15);
+
+      this.isTucking = !!input.forward && this.speed > 8;
+      this.isSpinning = isSpinning;
+      this.spinDir = spinDir;
+      this.isFrontFlipping = isFrontFlipping;
+      this.isBackFlipping = isBackFlipping;
+      this.isGrabActive = !!input.grab;
 
       this.animator.update({
         dt,

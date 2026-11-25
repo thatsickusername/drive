@@ -4,21 +4,31 @@ import { SkierAnimator } from '../player/character/SkierAnimator';
 import { PALETTES } from '../player/character/SkierPalette';
 import { CarvedSnowTrail } from '../world/trails/CarvedSnowTrail';
 
+export type RemoteJumpVariation = 'jump' | 'grab' | 'shifty' | 'daffy' | 'mutegrab' | 'ironcross' | 'nordic';
+
 export interface RemoteSkierStateSnapshot {
   time: number;
   pos: THREE.Vector3;
   quat: THREE.Quaternion;
   speed: number;
-  yaw: number;
-  pitch: number;
-  roll: number;
+  leanAngle: number;
   turnType: number;
   movementState: number;
+  paletteId: number;
+  jumpVariation: RemoteJumpVariation;
   flags: number;
-  trickId: number;
 }
 
 const PALETTE_KEYS = ['coral', 'ochre', 'glacier', 'pine'];
+const JUMP_VARIATIONS: RemoteJumpVariation[] = [
+  'jump',
+  'grab',
+  'shifty',
+  'daffy',
+  'mutegrab',
+  'ironcross',
+  'nordic'
+];
 
 export class RemoteSkier {
   public readonly id: number;
@@ -32,13 +42,31 @@ export class RemoteSkier {
   private readonly interpDelay = 0.10; // 100ms
   private renderTime = 0;
 
-  // Current interpolated transforms
+  // Current interpolated transforms & animation parameters
   private currentPos = new THREE.Vector3();
   private currentQuat = new THREE.Quaternion();
   private currentSpeed = 0;
+  private currentLeanAngle = 0;
   private isGrounded = true;
   private isDrifting = false;
   private isStaking = false;
+  private isSlideTurn = false;
+  private isSharpTurn = false;
+  private isTucking = false;
+  private isSpinning = false;
+  private isFrontFlipping = false;
+  private isBackFlipping = false;
+  private grabPressed = false;
+  private movementState = 1;
+  private currentJumpVariation: RemoteJumpVariation = 'jump';
+  private wasCrashing = false;
+
+  // Snow Spray Particle System (glistening plumes during carving, drifting, and braking)
+  private sprayParticles: THREE.Points | null = null;
+  private readonly sprayCount = 90;
+  private sprayPositions = new Float32Array(90 * 3);
+  private sprayVelocities = new Float32Array(90 * 3);
+  private sprayLifetimes = new Float32Array(90);
 
   // Overhead Nametag / Trick popup UI element
   private tagElement: HTMLElement | null = null;
@@ -68,7 +96,27 @@ export class RemoteSkier {
       this.trail.setTerrainSampler(terrainSampler);
     }
 
+    this.initSnowSpray(scene);
     this.createNameTag(pKey);
+  }
+
+  private initSnowSpray(scene: THREE.Scene): void {
+    for (let i = 0; i < this.sprayCount; i++) {
+      this.sprayPositions[i * 3 + 1] = -9999;
+      this.sprayLifetimes[i] = 0;
+    }
+    const sprayGeo = new THREE.BufferGeometry();
+    sprayGeo.setAttribute('position', new THREE.BufferAttribute(this.sprayPositions, 3));
+    const sprayMat = new THREE.PointsMaterial({
+      color: 0xf5f8fc,
+      size: 0.35,
+      transparent: true,
+      opacity: 0.65,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+    this.sprayParticles = new THREE.Points(sprayGeo, sprayMat);
+    scene.add(this.sprayParticles);
   }
 
   private createNameTag(paletteName: string): void {
@@ -103,24 +151,35 @@ export class RemoteSkier {
     const posY = view.getFloat32(5, true);
     const posZ = view.getFloat32(9, true);
 
-    const yawRaw = view.getInt16(13, true);
-    const pitchRaw = view.getInt16(15, true);
-    const rollRaw = view.getInt16(17, true);
-    const speedRaw = view.getUint16(19, true);
+    const qxRaw = view.getInt16(13, true);
+    const qyRaw = view.getInt16(15, true);
+    const qzRaw = view.getInt16(17, true);
+    const qwRaw = view.getInt16(19, true);
+    const speedRaw = view.getUint16(21, true);
 
-    const turnType = view.getUint8(21);
-    const movementState = view.getUint8(22);
-    view.getUint8(23); // paletteId
-    const trickId = view.getUint8(24);
-    const flags = view.getUint8(25);
+    const leanRaw = view.getInt8(23);
+    const turnType = view.getUint8(24);
+    const movementState = view.getUint8(25);
+    const stylePacked = view.getUint8(26);
+    const flags = view.getUint8(27);
 
-    const yaw = (yawRaw / 32767) * Math.PI;
-    const pitch = (pitchRaw / 32767) * Math.PI;
-    const roll = (rollRaw / 32767) * Math.PI;
+    const qx = qxRaw / 32767;
+    const qy = qyRaw / 32767;
+    const qz = qzRaw / 32767;
+    const qw = qwRaw / 32767;
+    const quat = new THREE.Quaternion(qx, qy, qz, qw);
+    if (quat.lengthSq() > 0.0001) {
+      quat.normalize();
+    } else {
+      quat.set(0, 0, 0, 1);
+    }
+
     const speed = speedRaw / 100;
+    const leanAngle = THREE.MathUtils.clamp(leanRaw / 127.0, -1.0, 1.0);
 
-    const euler = new THREE.Euler(pitch, yaw, roll, 'YXZ');
-    const quat = new THREE.Quaternion().setFromEuler(euler);
+    const paletteId = stylePacked & 0x0f;
+    const jumpVarIdx = (stylePacked >> 4) & 0x0f;
+    const jumpVariation = JUMP_VARIATIONS[jumpVarIdx] || 'jump';
 
     const now = performance.now() * 0.001;
     this.snapshots.push({
@@ -128,13 +187,12 @@ export class RemoteSkier {
       pos: new THREE.Vector3(posX, posY, posZ),
       quat,
       speed,
-      yaw,
-      pitch,
-      roll,
+      leanAngle,
       turnType,
       movementState,
-      flags,
-      trickId
+      paletteId,
+      jumpVariation,
+      flags
     });
 
     // Keep buffer around 1.0 second max to avoid memory bloat
@@ -166,6 +224,15 @@ export class RemoteSkier {
       this.renderTime += dt;
     }
 
+    // Adaptive clock resync to prevent jitter or drift
+    if (this.snapshots.length > 0) {
+      const minTime = this.snapshots[0].time;
+      const maxTime = this.snapshots[this.snapshots.length - 1].time;
+      if (this.renderTime < minTime - 0.25 || this.renderTime > maxTime + 0.25) {
+        this.renderTime = now - this.interpDelay;
+      }
+    }
+
     const targetTime = this.renderTime;
 
     // Snapshot interpolation
@@ -175,13 +242,15 @@ export class RemoteSkier {
         this.currentPos.copy(s.pos);
         this.currentQuat.copy(s.quat);
         this.currentSpeed = s.speed;
-        this.applyFlags(s.flags, s.movementState, s.turnType);
+        this.currentLeanAngle = s.leanAngle;
+        this.applyFlags(s.flags, s.movementState, s.turnType, s.jumpVariation);
       } else if (targetTime >= this.snapshots[this.snapshots.length - 1].time) {
         const s = this.snapshots[this.snapshots.length - 1];
         this.currentPos.copy(s.pos);
         this.currentQuat.copy(s.quat);
         this.currentSpeed = s.speed;
-        this.applyFlags(s.flags, s.movementState, s.turnType);
+        this.currentLeanAngle = s.leanAngle;
+        this.applyFlags(s.flags, s.movementState, s.turnType, s.jumpVariation);
       } else {
         // Find surrounding snapshots
         let s0 = this.snapshots[0];
@@ -200,7 +269,8 @@ export class RemoteSkier {
         this.currentPos.lerpVectors(s0.pos, s1.pos, alpha);
         this.currentQuat.slerpQuaternions(s0.quat, s1.quat, alpha);
         this.currentSpeed = THREE.MathUtils.lerp(s0.speed, s1.speed, alpha);
-        this.applyFlags(s1.flags, s1.movementState, s1.turnType);
+        this.currentLeanAngle = THREE.MathUtils.lerp(s0.leanAngle, s1.leanAngle, alpha);
+        this.applyFlags(s1.flags, s1.movementState, s1.turnType, s1.jumpVariation);
       }
     }
 
@@ -208,15 +278,53 @@ export class RemoteSkier {
     this.root.position.copy(this.currentPos);
     this.root.quaternion.copy(this.currentQuat);
 
-    // Update remote animator
-    this.animator.update({
-      dt,
-      speed: this.currentSpeed,
-      leanAngle: 0,
-      isGrounded: this.isGrounded,
-      isStaking: this.isStaking,
-      isDrifting: this.isDrifting
-    });
+    // Crash state transitions
+    const isCrashing = this.movementState === 3;
+    if (isCrashing && !this.wasCrashing) {
+      if (this.trail) this.trail.onCrash();
+    } else if (!isCrashing && this.wasCrashing) {
+      this.skierRig.resetPose();
+      if (this.trail) this.trail.onRespawn();
+    }
+    this.wasCrashing = isCrashing;
+
+    if (isCrashing) {
+      this.animator.update({
+        dt,
+        speed: this.currentSpeed,
+        leanAngle: 0,
+        isGrounded: this.isGrounded,
+        isStaking: false,
+        isDrifting: false,
+        isGliding: false
+      });
+      if (this.skierRig.joints.hips) {
+        this.skierRig.joints.hips.rotation.x = Math.sin(now * 8) * 0.5;
+        this.skierRig.joints.hips.rotation.z = Math.cos(now * 6) * 0.4;
+      }
+      if (this.skierRig.joints.spine) {
+        this.skierRig.joints.spine.rotation.x = 0.6;
+      }
+    } else {
+      // Dynamic procedural animation update
+      this.animator.update({
+        dt,
+        speed: this.currentSpeed,
+        leanAngle: this.currentLeanAngle,
+        isGrounded: this.isGrounded,
+        isStaking: this.isStaking,
+        isDrifting: this.isDrifting,
+        isSlideTurn: this.isSlideTurn,
+        isSharpTurn: this.isSharpTurn,
+        tuck: this.isTucking,
+        jumpVariation: this.currentJumpVariation,
+        isSpinning: this.isSpinning,
+        spinDirection: this.currentLeanAngle < 0 ? -1.0 : 1.0,
+        isFrontFlipping: this.isFrontFlipping,
+        isBackFlipping: this.isBackFlipping,
+        grabPressed: this.grabPressed
+      });
+    }
 
     // Update dedicated Carved Snow Trail for remote skier
     if (this.trail) {
@@ -224,18 +332,22 @@ export class RemoteSkier {
         this.trail.setTerrainSampler(terrainSampler);
       }
       const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.currentQuat);
-      const normal = new THREE.Vector3(0, 1, 0);
+      const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(this.currentQuat);
+      const slipAngle = this.isDrifting ? 40 : Math.abs(this.currentLeanAngle) * 20;
       this.trail.update(
         this.currentPos,
         right,
         normal,
-        this.isGrounded,
-        this.isDrifting ? 40 : 0,
+        this.isGrounded && !isCrashing,
+        slipAngle,
         this.currentSpeed,
         this.isDrifting,
-        0
+        this.currentLeanAngle
       );
     }
+
+    // Snow spray particles for remote skier
+    this.updateSnowSpray(dt, isCrashing);
 
     // Update screen-space name tag & trick banner position
     if (this.tagElement) {
@@ -263,14 +375,86 @@ export class RemoteSkier {
     }
   }
 
-  private applyFlags(flags: number, _movementState: number, turnType: number): void {
+  private applyFlags(
+    flags: number,
+    movementState: number,
+    turnType: number,
+    jumpVariation: RemoteJumpVariation
+  ): void {
     this.isGrounded = (flags & 0x01) !== 0;
     this.isStaking = (flags & 0x04) !== 0;
-    this.isDrifting = turnType === 2; // Slide
+    this.isTucking = (flags & 0x08) !== 0;
+    this.isSpinning = (flags & 0x10) !== 0;
+    this.isFrontFlipping = (flags & 0x20) !== 0;
+    this.isBackFlipping = (flags & 0x40) !== 0;
+    this.grabPressed = (flags & 0x80) !== 0;
+    this.isSlideTurn = turnType === 2;
+    this.isSharpTurn = turnType === 1;
+    this.isDrifting = turnType === 2 || turnType === 3;
+    this.movementState = movementState;
+    this.currentJumpVariation = jumpVariation;
+  }
+
+  private updateSnowSpray(dt: number, isCrashing: boolean): void {
+    if (!this.sprayParticles) return;
+
+    const isEmitting =
+      this.isGrounded &&
+      this.currentSpeed > 1.5 &&
+      (Math.abs(this.currentLeanAngle) > 0.15 || this.isDrifting || isCrashing);
+
+    if (isEmitting) {
+      const emitCount = isCrashing ? 4 : (this.isDrifting ? 3 : 1);
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.currentQuat);
+      const leanSign = this.currentLeanAngle >= 0 ? 1 : -1;
+      let emitted = 0;
+
+      for (let i = 0; i < this.sprayCount && emitted < emitCount; i++) {
+        if (this.sprayLifetimes[i] <= 0) {
+          this.sprayLifetimes[i] = 0.35 + Math.random() * 0.2;
+          const idx = i * 3;
+          this.sprayPositions[idx] = this.currentPos.x + (Math.random() - 0.5) * 0.3;
+          this.sprayPositions[idx + 1] = this.currentPos.y + 0.05;
+          this.sprayPositions[idx + 2] = this.currentPos.z + (Math.random() - 0.5) * 0.3;
+
+          const sprayDirX = right.x * leanSign * 2.5 + (Math.random() - 0.5) * 1.5;
+          const sprayDirZ = right.z * leanSign * 2.5 + (Math.random() - 0.5) * 1.5;
+          this.sprayVelocities[idx] = sprayDirX;
+          this.sprayVelocities[idx + 1] = 1.8 + Math.random() * 1.8;
+          this.sprayVelocities[idx + 2] = sprayDirZ;
+          emitted++;
+        }
+      }
+    }
+
+    let active = false;
+    for (let i = 0; i < this.sprayCount; i++) {
+      if (this.sprayLifetimes[i] > 0) {
+        this.sprayLifetimes[i] -= dt;
+        const idx = i * 3;
+        this.sprayPositions[idx] += this.sprayVelocities[idx] * dt;
+        this.sprayPositions[idx + 1] += this.sprayVelocities[idx + 1] * dt;
+        this.sprayPositions[idx + 2] += this.sprayVelocities[idx + 2] * dt;
+        this.sprayVelocities[idx + 1] -= 9.81 * dt;
+        active = true;
+      } else {
+        this.sprayPositions[i * 3 + 1] = -9999;
+      }
+    }
+
+    if (active) {
+      (this.sprayParticles.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    }
   }
 
   public dispose(scene: THREE.Scene): void {
     scene.remove(this.root);
+    if (this.sprayParticles) {
+      scene.remove(this.sprayParticles);
+      this.sprayParticles.geometry.dispose();
+      (this.sprayParticles.material as THREE.Material).dispose();
+      this.sprayParticles = null;
+    }
     if (this.tagElement && this.tagElement.parentNode) {
       this.tagElement.parentNode.removeChild(this.tagElement);
     }
