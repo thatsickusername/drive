@@ -796,10 +796,10 @@ export class GmaPlayerPhysics {
     this.accumulatedAirSpinDeg += spinDeg;
     this.trickScoring.addSpin(this.accumulatedAirSpinDeg);
 
-    // Consistent flip rate: ~430 deg/s (360 flip takes ~0.84s), no runaway acceleration
-    const TARGET_FLIP_SPEED = 7.5; // rad/s
+    // Consistent flip rate: ~298 deg/s (360 flip takes ~1.2s), weighty athletic feel with momentum buildup
+    const TARGET_FLIP_SPEED = 5.2; // rad/s
     const targetFlipVel = Math.abs(flipInput) > 0.05 ? Math.sign(flipInput) * TARGET_FLIP_SPEED : 0.0;
-    const flipDampRate = targetFlipVel !== 0 ? 30.0 : 40.0;
+    const flipDampRate = targetFlipVel !== 0 ? 20.0 : 35.0;
     this.angularVelocityFlip = THREE.MathUtils.damp(this.angularVelocityFlip, targetFlipVel, flipDampRate, dt);
 
     const deltaFlip = this.angularVelocityFlip * dt;

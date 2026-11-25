@@ -778,11 +778,18 @@ export class Skier {
       z: this.gmaPhysics.position.z
     });
 
-    // Handle player jump trigger for snow trail interruption
+    // Handle player jump trigger for snow trail interruption and variation selection
     const jumpTriggered = this.gmaPhysics.jumpActionTriggered || (input.jump && !this.prevJumpInput && this.wasGrounded);
     this.gmaPhysics.jumpActionTriggered = false;
-    if (jumpTriggered && this.trailRibbon) {
-      this.trailRibbon.onJumpStart();
+    if (jumpTriggered) {
+      if (input.grab) {
+        this.animator.setJumpVariation('grab');
+      } else {
+        this.animator.pickRandomJumpVariation();
+      }
+      if (this.trailRibbon) {
+        this.trailRibbon.onJumpStart();
+      }
     }
     this.prevJumpInput = !!input.jump;
 
@@ -834,10 +841,33 @@ export class Skier {
     this.trickEngine.lastTrickPoints = this.gmaPhysics.trickScoring.lastFinalizedPoints;
     this.trickEngine.displayTimer = this.gmaPhysics.trickScoring.displayTimer;
 
-    // Land audio thump
+    // Land audio thump & trick notification
     if (this.wasGrounded !== this.isGrounded) {
       if (this.isGrounded && this.airTimer > 0.25) {
         this.audio.playLandThump(this.gmaPhysics.state !== MovementState.Crashing);
+        if ((!this.trickEngine.lastTrickName || this.trickEngine.lastTrickName === 'BIG AIR') && this.gmaPhysics.state !== MovementState.Crashing) {
+          const varNames: Record<string, string> = {
+            grab: 'SAFETY GRAB',
+            shifty: 'MID-AIR SHIFTY',
+            daffy: 'CLASSIC DAFFY',
+            mutegrab: 'MUTE GRAB',
+            ironcross: 'IRON CROSS',
+            nordic: 'NORDIC FLIGHT',
+            jump: 'SPREAD EAGLE'
+          };
+          let trickTitle = varNames[this.animator.activeJumpVariation] || 'AIR POP';
+          if (this.animator.isFrontFlippingActive) {
+            trickTitle = 'NORDIC FRONT FLIP';
+          } else if (this.animator.isBackFlippingActive) {
+            trickTitle = 'IRON CROSS BACK FLIP';
+          }
+          this.trickEngine.lastTrickName = trickTitle;
+          if (this.trickEngine.lastTrickPoints === 0) {
+            this.trickEngine.lastTrickPoints = 150;
+            this.trickEngine.totalScore += 150;
+          }
+          this.trickEngine.displayTimer = 2.5;
+        }
       }
       this.wasGrounded = this.isGrounded;
     }
@@ -1024,7 +1054,7 @@ export class Skier {
       }
       this.visualRoot.quaternion.slerp(this._targetQuat, Math.min(1, dt * 24));
 
-      // 2. Dynamic Procedural Animation Update (Idle glide vs Alpine Carving + Jump + 360 Spin Trick)
+      // 2. Dynamic Procedural Animation Update (Idle glide vs Alpine Carving + Jump + 360 Spin Trick + Front/Back Flip Tricks)
       const inAir = !this.isGrounded;
       const hasSpinInput = !!input.left || !!input.right || (input.trickSpinX !== undefined && Math.abs(input.trickSpinX) > 0.05);
       const isSpinning = inAir && (hasSpinInput || Math.abs(this.gmaPhysics.angularVelocitySpin) > 0.15 || this.gmaPhysics.accumulatedAirSpinDeg > 2.0);
@@ -1037,6 +1067,15 @@ export class Skier {
       }
 
       const spinProgress = (this.gmaPhysics.accumulatedAirSpinDeg % 360.0) / 360.0;
+      const flipProgress = (this.gmaPhysics.accumulatedAirFlipDeg % 360.0) / 360.0;
+      const flipRate = Math.abs(this.gmaPhysics.angularVelocityFlip);
+
+      // Front flip (Nordic V-Style) vs Back flip (Iron Cross)
+      const hasFrontFlipInput = (!!input.forward && !input.brake) || (input.trickFlipY !== undefined && input.trickFlipY > 0.05);
+      const isFrontFlipping = inAir && (hasFrontFlipInput || this.gmaPhysics.angularVelocityFlip > 0.15);
+
+      const hasBackFlipInput = (!!input.brake && !input.forward) || (input.trickFlipY !== undefined && input.trickFlipY < -0.05);
+      const isBackFlipping = inAir && (hasBackFlipInput || this.gmaPhysics.angularVelocityFlip < -0.15);
 
       this.animator.update({
         dt,
@@ -1053,10 +1092,15 @@ export class Skier {
         isGliding: this.gmaPhysics.isGliding,
         airTime: this.airTimer,
         jumpPressed: input.jump,
+        grabPressed: !!input.grab,
         isSpinning,
         spinProgress,
         spinDirection: spinDir,
-        spinRate: this.gmaPhysics.angularVelocitySpin
+        spinRate: this.gmaPhysics.angularVelocitySpin,
+        isFrontFlipping,
+        isBackFlipping,
+        flipProgress,
+        flipRate
       });
 
       // 3. Foot Grounding & Ski Elevation Clamping:

@@ -144,8 +144,39 @@
                     Idle Skiing
                 </button>
                 <button data-anim="jump"
-                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
-                    Jump
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer"
+                    title="Jump (Random Variation) — Press Space or J">
+                    Jump 🎲
+                </button>
+                <button data-anim="grab"
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer"
+                    title="Tuck & Ski Safety Grab">
+                    Grab
+                </button>
+                <button data-anim="shifty"
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer"
+                    title="Mid-Air Counter-Rotation Shifty">
+                    Shifty
+                </button>
+                <button data-anim="daffy"
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer"
+                    title="Classic Scissor Split Daffy">
+                    Daffy
+                </button>
+                <button data-anim="ironcross"
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer"
+                    title="Vintage Freestyle Iron Cross (Tail Cross & Hawk Wings)">
+                    Iron Cross
+                </button>
+                <button data-anim="mutegrab"
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer"
+                    title="Modern Freeski Tweaked Mute Grab">
+                    Mute Grab
+                </button>
+                <button data-anim="nordic"
+                    class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer"
+                    title="Olympic Nordic V-Style Flight & Telemark Landing">
+                    Nordic 🎿
                 </button>
                 <button data-anim="spin360"
                     class="anim-btn px-3 py-1.5 rounded-full text-xs font-medium text-slate-700 transition cursor-pointer">
@@ -224,7 +255,7 @@
     <!-- Hint Toast -->
     <div id="toast"
         class="fixed bottom-20 left-1/2 -translate-x-1/2 z-10 glass-panel rounded-xl px-3.5 py-2 text-[11px] font-medium text-slate-600 opacity-0 pointer-events-none transition-opacity duration-300">
-        Drag to orbit • Scroll to zoom • Use Speed slider for slow-mo carving inspection
+        Drag to orbit • Press Space or click Jump 🎲 for random jump trick variations (Grab, Shifty, Daffy, Spread, Mute Grab) • Frontflip = Nordic, Backflip = Iron Cross • Speed slider for slow-mo
     </div>
 
     <script type="module">
@@ -942,16 +973,36 @@
 
         /**
          * ============================================================================
-         * PROCEDURAL ANIMATION ENGINE (CARVING, DRIFT, IDLE, JUMP, 360° SPIN + BLENDING)
+         * PROCEDURAL ANIMATION ENGINE (CARVING, DRIFT, IDLE, JUMP TRICKS, 360 SPIN)
          * ============================================================================
          */
         function createSkierAnimator(skier) {
             const { root, joints, footContacts } = skier;
 
-            let mode = 'carving'; // 'carving' | 'drift' | 'idle' | 'jump' | 'spin360' | 'tpose'
+            let mode = 'carving'; // 'carving' | 'drift' | 'idle' | 'jump' | 'grab' | 'shifty' | 'daffy' | 'ironcross' | 'mutegrab' | 'nordic' | 'spin360' | 'tpose'
             let isPlaying = true;
             let speed = 1.0;
             let animTime = 0;
+            let isRandomJumpLoop = false;
+
+            const JUMP_VARIATIONS = ['jump', 'grab', 'shifty', 'daffy', 'mutegrab'];
+            const JUMP_PERIODS = {
+                jump: 2.6,
+                grab: 2.75,
+                shifty: 2.7,
+                daffy: 2.7,
+                ironcross: 3.2,
+                mutegrab: 2.75,
+                nordic: 3.3
+            };
+
+            function pickRandomJumpVariation(excludeCurrent = true) {
+                let pool = JUMP_VARIATIONS;
+                if (excludeCurrent && pool.includes(mode) && pool.length > 1) {
+                    pool = pool.filter((v) => v !== mode);
+                }
+                return pool[Math.floor(Math.random() * pool.length)];
+            }
 
             // Target pose structure for smooth exponential damping
             const jointNames = [
@@ -1394,6 +1445,592 @@
             }
 
             /**
+             * ANIMATION 3B: JUMP — TUCK & SKI GRAB (SAFETY GRAB)
+             * Rider pops into the air, tucks knees high with a subtle side tweak, reaches down
+             * with the right hand to grab the ski while flaring the left arm for style, then
+             * releases cleanly into a styled bent-knee stomp landing.
+             */
+            function evaluateJumpGrab(t) {
+                const period = 2.75;
+                const u = (t % period) / period;
+
+                const idleBreath = Math.sin(t * 1.45);
+                const idleBounce = Math.sin(t * 2.6);
+
+                const crouch     = bell(u, 0.10, 0.27, 0.37);
+                const takeoff    = bell(u, 0.29, 0.37, 0.45);
+                const grab       = bell(u, 0.39, 0.56, 0.72);
+                const landAbsorb = bell(u, 0.73, 0.82, 0.95);
+
+                const airStart = 0.35;
+                const airEnd = 0.75;
+                const inAir = u > airStart && u < airEnd;
+                const airT = inAir ? (u - airStart) / (airEnd - airStart) : 0;
+                const parabola = inAir ? 4 * airT * (1 - airT) : 0;
+
+                hipPosTarget.x = 0;
+                hipPosTarget.z = 0;
+                airOffsetTarget = 0.92 * parabola;
+
+                // 1. Hips (Slight stylish side tweak during grab + deep absorb on stomp)
+                targets.hips.rx = 0.06 + 0.10 * crouch + 0.12 * grab + 0.14 * landAbsorb;
+                targets.hips.ry = 0.16 * grab - 0.06 * landAbsorb;
+                targets.hips.rz = -0.14 * grab + 0.05 * landAbsorb;
+
+                // 2. Spine (Crunches forward & dips right shoulder down to reach the tucked ski)
+                targets.spine.rx = 0.17 + 0.02 * idleBreath + 0.24 * crouch + 0.42 * grab + 0.26 * landAbsorb;
+                targets.spine.ry = -0.22 * grab + 0.05 * landAbsorb;
+                targets.spine.rz = 0.20 * grab - 0.04 * landAbsorb;
+
+                // 3. Neck & Head (Looks down slightly at the grab, then spots the landing)
+                targets.neck.rx = -0.07 - 0.10 * crouch - 0.16 * grab - 0.10 * landAbsorb;
+                targets.neck.ry = 0.08 * grab;
+                targets.head.rx = -0.08 - 0.10 * crouch - 0.18 * grab - 0.12 * landAbsorb;
+                targets.head.ry = 0.10 * grab;
+
+                // 4. Legs (Deep tucked knees pulled up toward chest with stylish side tweak)
+                const baseThigh = -0.28 - 0.02 * idleBounce;
+                const baseShin  =  0.24 + 0.018 * idleBounce;
+
+                // Left Leg (+X, tucked tight)
+                const lThigh = baseThigh - 0.38 * crouch + 0.22 * takeoff - 0.88 * grab - 0.44 * landAbsorb;
+                const lShin  = baseShin  + 0.34 * crouch - 0.18 * takeoff + 0.72 * grab + 0.38 * landAbsorb;
+                targets.leftHip.rx   = lThigh - targets.hips.rx;
+                targets.leftHip.rz   = 0.12 * grab;
+                targets.leftHip.ry   = 0.08 * grab;
+                targets.leftKnee.rx  = lShin - lThigh;
+                targets.leftAnkle.rx = -lShin - 0.22 * grab;
+
+                // Right Leg (-X, tucked high right up to the grabbing right hand)
+                const rThigh = baseThigh - 0.38 * crouch + 0.22 * takeoff - 0.96 * grab - 0.42 * landAbsorb;
+                const rShin  = baseShin  + 0.34 * crouch - 0.18 * takeoff + 0.78 * grab + 0.36 * landAbsorb;
+                targets.rightHip.rx   = rThigh - targets.hips.rx;
+                targets.rightHip.rz   = 0.10 * grab;
+                targets.rightHip.ry   = 0.08 * grab;
+                targets.rightKnee.rx  = rShin - rThigh;
+                targets.rightAnkle.rx = -rShin - 0.26 * grab;
+
+                // 5. Arms & Poles (Right hand reaches down to grab ski; Left arm flares high & back for style)
+                targets.leftShoulder.rz = -1.22 - 0.08 * crouch + 0.18 * takeoff + 0.86 * grab + 0.22 * landAbsorb;
+                targets.leftShoulder.rx = -0.10 + 0.24 * crouch - 0.20 * takeoff + 0.34 * grab - 0.18 * landAbsorb;
+                targets.leftShoulder.ry =  0.08 - 0.26 * grab;
+                targets.leftElbow.ry    = -0.82 - 0.12 * crouch + 0.48 * grab;
+                targets.leftElbow.rz    =  0.15 - 0.12 * grab;
+                targets.leftWrist.rx    =  1.60 + 0.14 * crouch - 0.35 * grab;
+                targets.leftWrist.rz    = -0.45 + 0.22 * grab;
+
+                targets.rightShoulder.rz =  1.22 + 0.08 * crouch - 0.14 * takeoff + 0.22 * grab - 0.20 * landAbsorb;
+                targets.rightShoulder.rx = -0.10 + 0.24 * crouch - 0.22 * takeoff - 0.62 * grab - 0.18 * landAbsorb;
+                targets.rightShoulder.ry = -0.08 - 0.18 * grab;
+                targets.rightElbow.ry    =  0.82 + 0.12 * crouch - 0.56 * grab;
+                targets.rightElbow.rz    = -0.15 + 0.12 * grab;
+                targets.rightWrist.rx    =  1.60 + 0.14 * crouch - 0.42 * grab;
+                targets.rightWrist.rz    =  0.45 - 0.28 * grab;
+
+                if (crouch > 0.35)      return 'Ski Grab • Crouch Wind-Up';
+                if (takeoff > 0.45)     return 'Ski Grab • Explosive Pop';
+                if (grab > 0.38)        return 'Ski Grab • Tuck & Grab';
+                if (inAir)              return 'Ski Grab • Releasing Grab';
+                if (landAbsorb > 0.30)  return 'Ski Grab • Styled Stomp';
+                return 'Ski Grab • Idle Stance';
+            }
+
+            /**
+             * ANIMATION 3C: JUMP — MID-AIR SHIFTY
+             * Classic freestyle counter-rotation trick: skier jumps, whips hips & skis ~60°
+             * sideways while counter-twisting chest and arms in the opposite direction,
+             * then snaps skis back straight before stomping the landing.
+             */
+            function evaluateJumpShifty(t) {
+                const period = 2.7;
+                const u = (t % period) / period;
+
+                const idleBreath = Math.sin(t * 1.45);
+                const idleBounce = Math.sin(t * 2.6);
+
+                const crouch     = bell(u, 0.10, 0.27, 0.37);
+                const takeoff    = bell(u, 0.29, 0.37, 0.44);
+                const shifty     = bell(u, 0.39, 0.55, 0.72);
+                const landAbsorb = bell(u, 0.73, 0.82, 0.95);
+
+                const airStart = 0.35;
+                const airEnd = 0.75;
+                const inAir = u > airStart && u < airEnd;
+                const airT = inAir ? (u - airStart) / (airEnd - airStart) : 0;
+                const parabola = inAir ? 4 * airT * (1 - airT) : 0;
+
+                hipPosTarget.x = 0;
+                hipPosTarget.z = 0;
+                airOffsetTarget = 0.88 * parabola;
+
+                // 1. Hips (Whips ~60° sideways in mid-air, then snaps straight for touchdown)
+                targets.hips.rx = 0.06 + 0.10 * crouch - 0.06 * shifty + 0.12 * landAbsorb;
+                targets.hips.ry = 1.05 * shifty;
+                targets.hips.rz = -0.18 * shifty;
+
+                // 2. Spine (Strong counter-rotation keeps chest & shoulders squared downhill)
+                targets.spine.rx = 0.17 + 0.02 * idleBreath + 0.22 * crouch + 0.06 * shifty + 0.24 * landAbsorb;
+                targets.spine.ry = -0.92 * shifty;
+                targets.spine.rz = 0.16 * shifty;
+
+                // 3. Neck & Head (Eyes locked steadily on the landing zone)
+                targets.neck.rx = -0.07 - 0.10 * crouch - 0.04 * shifty - 0.10 * landAbsorb;
+                targets.neck.ry = -0.08 * shifty;
+                targets.head.rx = -0.08 - 0.10 * crouch - 0.04 * shifty - 0.10 * landAbsorb;
+                targets.head.ry = -0.08 * shifty;
+
+                // 4. Legs (Compact athletic mid-air tuck with slight parallel tweak)
+                const baseThigh = -0.28 - 0.02 * idleBounce;
+                const baseShin  =  0.24 + 0.018 * idleBounce;
+
+                const thigh = baseThigh - 0.36 * crouch + 0.22 * takeoff - 0.50 * shifty - 0.40 * landAbsorb;
+                const shin  = baseShin  + 0.32 * crouch - 0.18 * takeoff + 0.44 * shifty + 0.36 * landAbsorb;
+
+                targets.leftHip.rx   = thigh - targets.hips.rx;
+                targets.leftHip.rz   = -0.10 * shifty;
+                targets.leftKnee.rx  = shin - thigh;
+                targets.leftAnkle.rx = -shin - 0.16 * shifty;
+
+                targets.rightHip.rx   = thigh - targets.hips.rx;
+                targets.rightHip.rz   = -0.10 * shifty;
+                targets.rightKnee.rx  = shin - thigh;
+                targets.rightAnkle.rx = -shin - 0.16 * shifty;
+
+                // 5. Arms & Poles (Wide counter-balanced flare to drive the hip twist)
+                targets.leftShoulder.rz = -1.22 - 0.08 * crouch + 0.18 * takeoff + 0.68 * shifty + 0.18 * landAbsorb;
+                targets.leftShoulder.rx = -0.10 + 0.24 * crouch - 0.20 * takeoff + 0.28 * shifty - 0.18 * landAbsorb;
+                targets.leftShoulder.ry =  0.08 - 0.24 * shifty;
+                targets.leftElbow.ry    = -0.82 - 0.12 * crouch + 0.42 * shifty;
+                targets.leftElbow.rz    =  0.15 - 0.10 * shifty;
+                targets.leftWrist.rx    =  1.60 + 0.14 * crouch - 0.28 * shifty;
+                targets.leftWrist.rz    = -0.45 + 0.18 * shifty;
+
+                targets.rightShoulder.rz =  1.22 + 0.08 * crouch - 0.18 * takeoff - 0.68 * shifty - 0.18 * landAbsorb;
+                targets.rightShoulder.rx = -0.10 + 0.24 * crouch - 0.20 * takeoff - 0.34 * shifty - 0.18 * landAbsorb;
+                targets.rightShoulder.ry = -0.08 - 0.24 * shifty;
+                targets.rightElbow.ry    =  0.82 + 0.12 * crouch - 0.42 * shifty;
+                targets.rightElbow.rz    = -0.15 + 0.10 * shifty;
+                targets.rightWrist.rx    =  1.60 + 0.14 * crouch - 0.28 * shifty;
+                targets.rightWrist.rz    =  0.45 - 0.18 * shifty;
+
+                if (crouch > 0.35)      return 'Shifty • Crouch Wind-Up';
+                if (takeoff > 0.45)     return 'Shifty • Explosive Pop';
+                if (shifty > 0.38)      return 'Shifty • Mid-Air Tweak';
+                if (inAir)              return 'Shifty • Snapping Straight';
+                if (landAbsorb > 0.30)  return 'Shifty • Stomp Landing';
+                return 'Shifty • Idle Stance';
+            }
+
+            /**
+             * ANIMATION 3D: JUMP — CLASSIC DAFFY (SCISSOR SPLIT)
+             * Freestyle mid-air front-to-back scissor split: left ski kicks straight forward
+             * with tip raised while right ski extends backward with tip down, then snaps
+             * back parallel for a clean bent-knee landing.
+             */
+            function evaluateJumpDaffy(t) {
+                const period = 2.7;
+                const u = (t % period) / period;
+
+                const idleBreath = Math.sin(t * 1.45);
+                const idleBounce = Math.sin(t * 2.6);
+
+                const crouch     = bell(u, 0.10, 0.27, 0.37);
+                const takeoff    = bell(u, 0.29, 0.37, 0.44);
+                const daffy      = bell(u, 0.39, 0.55, 0.72);
+                const landAbsorb = bell(u, 0.73, 0.82, 0.95);
+
+                const airStart = 0.35;
+                const airEnd = 0.75;
+                const inAir = u > airStart && u < airEnd;
+                const airT = inAir ? (u - airStart) / (airEnd - airStart) : 0;
+                const parabola = inAir ? 4 * airT * (1 - airT) : 0;
+
+                hipPosTarget.x = 0;
+                hipPosTarget.z = 0;
+                airOffsetTarget = 0.90 * parabola;
+
+                // 1. Hips (Upright proud stance for clean scissor silhouette)
+                targets.hips.rx = 0.06 + 0.10 * crouch - 0.08 * daffy + 0.12 * landAbsorb;
+                targets.hips.ry = 0.12 * daffy;
+                targets.hips.rz = 0;
+
+                // 2. Spine (Tall posture with subtle opposite-stride counter-twist)
+                targets.spine.rx = 0.17 + 0.02 * idleBreath + 0.22 * crouch - 0.10 * daffy + 0.24 * landAbsorb;
+                targets.spine.ry = -0.22 * daffy;
+                targets.spine.rz = 0;
+
+                // 3. Neck & Head (Forward focus)
+                targets.neck.rx = -0.07 - 0.10 * crouch + 0.04 * daffy - 0.10 * landAbsorb;
+                targets.neck.ry = 0.06 * daffy;
+                targets.head.rx = -0.08 - 0.10 * crouch + 0.05 * daffy - 0.10 * landAbsorb;
+                targets.head.ry = 0.06 * daffy;
+
+                // 4. Legs (Asymmetric scissor split: Left kicks forward, Right kicks backward)
+                const baseThigh = -0.28 - 0.02 * idleBounce;
+                const baseShin  =  0.24 + 0.018 * idleBounce;
+
+                // Left Leg (+X, extended forward, ski tip up)
+                const lThigh = baseThigh - 0.36 * crouch + 0.22 * takeoff - 0.78 * daffy - 0.40 * landAbsorb;
+                const lShin  = baseShin  + 0.32 * crouch - 0.18 * takeoff - 0.88 * daffy + 0.36 * landAbsorb;
+                targets.leftHip.rx   = lThigh - targets.hips.rx;
+                targets.leftHip.rz   = 0.06 * daffy;
+                targets.leftKnee.rx  = Math.max(0.08, lShin - lThigh);
+                targets.leftAnkle.rx = -lShin - 0.28 * daffy;
+
+                // Right Leg (-X, extended backward, ski tip down)
+                const rThigh = baseThigh - 0.36 * crouch + 0.22 * takeoff + 0.96 * daffy - 0.40 * landAbsorb;
+                const rShin  = baseShin  + 0.32 * crouch - 0.18 * takeoff + 0.86 * daffy + 0.36 * landAbsorb;
+                targets.rightHip.rx   = rThigh - targets.hips.rx;
+                targets.rightHip.rz   = -0.06 * daffy;
+                targets.rightKnee.rx  = Math.max(0.08, rShin - rThigh);
+                targets.rightAnkle.rx = -rShin + 0.30 * daffy;
+
+                // 5. Arms & Poles (Opposite-arm freestyle balance: Right forward-up, Left wide-back)
+                targets.leftShoulder.rz = -1.22 - 0.08 * crouch + 0.18 * takeoff + 0.62 * daffy + 0.18 * landAbsorb;
+                targets.leftShoulder.rx = -0.10 + 0.24 * crouch - 0.20 * takeoff + 0.34 * daffy - 0.18 * landAbsorb;
+                targets.leftShoulder.ry =  0.08 - 0.18 * daffy;
+                targets.leftElbow.ry    = -0.82 - 0.12 * crouch + 0.44 * daffy;
+                targets.leftElbow.rz    =  0.15 - 0.10 * daffy;
+                targets.leftWrist.rx    =  1.60 + 0.14 * crouch - 0.32 * daffy;
+                targets.leftWrist.rz    = -0.45 + 0.18 * daffy;
+
+                targets.rightShoulder.rz =  1.22 + 0.08 * crouch - 0.18 * takeoff - 0.58 * daffy - 0.18 * landAbsorb;
+                targets.rightShoulder.rx = -0.10 + 0.24 * crouch - 0.20 * takeoff - 0.48 * daffy - 0.18 * landAbsorb;
+                targets.rightShoulder.ry = -0.08 + 0.16 * daffy;
+                targets.rightElbow.ry    =  0.82 + 0.12 * crouch - 0.36 * daffy;
+                targets.rightElbow.rz = -0.15 + 0.10 * daffy;
+                targets.rightWrist.rx    =  1.60 + 0.14 * crouch - 0.32 * daffy;
+                targets.rightWrist.rz    =  0.45 - 0.18 * daffy;
+
+                if (crouch > 0.35)      return 'Daffy • Crouch Wind-Up';
+                if (takeoff > 0.45)     return 'Daffy • Explosive Pop';
+                if (daffy > 0.38)       return 'Daffy • Scissor Split';
+                if (inAir)              return 'Daffy • Snapping Parallel';
+                if (landAbsorb > 0.30)  return 'Daffy • Bent-Knee Landing';
+                return 'Daffy • Idle Stance';
+            }
+
+            /**
+             * ANIMATION 3E: JUMP — VINTAGE FREESTYLE IRON CROSS
+             * Pop into the air, bend knees backwards ~100°, cross ski tails into an 'X' behind,
+             * arch back proudly with head tilted up, and flare both arms in wide hawk wings.
+             * Crisp snap uncross to parallel tracks before stomping the landing.
+             */
+            function evaluateJumpIronCross(t) {
+                const period = 3.2; // Slowed down from 2.75 for weighty, athletic rotational momentum
+                const u = (t % period) / period;
+
+                const idleBreath = Math.sin(t * 1.45);
+                const idleBounce = Math.sin(t * 2.6);
+
+                const crouch      = bell(u, 0.08, 0.22, 0.32);
+                const throwLead   = bell(u, 0.26, 0.36, 0.48); // Upper body & hips throw back first
+                const legLag      = bell(u, 0.26, 0.37, 0.50); // Lower legs & heavy skis trail/lag behind
+                const snapTuck    = bell(u, 0.42, 0.56, 0.70); // Staggered explosive knee snap into Iron Cross 'X'
+                const spotSnow    = bell(u, 0.62, 0.72, 0.82); // Skis uncross, head tilts to spot landing
+                const landAbsorb  = bell(u, 0.74, 0.84, 0.96); // Stomp landing absorption
+
+                const airStart = 0.26;
+                const airEnd = 0.78;
+                const inAir = u > airStart && u < airEnd;
+                const airT = inAir ? (u - airStart) / (airEnd - airStart) : 0;
+                const parabola = inAir ? 4 * airT * (1 - airT) : 0;
+
+                hipPosTarget.x = 0;
+                hipPosTarget.z = 0;
+                airOffsetTarget = 1.15 * parabola;
+                freeAirBlendTarget = inAir ? 1.0 : 0.0;
+                freeAirHipYTarget = 0.82 + 1.15 * parabola;
+
+                // Staggered full 360° back flip rotation:
+                // Upper body initiates flip early, apex accelerates during snap tuck, eases into snow spotting
+                let flipAngle = 0;
+                if (inAir) {
+                    const staggeredEase = smoothstep(0, 1, airT) * 0.44 + airT * 0.56;
+                    flipAngle = -Math.PI * 2 * staggeredEase;
+                } else if (u >= airEnd) {
+                    flipAngle = -Math.PI * 2;
+                }
+
+                // 1. Hips (Pitches back aggressively with throw lead, holds proud, levels for stomp)
+                const hipLocalRx = 0.06 + 0.10 * crouch - 0.18 * throwLead - 0.10 * snapTuck + 0.12 * landAbsorb;
+                targets.hips.rx = hipLocalRx + flipAngle;
+                targets.hips.ry = 0;
+                targets.hips.rz = 0;
+
+                // 2. Spine (STAGGERED: Arches backward with chest open to sky, leading rotation ahead of legs)
+                targets.spine.rx = 0.17 + 0.02 * idleBreath + 0.24 * crouch - 0.38 * throwLead - 0.22 * snapTuck + 0.10 * spotSnow + 0.26 * landAbsorb;
+                targets.spine.ry = 0;
+                targets.spine.rz = 0;
+
+                // 3. Neck & Head (Tilts back with upper body lead, spots snow as body clears 270°)
+                targets.neck.rx = -0.07 - 0.10 * crouch + 0.24 * throwLead + 0.12 * snapTuck - 0.18 * spotSnow - 0.08 * landAbsorb;
+                targets.neck.ry = 0;
+                targets.head.rx = -0.08 - 0.10 * crouch + 0.26 * throwLead + 0.14 * snapTuck - 0.20 * spotSnow - 0.10 * landAbsorb;
+                targets.head.ry = 0;
+
+                // 4. Legs (STAGGERED: Thighs rotate with hips, but knees lag extended initially, then snap explosively into Iron Cross tuck)
+                const baseThigh = -0.28 - 0.02 * idleBounce;
+                const baseShin  =  0.24 + 0.018 * idleBounce;
+
+                const thigh = baseThigh - 0.36 * crouch + 0.25 * throwLead + 0.32 * snapTuck - 0.40 * landAbsorb;
+                // legLag keeps shins trailing back (-0.14), then surges (+1.15) on snapTuck!
+                const shin  = baseShin  + 0.32 * crouch - 0.14 * legLag + 1.15 * snapTuck + 0.36 * landAbsorb;
+
+                const legPitch = thigh - hipLocalRx;
+
+                // Left Leg (+X, crosses over)
+                targets.leftHip.rx   = legPitch;
+                targets.leftHip.ry   = 0.42 * snapTuck;
+                targets.leftHip.rz   = 0.20 * snapTuck;
+                targets.leftKnee.rx  = Math.max(0.08, shin - thigh);
+                targets.leftAnkle.rx = -shin - 0.18 * snapTuck;
+                targets.leftAnkle.rz = -0.25 * snapTuck;
+
+                // Right Leg (-X, crosses under)
+                targets.rightHip.rx   = legPitch;
+                targets.rightHip.ry   = -0.42 * snapTuck;
+                targets.rightHip.rz   = -0.20 * snapTuck;
+                targets.rightKnee.rx  = Math.max(0.08, shin - thigh);
+                targets.rightAnkle.rx = -shin - 0.18 * snapTuck;
+                targets.rightAnkle.rz = 0.25 * snapTuck;
+
+                // 5. Arms & Poles (Swept back and up on launch, flare in wide majestic hawk wings during cross, check on landing)
+                const armWing = 0.78 * snapTuck + 0.45 * throwLead;
+                targets.leftShoulder.rz = -1.22 - 0.08 * crouch + armWing + 0.18 * landAbsorb;
+                targets.leftShoulder.rx = -0.10 + 0.24 * crouch + 0.58 * throwLead + 0.44 * snapTuck - 0.22 * landAbsorb;
+                targets.leftShoulder.ry =  0.08 - 0.32 * snapTuck;
+                targets.leftElbow.ry    = -0.82 - 0.12 * crouch + 0.55 * snapTuck;
+                targets.leftElbow.rz    =  0.15 - 0.12 * snapTuck;
+                targets.leftWrist.rx    =  1.60 + 0.14 * crouch - 0.52 * snapTuck;
+                targets.leftWrist.rz    = -0.45 + 0.34 * snapTuck;
+
+                targets.rightShoulder.rz =  1.22 + 0.08 * crouch - armWing - 0.18 * landAbsorb;
+                targets.rightShoulder.rx = -0.10 + 0.24 * crouch + 0.58 * throwLead + 0.44 * snapTuck - 0.22 * landAbsorb;
+                targets.rightShoulder.ry = -0.08 + 0.32 * snapTuck;
+                targets.rightElbow.ry    =  0.82 + 0.12 * crouch - 0.55 * snapTuck;
+                targets.rightElbow.rz    = -0.15 + 0.12 * snapTuck;
+                targets.rightWrist.rx    =  1.60 + 0.14 * crouch - 0.52 * snapTuck;
+                targets.rightWrist.rz    =  0.45 - 0.34 * snapTuck;
+
+                if (crouch > 0.35)      return 'Iron Cross • Crouch Wind-Up';
+                if (throwLead > 0.40)   return 'Iron Cross • Backward Pop & Torso Lead';
+                if (snapTuck > 0.38)    return 'Iron Cross • Staggered Knee Snap & Tail Lock';
+                if (spotSnow > 0.35)    return 'Iron Cross • Uncrossing & Spotting Snow';
+                if (landAbsorb > 0.30)  return 'Iron Cross • Stomp Landing';
+                return 'Iron Cross • Athletic Glide';
+            }
+
+            /**
+             * ANIMATION 3F: JUMP — MODERN FREESKI TWEAKED MUTE GRAB
+             * Newschool park / slopestyle cross-body grab: deep pop, knees tucked tight with off-axis tweak,
+             * left hand reaches diagonally across chest to grab the outside edge of the right ski,
+             * right arm flares high and back with pole trailing, skis tweaked with pigeon-toe cross,
+             * followed by a clean release and wide low-stance stomp.
+             */
+            function evaluateJumpMuteGrab(t) {
+                const period = 2.75;
+                const u = (t % period) / period;
+
+                const idleBreath = Math.sin(t * 1.45);
+                const idleBounce = Math.sin(t * 2.6);
+
+                const crouch     = bell(u, 0.10, 0.27, 0.37);
+                const takeoff    = bell(u, 0.29, 0.37, 0.45);
+                const mute       = bell(u, 0.39, 0.56, 0.72);
+                const landAbsorb = bell(u, 0.73, 0.82, 0.95);
+
+                const airStart = 0.35;
+                const airEnd = 0.75;
+                const inAir = u > airStart && u < airEnd;
+                const airT = inAir ? (u - airStart) / (airEnd - airStart) : 0;
+                const parabola = inAir ? 4 * airT * (1 - airT) : 0;
+
+                hipPosTarget.x = 0;
+                hipPosTarget.z = 0;
+                airOffsetTarget = 0.92 * parabola;
+
+                // 1. Hips (Tilted & rotated to bring the right ski edge forward to the reaching left hand)
+                targets.hips.rx = 0.06 + 0.10 * crouch + 0.14 * mute + 0.14 * landAbsorb;
+                targets.hips.ry = -0.28 * mute;
+                targets.hips.rz = 0.16 * mute;
+
+                // 2. Spine (Crunches forward & counter-rotates, dropping left shoulder across chest)
+                targets.spine.rx = 0.17 + 0.02 * idleBreath + 0.24 * crouch + 0.46 * mute + 0.26 * landAbsorb;
+                targets.spine.ry = 0.34 * mute;
+                targets.spine.rz = -0.20 * mute;
+
+                // 3. Neck & Head (Tracks cross-body grab, then spots landing)
+                targets.neck.rx = -0.07 - 0.10 * crouch - 0.18 * mute - 0.10 * landAbsorb;
+                targets.neck.ry = -0.12 * mute;
+                targets.head.rx = -0.08 - 0.10 * crouch - 0.20 * mute - 0.12 * landAbsorb;
+                targets.head.ry = -0.14 * mute;
+
+                // 4. Legs (High asymmetric tuck with stylish pigeon-toe tweak)
+                const baseThigh = -0.28 - 0.02 * idleBounce;
+                const baseShin  =  0.24 + 0.018 * idleBounce;
+
+                // Left Leg (+X, tucked tight, pigeon-toe rotated)
+                const lThigh = baseThigh - 0.38 * crouch + 0.22 * takeoff - 0.92 * mute - 0.42 * landAbsorb;
+                const lShin  = baseShin  + 0.34 * crouch - 0.18 * takeoff + 0.76 * mute + 0.36 * landAbsorb;
+                targets.leftHip.rx   = lThigh - targets.hips.rx;
+                targets.leftHip.ry   = -0.20 * mute;
+                targets.leftHip.rz   = 0.08 * mute;
+                targets.leftKnee.rx  = lShin - lThigh;
+                targets.leftAnkle.rx = -lShin - 0.22 * mute;
+                targets.leftAnkle.rz = -0.14 * mute;
+
+                // Right Leg (-X, grabbed ski: tucked right up into left hand's reach, edge angled up)
+                const rThigh = baseThigh - 0.38 * crouch + 0.22 * takeoff - 1.04 * mute - 0.40 * landAbsorb;
+                const rShin  = baseShin  + 0.34 * crouch - 0.18 * takeoff + 0.84 * mute + 0.34 * landAbsorb;
+                targets.rightHip.rx   = rThigh - targets.hips.rx;
+                targets.rightHip.ry   = -0.14 * mute;
+                targets.rightHip.rz   = -0.12 * mute;
+                targets.rightKnee.rx  = rShin - rThigh;
+                targets.rightAnkle.rx = -rShin - 0.26 * mute;
+                targets.rightAnkle.rz = 0.22 * mute;
+
+                // 5. Arms & Poles (Left hand reaches deep across body to right ski; Right arm flares high & back)
+                targets.leftShoulder.rz = -1.22 - 0.08 * crouch + 0.18 * takeoff + 0.42 * mute + 0.18 * landAbsorb;
+                targets.leftShoulder.rx = -0.10 + 0.24 * crouch - 0.20 * takeoff - 0.82 * mute - 0.18 * landAbsorb;
+                targets.leftShoulder.ry =  0.08 - 0.64 * mute;
+                targets.leftElbow.ry    = -0.82 - 0.12 * crouch - 0.46 * mute;
+                targets.leftElbow.rz    =  0.15 + 0.26 * mute;
+                targets.leftWrist.rx    =  1.60 + 0.14 * crouch - 0.58 * mute;
+                targets.leftWrist.rz    = -0.45 + 0.38 * mute;
+
+                targets.rightShoulder.rz =  1.22 + 0.08 * crouch - 0.16 * takeoff - 0.80 * mute - 0.18 * landAbsorb;
+                targets.rightShoulder.rx = -0.10 + 0.24 * crouch - 0.20 * takeoff + 0.48 * mute - 0.18 * landAbsorb;
+                targets.rightShoulder.ry = -0.08 + 0.28 * mute;
+                targets.rightElbow.ry    =  0.82 + 0.12 * crouch + 0.42 * mute;
+                targets.rightElbow.rz    = -0.15 - 0.12 * mute;
+                targets.rightWrist.rx    =  1.60 + 0.14 * crouch - 0.26 * mute;
+                targets.rightWrist.rz    =  0.45 - 0.20 * mute;
+
+                if (crouch > 0.35)      return 'Mute Grab • Crouch Wind-Up';
+                if (takeoff > 0.45)     return 'Mute Grab • Pop & Set';
+                if (mute > 0.38)        return 'Mute Grab • Tweaked Cross-Mute';
+                if (inAir)              return 'Mute Grab • Releasing Grab';
+                if (landAbsorb > 0.30)  return 'Mute Grab • Freestyle Stomp';
+                return 'Mute Grab • Athletic Glide';
+            }
+
+            /**
+             * ANIMATION 3G: JUMP — OLYMPIC NORDIC SKI JUMP (V-STYLE & TELEMARK LANDING)
+             * Iconic ski flying discipline: extreme aerodynamic in-run tuck -> explosive forward spring ->
+             * classic Jan Boklöv V-formation flight (skis spread in wide V, body laid flat and forward over skis,
+             * arms streamlined back like wings) -> graceful Telemark lunge landing with arms swept wide in salute!
+             */
+            function evaluateJumpNordic(t) {
+                const period = 3.3; // Slowed down from 2.90 for weighty, athletic rotational momentum
+                const u = (t % period) / period;
+
+                const inrun        = bell(u, 0.06, 0.20, 0.30);
+                const legWhip      = bell(u, 0.24, 0.34, 0.46); // Legs whip forward early into V-spread
+                const torsoLag     = bell(u, 0.24, 0.33, 0.44); // Torso lags behind rotating legs
+                const torsoCatchUp = bell(u, 0.38, 0.52, 0.68); // Torso accelerates forward into aerodynamic V-flight
+                const spotTelemark = bell(u, 0.62, 0.72, 0.84); // Telemark split lunge extension & Olympic salute
+                const telemarkLand = bell(u, 0.74, 0.84, 0.96); // Telemark stomp & landing absorption
+
+                const airStart = 0.24;
+                const airEnd = 0.78;
+                const inAir = u > airStart && u < airEnd;
+                const airT = inAir ? (u - airStart) / (airEnd - airStart) : 0;
+                const parabola = inAir ? 4 * airT * (1 - airT) : 0;
+
+                hipPosTarget.x = 0;
+                hipPosTarget.z = 0;
+                airOffsetTarget = 1.18 * parabola;
+                freeAirBlendTarget = inAir ? 1.0 : 0.0;
+                freeAirHipYTarget = 0.82 + 1.18 * parabola;
+
+                // Staggered full 360° front flip rotation:
+                // Legs kick forward-upward first, torso snaps forward to catch up into V-flight cushion
+                let flipAngle = 0;
+                if (inAir) {
+                    const staggeredEase = smoothstep(0, 1, airT) * 0.44 + airT * 0.56;
+                    flipAngle = Math.PI * 2 * staggeredEase;
+                } else if (u >= airEnd) {
+                    flipAngle = Math.PI * 2;
+                }
+
+                // 1. Hips (Lags slightly on takeoff, pitches forward strongly as torso folds, levels upright for Telemark)
+                const hipLocalRx = 0.06 + 0.18 * inrun - 0.08 * torsoLag + 0.36 * torsoCatchUp - 0.10 * spotTelemark + 0.12 * telemarkLand;
+                targets.hips.rx = hipLocalRx + flipAngle;
+                targets.hips.ry = 0;
+                targets.hips.rz = 0.02 * torsoCatchUp;
+
+                // 2. Spine (STAGGERED: Torso lags behind rotating legs, then snaps forward over skis into V-flight, rises proud for Telemark)
+                targets.spine.rx = 0.17 + 0.38 * inrun - 0.14 * torsoLag + 0.54 * torsoCatchUp - 0.20 * spotTelemark + 0.18 * telemarkLand;
+                targets.spine.ry = 0;
+                targets.spine.rz = 0;
+
+                // 3. Neck & Head (Forward gaze down the hill in flight, proud head in Telemark)
+                targets.neck.rx = -0.07 - 0.18 * inrun + 0.06 * torsoLag - 0.34 * torsoCatchUp + 0.12 * spotTelemark - 0.08 * telemarkLand;
+                targets.neck.ry = 0;
+                targets.head.rx = -0.08 - 0.20 * inrun + 0.08 * torsoLag - 0.36 * torsoCatchUp + 0.14 * spotTelemark - 0.10 * telemarkLand;
+                targets.head.ry = 0;
+
+                // 4. Legs (STAGGERED: Whip forward-upward early into V-formation, then split into Telemark lunge)
+                const baseThigh = -0.28;
+                const baseShin  =  0.24;
+
+                const fThigh = baseThigh - 0.42 * inrun + 0.46 * legWhip + 0.28 * torsoCatchUp;
+                const fShin  = baseShin  + 0.40 * inrun - 0.22 * legWhip - 0.16 * torsoCatchUp;
+
+                // Left Leg (+X: in flight, left half of 'V'; in Telemark, trailing dropped knee)
+                const lThigh = fThigh + 0.38 * spotTelemark - 0.25 * telemarkLand;
+                const lShin  = fShin  + 0.62 * spotTelemark + 0.38 * telemarkLand;
+                const vSpreadL = 0.36 * legWhip + 0.44 * torsoCatchUp;
+
+                targets.leftHip.rx   = lThigh - hipLocalRx;
+                targets.leftHip.ry   = -0.44 * vSpreadL; // Outward rotation forms V-shape
+                targets.leftHip.rz   =  0.38 * vSpreadL; // Abduction
+                targets.leftKnee.rx  = Math.max(0.04, lShin - lThigh);
+                targets.leftAnkle.rx = -lShin - 0.26 * vSpreadL + 0.24 * spotTelemark;
+                targets.leftAnkle.rz =  0.12 * vSpreadL;
+
+                // Right Leg (-X: in flight, right half of 'V'; in Telemark, forward flexed lunge)
+                const rThigh = fThigh - 0.52 * spotTelemark - 0.42 * telemarkLand;
+                const rShin  = fShin  + 0.46 * spotTelemark + 0.40 * telemarkLand;
+                const vSpreadR = 0.36 * legWhip + 0.44 * torsoCatchUp;
+
+                targets.rightHip.rx   = rThigh - hipLocalRx;
+                targets.rightHip.ry   =  0.44 * vSpreadR; // Outward rotation forms V-shape
+                targets.rightHip.rz   = -0.38 * vSpreadR; // Abduction
+                targets.rightKnee.rx  = Math.max(0.04, rShin - rThigh);
+                targets.rightAnkle.rx = -rShin - 0.26 * vSpreadR;
+                targets.rightAnkle.rz = -0.12 * vSpreadR;
+
+                // 5. Arms & Poles (Lag slightly on pop, streamline back along flanks in flight, flare wide for Telemark salute)
+                const armWing = 0.76 * torsoCatchUp;
+                const armSalute = 0.95 * spotTelemark + 0.85 * telemarkLand;
+
+                targets.leftShoulder.rz = -1.22 - 0.14 * inrun + 0.32 * armWing + armSalute;
+                targets.leftShoulder.rx = -0.10 + 0.65 * inrun - 0.18 * torsoLag + 0.74 * armWing - 0.18 * spotTelemark;
+                targets.leftShoulder.ry =  0.08 - 0.28 * armWing;
+                targets.leftElbow.ry    = -0.82 + 0.65 * armWing + 0.38 * spotTelemark;
+                targets.leftElbow.rz    =  0.15 - 0.12 * armWing;
+                targets.leftWrist.rx    =  1.60 - 0.76 * armWing - 0.24 * spotTelemark;
+                targets.leftWrist.rz    = -0.45 + 0.35 * spotTelemark;
+
+                targets.rightShoulder.rz =  1.22 + 0.14 * inrun - 0.32 * armWing - armSalute;
+                targets.rightShoulder.rx = -0.10 + 0.65 * inrun - 0.18 * torsoLag + 0.74 * armWing - 0.18 * spotTelemark;
+                targets.rightShoulder.ry = -0.08 + 0.28 * armWing;
+                targets.rightElbow.ry    =  0.82 - 0.65 * armWing - 0.38 * spotTelemark;
+                targets.rightElbow.rz    = -0.15 + 0.12 * armWing;
+                targets.rightWrist.rx    =  1.60 - 0.76 * armWing - 0.24 * spotTelemark;
+                targets.rightWrist.rz    =  0.45 - 0.35 * spotTelemark;
+
+                if (inrun > 0.35)        return 'Nordic • In-Run Aerodynamic Tuck';
+                if (legWhip > 0.40)      return 'Nordic • Leg Whip & Early V-Spread';
+                if (torsoCatchUp > 0.38) return 'Nordic • Torso Catch-Up & V-Flight';
+                if (spotTelemark > 0.35) return 'Nordic • Telemark Split Extension';
+                if (telemarkLand > 0.30) return 'Nordic • Telemark Lunge Stomp';
+                return 'Nordic • Classic Glide';
+            }
+
+            /**
              * ANIMATION 4: 360° VERTICAL SPIN (FREESTYLE STAGGERED MID-AIR TURN)
              * Natural non-rigid 360° vertical-axis spin modeled on real freestyle ski 360s:
              * Counter-Windup -> Head & Shoulder Lead -> Trailing-Leg Whip & Mid-Air Tuck ->
@@ -1526,6 +2163,16 @@
                     animTime += clampedDt * speed;
                 }
 
+                // If in continuous random jump mode and current jump trick cycle has completed,
+                // smoothly cycle to a new random jump variation for the next leap
+                if (isRandomJumpLoop && JUMP_VARIATIONS.includes(mode)) {
+                    const period = JUMP_PERIODS[mode] || 2.7;
+                    if (animTime >= period) {
+                        animTime = animTime % period;
+                        mode = pickRandomJumpVariation(true);
+                    }
+                }
+
                 clearTargets();
                 let phaseText = 'T-Pose • Neutral Rig';
 
@@ -1537,23 +2184,37 @@
                     phaseText = evaluateIdleSkiing(animTime);
                 } else if (mode === 'jump') {
                     phaseText = evaluateJump(animTime);
+                } else if (mode === 'grab') {
+                    phaseText = evaluateJumpGrab(animTime);
+                } else if (mode === 'shifty') {
+                    phaseText = evaluateJumpShifty(animTime);
+                } else if (mode === 'daffy') {
+                    phaseText = evaluateJumpDaffy(animTime);
+                } else if (mode === 'ironcross') {
+                    phaseText = evaluateJumpIronCross(animTime);
+                } else if (mode === 'mutegrab') {
+                    phaseText = evaluateJumpMuteGrab(animTime);
+                } else if (mode === 'nordic') {
+                    phaseText = evaluateJumpNordic(animTime);
                 } else if (mode === 'spin360') {
                     phaseText = evaluateSpin360(animTime);
                 }
 
                 // Smooth frame-rate independent exponential blending (faster response for aerial snaps)
-                const lambda = (mode === 'spin360' || mode === 'jump') ? 13.5 : 8.5;
+                const isAerial = mode === 'spin360' || mode === 'jump' || mode === 'grab' || mode === 'shifty' || mode === 'daffy' || mode === 'ironcross' || mode === 'mutegrab' || mode === 'nordic';
+                const lambda = isAerial ? 13.5 : 8.5;
                 const blend = 1 - Math.exp(-lambda * clampedDt);
 
                 jointNames.forEach((name) => {
                     const j = joints[name];
                     const tgt = targets[name];
-                    j.rotation.x += (tgt.rx - j.rotation.x) * blend;
                     if (name === 'hips') {
-                        // Shortest-angle deltas guarantee seamless 360° wrapping on Y and Z
+                        // Shortest-angle deltas guarantee seamless 360° wrapping on X (flips), Y (spins) and Z
+                        j.rotation.x += shortestAngleDelta(tgt.rx, j.rotation.x) * blend;
                         j.rotation.y += shortestAngleDelta(tgt.ry, j.rotation.y) * blend;
                         j.rotation.z += shortestAngleDelta(tgt.rz, j.rotation.z) * blend;
                     } else {
+                        j.rotation.x += (tgt.rx - j.rotation.x) * blend;
                         j.rotation.y += (tgt.ry - j.rotation.y) * blend;
                         j.rotation.z += (tgt.rz - j.rotation.z) * blend;
                     }
@@ -1583,14 +2244,23 @@
 
             return {
                 update,
-                setMode(newMode) {
+                setMode(newMode, enableRandomLoop = false) {
                     mode = newMode;
-                    if (newMode === 'jump' || newMode === 'spin360') {
+                    isRandomJumpLoop = enableRandomLoop;
+                    if (newMode === 'jump' || newMode === 'grab' || newMode === 'shifty' || newMode === 'daffy' || newMode === 'ironcross' || newMode === 'mutegrab' || newMode === 'nordic' || newMode === 'spin360') {
                         animTime = 0; // Start aerial animations cleanly from Idle -> Windup
                     }
                 },
+                triggerRandomJump() {
+                    const nextMode = pickRandomJumpVariation(true);
+                    this.setMode(nextMode, true);
+                    return nextMode;
+                },
                 getMode() {
                     return mode;
+                },
+                isRandomJumpMode() {
+                    return isRandomJumpLoop;
                 },
                 setPlaying(val) {
                     isPlaying = val;
@@ -1786,13 +2456,19 @@
             window.skierRig = {
                 root: skier.root,
                 joints: skier.joints,
+                animator,
                 setPalette: skier.setPalette,
                 setSkisVisible: skier.setSkisVisible,
                 resetPose: skier.resetPose,
                 setAnimation: (mode) => {
-                    animator.setMode(mode);
-                    updateAnimButtons(mode);
-                }
+                    if (mode === 'jump') {
+                        triggerRandomJump();
+                    } else {
+                        animator.setMode(mode, false);
+                        updateAnimButtons(mode);
+                    }
+                },
+                triggerRandomJump: () => triggerRandomJump()
             };
 
             // 6. Initialize Rapier3D Physics World
@@ -1841,14 +2517,34 @@
                 });
             }
 
+            function triggerRandomJump() {
+                const trick = animator.triggerRandomJump();
+                updateAnimButtons('jump');
+                skier.setSkisVisible(skisEnabled);
+                return trick;
+            }
+
             animBtns.forEach((btn) => {
                 btn.addEventListener('click', () => {
                     const selected = btn.dataset.anim;
-                    animator.setMode(selected);
-                    updateAnimButtons(selected);
-                    // Hide skis automatically in T-Pose if desired, restore in ski modes
-                    skier.setSkisVisible(selected === 'tpose' ? false : skisEnabled);
+                    if (selected === 'jump') {
+                        triggerRandomJump();
+                    } else {
+                        animator.setMode(selected, false);
+                        updateAnimButtons(selected);
+                        // Hide skis automatically in T-Pose if desired, restore in ski modes
+                        skier.setSkisVisible(selected === 'tpose' ? false : skisEnabled);
+                    }
                 });
+            });
+
+            // Keyboard shortcut: Spacebar or 'J' triggers random jump variation
+            window.addEventListener('keydown', (e) => {
+                if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+                if (e.code === 'Space' || e.key === ' ' || e.key === 'j' || e.key === 'J') {
+                    e.preventDefault();
+                    triggerRandomJump();
+                }
             });
 
             const btnSkis = document.getElementById('btn-skis');

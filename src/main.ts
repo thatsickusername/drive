@@ -536,10 +536,17 @@ class Game {
       this.trickBannerElement.style.display = 'block';
       this.trickBannerElement.style.opacity = '1.0';
       const mult = trickEng.currentMultiplier.toFixed(1);
-      const isGrab = trickEng.isGrabbing ? '<span style="color:#38bdf8;">[METHOD GRAB]</span> ' : '';
+      const varMap: Record<string, string> = {
+        grab: '<span style="color:#38bdf8;">[SAFETY GRAB]</span> ',
+        shifty: '<span style="color:#a78bfa;">[SHIFTY]</span> ',
+        daffy: '<span style="color:#34d399;">[DAFFY]</span> ',
+        mutegrab: '<span style="color:#f43f5e;">[MUTE GRAB]</span> ',
+        jump: '<span style="color:#facc15;">[SPREAD EAGLE]</span> '
+      };
+      const trickBadge = varMap[this.player.animator.activeJumpVariation] || (trickEng.isGrabbing ? '<span style="color:#38bdf8;">[SAFETY GRAB]</span> ' : '');
       this.trickBannerElement.innerHTML = `
         <div style="font-size:18px;font-weight:bold;color:#f59e0b;text-shadow:0 2px 8px rgba(0,0,0,0.8);">
-          ${isGrab}AIR: ${trickEng.currentAirTime.toFixed(2)}s (${mult}x)
+          ${trickBadge}AIR: ${trickEng.currentAirTime.toFixed(2)}s (${mult}x)
         </div>
       `;
     } else {
