@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { SkierController } from '../player/SkierController';
 import { RemoteSkier } from './RemoteSkier';
-import { TurnType } from '../mechanics/GmaConfig';
+import { TurnType, SportType } from '../mechanics/GmaConfig';
 
 export interface LocalSessionInfo {
   id: number;
@@ -40,7 +40,7 @@ export class NetworkManager {
   private packetBuffer = new ArrayBuffer(28);
   private packetView = new DataView(this.packetBuffer);
 
-  private lastTrickFinalizedName = '';
+  private lastTrickDisplayTimer = 0;
 
   constructor(
     scene: THREE.Scene,
@@ -215,20 +215,20 @@ export class NetworkManager {
       this.broadcastLocalState();
     }
 
-    // 3. Check for finalized trick landing broadcast
+    // 3. Check for finalized trick landing broadcast (detect displayTimer jump so consecutive identical tricks still broadcast)
     const scoring = this.player.trickScoring;
     if (
       scoring.lastFinalizedTrickName &&
-      scoring.lastFinalizedTrickName !== this.lastTrickFinalizedName &&
-      scoring.displayTimer > 2.0
+      scoring.displayTimer > 2.0 &&
+      scoring.displayTimer > this.lastTrickDisplayTimer + 0.5
     ) {
-      this.lastTrickFinalizedName = scoring.lastFinalizedTrickName;
       this.sendJson({
         type: 'trick',
         name: scoring.lastFinalizedTrickName,
         points: scoring.lastFinalizedPoints
       });
     }
+    this.lastTrickDisplayTimer = scoring.displayTimer;
   }
 
   private broadcastLocalState(): void {
@@ -272,11 +272,12 @@ export class NetworkManager {
     else if (speedMps < 0.2) movementState = 0;
     v.setUint8(25, movementState);
 
-    // Style packed: low 4 bits = paletteId (0..3), high 4 bits = jumpVariation index (0..6) (offset 26: 1 byte)
-    const paletteId = (this.localSession ? this.localSession.paletteId : 0) & 0x0f;
+    // Style packed: bits 0..1 = paletteId (0..3), bits 4..6 = jumpVariation (0..6), bit 7 = isSnowboard (offset 26: 1 byte)
+    const paletteId = (this.localSession ? this.localSession.paletteId : 0) & 0x03;
     const jumpVarName = this.player.animator.activeJumpVariation || 'jump';
-    const jumpVarIdx = (JUMP_VARIATION_MAP[jumpVarName] ?? 0) & 0x0f;
-    v.setUint8(26, paletteId | (jumpVarIdx << 4));
+    const jumpVarIdx = (JUMP_VARIATION_MAP[jumpVarName] ?? 0) & 0x07;
+    const isSnowboard = this.player.sport === SportType.Snowboard ? 1 : 0;
+    v.setUint8(26, paletteId | (jumpVarIdx << 4) | (isSnowboard << 7));
 
     // Animated action flags (offset 27: 1 byte)
     let flags = 0;

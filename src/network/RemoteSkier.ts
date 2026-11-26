@@ -17,6 +17,7 @@ export interface RemoteSkierStateSnapshot {
   movementState: number;
   paletteId: number;
   jumpVariation: RemoteJumpVariation;
+  isSnowboard: boolean;
   flags: number;
 }
 
@@ -40,6 +41,8 @@ const _scratchFwd = new THREE.Vector3();
 const _scratchLinvel = new THREE.Vector3();
 const _scratchCamFwd = new THREE.Vector3();
 const _scratchToCam = new THREE.Vector3();
+const _scratchContactPos = new THREE.Vector3();
+const REMOTE_SPHERE_RADIUS = 0.45;
 
 export class RemoteSkier {
   public readonly id: number;
@@ -71,6 +74,9 @@ export class RemoteSkier {
   private grabPressed = false;
   private movementState = 1;
   private currentJumpVariation: RemoteJumpVariation = 'jump';
+  private isSnowboard = false;
+  private hasTwintips = true;
+  private groundClearanceOffset = 0.0;
   private wasCrashing = false;
   private wasTrailCulled = false;
   private lastSnapshotTime = -1;
@@ -106,6 +112,13 @@ export class RemoteSkier {
 
     this.skierRig = buildSkierCharacter(initialPalette);
     this.skierRig.setPalette(pKey);
+    this.skierRig.setSportVisuals?.(this.isSnowboard, this.hasTwintips);
+    this.skierRig.root.position.y = -REMOTE_SPHERE_RADIUS + 0.016;
+    this.skierRig.root.traverse((c) => {
+      if ((c as THREE.Mesh).isMesh) {
+        c.castShadow = true;
+      }
+    });
     this.animator = new SkierAnimator(this.skierRig);
 
     this.root.add(this.skierRig.root);
@@ -205,8 +218,9 @@ export class RemoteSkier {
     const speed = speedRaw / 100;
     const leanAngle = THREE.MathUtils.clamp(leanRaw / 127.0, -1.0, 1.0);
 
-    const paletteId = stylePacked & 0x0f;
-    const jumpVarIdx = (stylePacked >> 4) & 0x0f;
+    const paletteId = stylePacked & 0x03;
+    const jumpVarIdx = (stylePacked >> 4) & 0x07;
+    const isSnowboard = (stylePacked & 0x80) !== 0;
     const jumpVariation = JUMP_VARIATIONS[jumpVarIdx] || 'jump';
 
     const prevSnap = this.snapshots[this.snapshots.length - 1];
@@ -222,6 +236,7 @@ export class RemoteSkier {
       movementState,
       paletteId,
       jumpVariation,
+      isSnowboard,
       flags
     });
 
@@ -314,7 +329,13 @@ export class RemoteSkier {
       }
 
       this.processSnapshotTransitions(activeSnap);
-      this.applyFlags(activeSnap.flags, activeSnap.movementState, activeSnap.turnType, activeSnap.jumpVariation);
+      this.applyFlags(
+        activeSnap.flags,
+        activeSnap.movementState,
+        activeSnap.turnType,
+        activeSnap.jumpVariation,
+        activeSnap.isSnowboard
+      );
     }
 
     // Apply interpolated transform to root
@@ -325,6 +346,7 @@ export class RemoteSkier {
     const isCrashing = this.movementState === 3;
     if (isCrashing && (!this.wasCrashing || !this.ragdoll.active)) {
       if (this.trail) this.trail.onCrash();
+      this.triggerCrashSpray();
       const fwd = _scratchFwd.set(0, 0, -1).applyQuaternion(this.currentQuat);
       const linvel = _scratchLinvel.copy(fwd).multiplyScalar(Math.max(4.0, this.currentSpeed));
       if (this.terrainSampler) {
@@ -337,6 +359,7 @@ export class RemoteSkier {
     } else if (!isCrashing && this.wasCrashing) {
       this.ragdoll.active = false;
       this.skierRig.resetPose();
+      this.skierRig.root.position.y = -REMOTE_SPHERE_RADIUS + 0.016;
       if (this.trail) this.trail.onRespawn();
     }
     this.wasCrashing = isCrashing;
@@ -360,11 +383,13 @@ export class RemoteSkier {
 
     if (isBeyondFar) {
       this.root.visible = false;
+      if (this.sprayParticles) this.sprayParticles.visible = false;
       this.wasTrailCulled = true;
       if (this.tagElement) this.tagElement.style.display = 'none';
       return;
     }
     this.root.visible = true;
+    if (this.sprayParticles) this.sprayParticles.visible = true;
 
     if (isCrashing) {
       if (this.ragdoll.points.length >= 21) {
@@ -375,25 +400,58 @@ export class RemoteSkier {
         this.root.position.copy(this.ragdoll.points[0].pos);
         applyRagdollPose(this.skierRig, this.root, this.ragdoll.points);
       }
-    } else if (!isBeyondLOD) {
-      // Dynamic procedural animation update within LOD range
-      this.animator.update({
-        dt,
-        speed: this.currentSpeed,
-        leanAngle: this.currentLeanAngle,
-        isGrounded: this.isGrounded,
-        isStaking: this.isStaking,
-        isDrifting: this.isDrifting,
-        isSlideTurn: this.isSlideTurn,
-        isSharpTurn: this.isSharpTurn,
-        tuck: this.isTucking,
-        jumpVariation: this.currentJumpVariation,
-        isSpinning: this.isSpinning,
-        spinDirection: this.currentLeanAngle < 0 ? -1.0 : 1.0,
-        isFrontFlipping: this.isFrontFlipping,
-        isBackFlipping: this.isBackFlipping,
-        grabPressed: this.grabPressed
-      });
+    } else {
+      if (!isBeyondLOD) {
+        // Dynamic procedural animation update within LOD range
+        this.animator.update({
+          dt,
+          speed: this.currentSpeed,
+          leanAngle: this.currentLeanAngle,
+          isGrounded: this.isGrounded,
+          isStaking: this.isStaking,
+          isDrifting: this.isDrifting,
+          isSlideTurn: this.isSlideTurn,
+          isSharpTurn: this.isSharpTurn,
+          tuck: this.isTucking,
+          inputLeft: this.currentLeanAngle < -0.25,
+          inputRight: this.currentLeanAngle > 0.25,
+          jumpVariation: this.currentJumpVariation,
+          isSpinning: this.isSpinning,
+          spinDirection: this.currentLeanAngle > 0 ? -1.0 : 1.0,
+          isFrontFlipping: this.isFrontFlipping,
+          isBackFlipping: this.isBackFlipping,
+          grabPressed: this.grabPressed
+        });
+      }
+
+      // Ground rig inside carved rut floor & clamp foot contacts against terrain slope
+      const baseElev = -REMOTE_SPHERE_RADIUS + 0.016 + this.animator.crouchOffset;
+      this.skierRig.root.position.y = baseElev;
+      if (!isBeyondLOD && this.isGrounded && this.terrainSampler) {
+        this.root.updateMatrixWorld(true);
+        let maxPenetration = 0.0;
+        const targetClearance = 0.016;
+        const contacts = this.skierRig.footContacts;
+        for (let i = 0; i < contacts.length; i++) {
+          contacts[i].getWorldPosition(_scratchContactPos);
+          const localGroundY = this.terrainSampler(_scratchContactPos.x, _scratchContactPos.z);
+          const penetration = (localGroundY + targetClearance) - _scratchContactPos.y;
+          if (penetration > maxPenetration) {
+            maxPenetration = penetration;
+          }
+        }
+        _scratchNormal.set(0, 1, 0).applyQuaternion(this.currentQuat);
+        const normalY = Math.max(0.25, _scratchNormal.y);
+        const normPenetration = maxPenetration / normalY;
+        if (normPenetration > 0) {
+          this.groundClearanceOffset = Math.max(this.groundClearanceOffset, normPenetration);
+        } else {
+          this.groundClearanceOffset = THREE.MathUtils.damp(this.groundClearanceOffset, 0.0, 14.0, dt);
+        }
+        this.skierRig.root.position.y += this.groundClearanceOffset;
+      } else {
+        this.groundClearanceOffset = THREE.MathUtils.damp(this.groundClearanceOffset, 0.0, 14.0, dt);
+      }
     }
 
     // Update dedicated Carved Snow Trail for remote skier (cull if beyond LOD or behind camera)
@@ -490,9 +548,11 @@ export class RemoteSkier {
     flags: number,
     movementState: number,
     turnType: number,
-    jumpVariation: RemoteJumpVariation
+    jumpVariation: RemoteJumpVariation,
+    isSnowboard: boolean
   ): void {
     this.isGrounded = (flags & 0x01) !== 0;
+    const hasTwintips = (flags & 0x02) !== 0;
     this.isStaking = (flags & 0x04) !== 0;
     this.isTucking = (flags & 0x08) !== 0;
     this.isSpinning = (flags & 0x10) !== 0;
@@ -504,15 +564,39 @@ export class RemoteSkier {
     this.isDrifting = turnType === 2 || turnType === 3;
     this.movementState = movementState;
     this.currentJumpVariation = jumpVariation;
+    if (hasTwintips !== this.hasTwintips || isSnowboard !== this.isSnowboard) {
+      this.hasTwintips = hasTwintips;
+      this.isSnowboard = isSnowboard;
+      this.skierRig.setSportVisuals?.(this.isSnowboard, this.hasTwintips);
+    }
+  }
+
+  private triggerCrashSpray(): void {
+    if (!this.sprayParticles) return;
+    let emitted = 0;
+    for (let i = 0; i < this.sprayCount && emitted < 45; i++) {
+      if (this.sprayLifetimes[i] <= 0) {
+        this.sprayLifetimes[i] = 0.4 + Math.random() * 0.25;
+        const idx = i * 3;
+        this.sprayPositions[idx] = this.currentPos.x + (Math.random() - 0.5) * 0.8;
+        this.sprayPositions[idx + 1] = this.currentPos.y - REMOTE_SPHERE_RADIUS + 0.1;
+        this.sprayPositions[idx + 2] = this.currentPos.z + (Math.random() - 0.5) * 0.8;
+        this.sprayVelocities[idx] = (Math.random() - 0.5) * 6.5;
+        this.sprayVelocities[idx + 1] = 2.5 + Math.random() * 3.5;
+        this.sprayVelocities[idx + 2] = (Math.random() - 0.5) * 6.5;
+        emitted++;
+      }
+    }
   }
 
   private updateSnowSpray(dt: number, isCrashing: boolean): void {
     if (!this.sprayParticles) return;
 
     const isEmitting =
-      this.isGrounded &&
-      this.currentSpeed > 1.5 &&
-      (Math.abs(this.currentLeanAngle) > 0.15 || this.isDrifting || isCrashing);
+      (this.isGrounded &&
+        this.currentSpeed > 1.5 &&
+        (Math.abs(this.currentLeanAngle) > 0.15 || this.isDrifting)) ||
+      (isCrashing && this.currentSpeed > 1.0);
 
     if (isEmitting) {
       const emitCount = isCrashing ? 4 : (this.isDrifting ? 3 : 1);
@@ -525,7 +609,7 @@ export class RemoteSkier {
           this.sprayLifetimes[i] = 0.35 + Math.random() * 0.2;
           const idx = i * 3;
           this.sprayPositions[idx] = this.currentPos.x + (Math.random() - 0.5) * 0.3;
-          this.sprayPositions[idx + 1] = this.currentPos.y + 0.05;
+          this.sprayPositions[idx + 1] = this.currentPos.y - REMOTE_SPHERE_RADIUS + 0.05;
           this.sprayPositions[idx + 2] = this.currentPos.z + (Math.random() - 0.5) * 0.3;
 
           const sprayDirX = _scratchRight.x * leanSign * 2.5 + (Math.random() - 0.5) * 1.5;
