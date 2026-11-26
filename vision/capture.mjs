@@ -128,7 +128,7 @@ async function run() {
     const isNight = target.includes('2') || scenario.includes('night') || getArg('lighting') === 'night';
     const isGolden = target.includes('3') || scenario.includes('golden') || getArg('lighting') === 'golden' || getArg('lighting') === 'goldenhour';
     const lightingQuery = isGolden ? '&lighting=golden' : (isNight ? '&lighting=night' : '');
-    const navUrl = `http://localhost:5173?nohud=1&pause=1${lightingQuery}`;
+    const navUrl = `http://localhost:5173?nohud=1&pause=1&perf=1${lightingQuery}`;
     console.log(`[vision] Navigating to ${navUrl}...`);
     await page.goto(navUrl, { waitUntil: 'networkidle' });
 
@@ -175,6 +175,13 @@ async function run() {
       await page.keyboard.down(key);
       const holdDuration = scenario.includes('plant') ? 350 : 1600;
       await page.waitForTimeout(holdDuration);
+    } else if (scenario === 'perf_baseline' || scenario === 'summit_drop') {
+      console.log('[vision] Executing scenario: Teleport to spawn 1 (Summit Drop) and sample 300 frames downhill...');
+      await page.keyboard.press('Digit1');
+      await page.waitForTimeout(500);
+      await page.keyboard.down('KeyW');
+      await page.waitForTimeout(5200);
+      await page.keyboard.up('KeyW');
     } else if (scenario === 'teleport_4' || scenario.includes('4')) {
       console.log('[vision] Executing scenario: Teleport to spawn 4 (canyon) and slide down...');
       await page.keyboard.press('Digit4');
@@ -199,6 +206,22 @@ async function run() {
       await page.waitForTimeout(2500);
     } else {
       await page.waitForTimeout(2000);
+    }
+
+    // Extract performance telemetry if available
+    const perfReport = await page.evaluate(() => {
+      return (window.getPerfReport ? window.getPerfReport() : null);
+    });
+    if (perfReport) {
+      console.log('[vision] Performance Telemetry Extracted:');
+      console.log(`  - Cold Startup: WASM init: ${perfReport.startup.wasmInitMs}ms, Massif: ${perfReport.startup.massifBuildMs}ms, TTFF: ${perfReport.startup.timeToFirstFrameMs}ms`);
+      console.log(`  - Pacing (ms): avg=${perfReport.frameTime.avg}, p50=${perfReport.frameTime.p50}, p95=${perfReport.frameTime.p95}, p99=${perfReport.frameTime.p99}, max=${perfReport.frameTime.max}`);
+      console.log(`  - Physics Step (ms): avg=${perfReport.physicsStepTime.avg}, p95=${perfReport.physicsStepTime.p95}, max=${perfReport.physicsStepTime.max}`);
+      console.log(`  - Render Time (ms): avg=${perfReport.renderTime.avg}, p95=${perfReport.renderTime.p95}, max=${perfReport.renderTime.max}`);
+      console.log(`  - GPU: calls=${perfReport.gpuInfo.drawCalls}, tris=${perfReport.gpuInfo.triangles}, programs=${perfReport.gpuInfo.shaderPrograms}`);
+      console.log(`  - Memory: heap=${perfReport.memory.latestHeapMB}MB (delta: ${perfReport.memory.heapDeltaMB}MB)`);
+      const perfJsonPath = path.join(screenshotsDir, `${targetFileBase}_perf.json`);
+      fs.writeFileSync(perfJsonPath, JSON.stringify(perfReport, null, 2));
     }
 
     console.log('[vision] Capturing screenshot...');

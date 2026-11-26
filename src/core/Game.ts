@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Renderer } from './Renderer';
 import { PhysicsEngine } from './PhysicsEngine';
+import { Telemetry } from './Telemetry';
 import { DynamicCameraDirector } from '../camera/CameraDirector';
 import { CameraTunerOverlay } from '../camera/CameraTunerOverlay';
 import { UnifiedInputController } from './InputController';
@@ -21,6 +22,7 @@ export class Game {
   public hudOverlay!: HudOverlay;
   public lightingControls!: LightingControls;
   public networkManager!: NetworkManager;
+  public telemetry: Telemetry | null = null;
 
   private lastTime: number = 0;
   private lastHudUpdateTime: number = 0;
@@ -38,6 +40,12 @@ export class Game {
   public currentSpawn = { ...this.locations.summit };
 
   public async start(): Promise<void> {
+    const isPerf = window.location.search.includes('perf=1') || window.location.search.includes('perf') || !!(window as any).__ENABLE_PERF__;
+    if (isPerf) {
+      this.telemetry = new Telemetry();
+      this.telemetry.mark('startup-start');
+    }
+
     const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
     if (!canvas) {
       throw new Error('Canvas element #game-canvas not found');
@@ -47,15 +55,25 @@ export class Game {
     this.renderer = new Renderer(canvas);
 
     // 2. Initialize Rapier 3D WASM Physics Engine
+    if (this.telemetry) this.telemetry.mark('wasm-init-start');
     this.physics = new PhysicsEngine();
     await this.physics.init();
+    if (this.telemetry) {
+      this.telemetry.mark('wasm-init-end');
+      this.telemetry.measure('wasm-init', 'wasm-init-start', 'wasm-init-end');
+    }
 
     // 3. Build 2.4km x 2.4km Alpine Massif
+    if (this.telemetry) this.telemetry.mark('massif-init-start');
     this.massif = new AlpineMassif(
       this.renderer.scene,
       this.physics.rapier,
       this.physics.world
     );
+    if (this.telemetry) {
+      this.telemetry.mark('massif-init-end');
+      this.telemetry.measure('massif-init', 'massif-init-start', 'massif-init-end');
+    }
 
     // 4. Sample ground altitude at Summit Peak
     const initialGround = this.massif.heightfield.sampleTerrain(this.currentSpawn.x, this.currentSpawn.z);
@@ -176,12 +194,14 @@ export class Game {
   }
 
   private loop(currentTime: number): void {
+    const frameStart = performance.now();
     const delta = Math.min((currentTime - this.lastTime) / 1000, 0.1);
     this.lastTime = currentTime;
 
     // 1. Gather Unified Inputs
     this.inputController.update();
 
+    let physicsDuration = 0;
     if (this.cameraDirector.isFlyCam) {
       // Fly-Cam Free Navigation
       const flyInputs = this.inputController.getFlyCamInputs();
@@ -197,6 +217,7 @@ export class Game {
       // Grand Mountain Adventure Physics Update
       const boarderInputs = this.inputController.getBoarderInputs();
 
+      const physStart = performance.now();
       this.physics.step(delta, (dt: number) => {
         const sample = this.massif.heightfield.sampleTerrain(
           this.player.root.position.x,
@@ -205,6 +226,7 @@ export class Game {
         this.player.fixedUpdate(dt, boarderInputs, sample);
       });
       this.player.renderUpdate(delta, boarderInputs);
+      physicsDuration = performance.now() - physStart;
 
       // Update Follow Camera
       const lookInputs = this.inputController.getCameraLookInputs(delta);
@@ -268,7 +290,25 @@ export class Game {
     });
 
     // 5. Render Scene
+    const renderStart = performance.now();
     this.renderer.render();
+    const renderDuration = performance.now() - renderStart;
+
+    if (this.telemetry) {
+      const frameDuration = performance.now() - frameStart;
+      this.telemetry.recordFrame({
+        frameTimeMs: frameDuration,
+        physicsTimeMs: physicsDuration,
+        renderTimeMs: renderDuration,
+        renderInfo: { ...this.renderer.renderer.info.render },
+        memoryInfo: {
+          geometries: this.renderer.renderer.info.memory.geometries,
+          textures: this.renderer.renderer.info.memory.textures,
+          programs: (this.renderer.renderer.info as any).programs?.length ?? 0
+        },
+        heapUsedBytes: (typeof performance !== 'undefined' && (performance as any).memory?.usedJSHeapSize) || 0
+      });
+    }
 
     requestAnimationFrame(this.loop.bind(this));
   }

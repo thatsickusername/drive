@@ -43,7 +43,7 @@
 
 ## 3. Directory & File Structure
 
-The `src/` tree contains exactly 26 active, reachable modules:
+The `src/` tree contains exactly 35 active, reachable modules:
 
 ```text
 drive/
@@ -80,7 +80,8 @@ drive/
     │   ├── Game.ts                     # Game loop coordinator & 60Hz physics accumulator
     │   ├── Renderer.ts                 # Three.js scene, lighting, ACES tonemapping & fog
     │   ├── PhysicsEngine.ts            # Rapier3D WASM initialization & step driver
-    │   └── InputController.ts          # Unified keyboard & gamepad polling
+    │   ├── InputController.ts          # Unified keyboard & gamepad polling
+    │   └── Telemetry.ts                # Dev performance metrics, cold-start marks & frame pacer
     ├── player/
     │   ├── SkierController.ts          # Kinematic/dynamic actor
     │   └── character/
@@ -152,7 +153,7 @@ The mountain is modeled as a 2.4 km × 2.4 km single inclined massif ($x \in [-1
    * **Frozen River Ice:** Blue-grey ice (`#729ab8`) for $y \le 0.5\text{m}$ with dedicated ice plane mesh at $y = 0$.
    * **Vegetation:** Instanced evergreen pine trees distributed via deterministic golden-angle copse clustering.
 
-### 4.2 GMA Ski Physics & Kinematics (`src/boarder.ts` & `src/mechanics/`)
+### 4.2 GMA Ski Physics & Kinematics (`src/player/SkierController.ts` & `src/mechanics/`)
 
 Replicates the physics implementation of *Grand Mountain Adventure*:
 * **Fall-Line Gravity:** Projected downhill acceleration $\vec{g}_\parallel = \vec{g} - (\vec{g} \cdot \vec{n})\vec{n}$ accelerates skiers down the slope.
@@ -170,13 +171,13 @@ Replicates the physics implementation of *Grand Mountain Adventure*:
 * **50 Hz Verlet Ragdoll Crash Solver:**
   * 7-node articulated ragdoll skeleton running 5 relaxation iterations per step during high-impact wipeouts ($> 26\text{ m/s}$ ground impact or sideways touchdown $> 45^\circ$).
 
-### 4.3 Procedural Skier Character & Animator (`src/player/SkierCharacter.ts`)
+### 4.3 Procedural Skier Character & Animator (`src/player/character/SkierRig.ts` & `SkierAnimator.ts`)
 
 * **Procedural Low-Poly Mesh:** Fully procedural geometries (lofted jacket rings, flared collar, beanie with pom-pom, tinted goggles, alpine skis with curved tips, ski boots, poles).
 * **Color Palettes:** Coral, Ochre, Glacier, and Pine outerwear presets.
 * **Procedural Animator:** Real-time kinematic blend trees for gliding, carving lean, poling arm/leg strides, aerodynamic tucks, aerial spins, flips, and ragdoll recovery.
 
-### 4.4 Camera Director & Presentation (`src/camera.ts` & `src/cameraOverlay.ts`)
+### 4.4 Camera Director & Presentation (`src/camera/CameraDirector.ts` & `src/camera/CameraTunerOverlay.ts`)
 
 * **Dynamic Chase Camera:** Third-person trailing follow with velocity lookahead, asymmetric elastic lag, dynamic slope pitch alignment, and high-velocity FOV expansion.
 * **GMA Isometric Tilt-Shift Mode:** Top-down orthographic/isometric perspective replicating classic mountain views.

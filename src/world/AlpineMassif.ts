@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { AlpineHeightfield, TerrainSample } from './alpineHeightfield';
-import { createSnowMaterial } from './SnowMaterial';
+import { createSnowMaterial } from './shaders/SnowMaterial';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 export class AlpineMassif {
