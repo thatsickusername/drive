@@ -3,7 +3,15 @@ import { Renderer } from '../core/Renderer';
 
 export class LightingControls {
   private container!: HTMLElement;
+  private trackEl!: HTMLElement;
+  private thumbEl!: HTMLElement;
+  private labelEl!: HTMLElement;
   private renderer: Renderer;
+
+  private lastThumbX = -1;
+  private lastPhase = '';
+  private lastTimeStr = '';
+  private lastPaused: boolean | null = null;
 
   constructor(renderer: Renderer) {
     this.renderer = renderer;
@@ -65,6 +73,10 @@ export class LightingControls {
     `;
     this.container.title = 'Click to advance phase | [L]/[N] Advance | [P] Pause/Resume';
 
+    this.trackEl = this.container.querySelector('#toggle-track') as HTMLElement;
+    this.thumbEl = this.container.querySelector('#toggle-thumb') as HTMLElement;
+    this.labelEl = this.container.querySelector('#toggle-label') as HTMLElement;
+
     this.container.addEventListener('click', () => {
       this.toggle();
     });
@@ -98,30 +110,38 @@ export class LightingControls {
     const cycle = this.renderer.cycle;
     const phase = cycle.currentPhase;
     const timeStr = cycle.phaseFormattedTime;
-    const track = document.getElementById('toggle-track');
-    const thumb = document.getElementById('toggle-thumb');
-    const label = document.getElementById('toggle-label');
-    if (track && thumb && label) {
-      const thumbX = THREE.MathUtils.clamp((this.renderer.lightingFactor / 2.0) * 34, 0, 34);
-      thumb.style.transform = `translateX(${thumbX.toFixed(1)}px)`;
+    const isPaused = cycle.isPaused;
 
-      const pauseIndicator = cycle.isPaused ? ' <span style="font-size:10px; opacity:0.8;">⏸</span>' : '';
+    if (!this.trackEl || !this.thumbEl || !this.labelEl) return;
+
+    const thumbX = Math.round(THREE.MathUtils.clamp((this.renderer.lightingFactor / 2.0) * 34, 0, 34) * 10) / 10;
+    if (thumbX !== this.lastThumbX) {
+      this.lastThumbX = thumbX;
+      this.thumbEl.style.transform = `translateX(${thumbX.toFixed(1)}px)`;
+    }
+
+    if (phase !== this.lastPhase || timeStr !== this.lastTimeStr || isPaused !== this.lastPaused) {
+      this.lastPhase = phase;
+      this.lastTimeStr = timeStr;
+      this.lastPaused = isPaused;
+
+      const pauseIndicator = isPaused ? ' <span style="font-size:10px; opacity:0.8;">⏸</span>' : '';
       if (phase === 'night') {
-        track.style.background = '#2563eb';
-        thumb.style.background = '#e0f2fe';
-        label.innerHTML = `🌙 Night <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
+        this.trackEl.style.background = '#2563eb';
+        this.thumbEl.style.background = '#e0f2fe';
+        this.labelEl.innerHTML = `🌙 Night <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
       } else if (phase === 'sunset') {
-        track.style.background = '#ea580c';
-        thumb.style.background = '#fef08a';
-        label.innerHTML = `🌅 Sunset <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
+        this.trackEl.style.background = '#ea580c';
+        this.thumbEl.style.background = '#fef08a';
+        this.labelEl.innerHTML = `🌅 Sunset <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
       } else if (phase === 'sunrise') {
-        track.style.background = '#d97706';
-        thumb.style.background = '#fef08a';
-        label.innerHTML = `🌅 Sunrise <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
+        this.trackEl.style.background = '#d97706';
+        this.thumbEl.style.background = '#fef08a';
+        this.labelEl.innerHTML = `🌅 Sunrise <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
       } else {
-        track.style.background = '#334155';
-        thumb.style.background = '#f8fafc';
-        label.innerHTML = `☀️ Day <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
+        this.trackEl.style.background = '#334155';
+        this.thumbEl.style.background = '#f8fafc';
+        this.labelEl.innerHTML = `☀️ Day <span style="opacity:0.75; font-size:11px; margin-left:3px;">${timeStr}</span>${pauseIndicator}`;
       }
     }
   }

@@ -582,4 +582,14 @@ export class CarvedSnowTrail {
     this.setAttributeUpdateRange(this.geometry.attributes.uv as THREE.BufferAttribute, 0, activeVerts * 2);
     this.setAttributeUpdateRange(this.geometry.attributes.aAlpha as THREE.BufferAttribute, 0, activeVerts);
   }
+
+  public dispose(scene?: THREE.Scene): void {
+    if (scene) {
+      scene.remove(this.mesh);
+    } else if (this.mesh.parent) {
+      this.mesh.parent.remove(this.mesh);
+    }
+    this.geometry.dispose();
+    this.material.dispose();
+  }
 }

@@ -19,6 +19,9 @@ export class CameraTunerOverlay {
     this.isVisible = !this.isVisible;
     this.panelElement.style.display = this.isVisible ? 'block' : 'none';
     this.toggleBtnElement.style.display = this.isVisible ? 'none' : 'block';
+    if (this.isVisible) {
+      this.refreshUI();
+    }
   }
 
   private createUI(): void {
@@ -307,10 +310,14 @@ export class CameraTunerOverlay {
     }
   }
 
+  private slidersMap = new Map<string, { slider: HTMLInputElement; label: HTMLElement }>();
+
   private bindSlider(key: keyof CameraSettings, formatFn: (val: number) => string): void {
-    const slider = document.getElementById(`sl-${key}`) as HTMLInputElement;
-    const label = document.getElementById(`val-${key}`);
+    const slider = this.panelElement.querySelector(`#sl-${key}`) as HTMLInputElement;
+    const label = this.panelElement.querySelector(`#val-${key}`) as HTMLElement;
     if (!slider || !label) return;
+
+    this.slidersMap.set(key, { slider, label });
 
     slider.addEventListener('input', () => {
       const val = parseFloat(slider.value);
@@ -320,36 +327,20 @@ export class CameraTunerOverlay {
     });
   }
 
-  private refreshUI(): void {
-    const keys: (keyof CameraSettings)[] = [
-      'behindDistance',
-      'behindPitch',
-      'behindMinPitch',
-      'behindMaxPitch',
-      'behindLookAheadDist',
-      'behindLookAheadHeight',
-      'behindFollowSpeed',
-      'topdownDistance',
-      'topdownPitch',
-      'fov',
-      'mouseSensitivity',
-    ];
+  public refreshUI(): void {
+    if (!this.isVisible) return;
 
-    keys.forEach((key) => {
-      const slider = document.getElementById(`sl-${key}`) as HTMLInputElement;
-      const label = document.getElementById(`val-${key}`);
-      const val = this.settings[key] as number;
-      if (slider && label) {
-        slider.value = `${val}`;
-        if (key.includes('Pitch') || key === 'fov') {
-          label.textContent = `${val.toFixed(1)}°`;
-        } else if (key.includes('Dist') || key.includes('Height') || key.includes('Distance')) {
-          label.textContent = `${val.toFixed(1)}m`;
-        } else if (key.includes('Sensitivity')) {
-          label.textContent = `${val.toFixed(2)}x`;
-        } else {
-          label.textContent = `${val.toFixed(1)}`;
-        }
+    this.slidersMap.forEach(({ slider, label }, key) => {
+      const val = this.settings[key as keyof CameraSettings] as number;
+      slider.value = `${val}`;
+      if (key.includes('Pitch') || key === 'fov') {
+        label.textContent = `${val.toFixed(1)}°`;
+      } else if (key.includes('Dist') || key.includes('Height') || key.includes('Distance')) {
+        label.textContent = `${val.toFixed(1)}m`;
+      } else if (key.includes('Sensitivity')) {
+        label.textContent = `${val.toFixed(2)}x`;
+      } else {
+        label.textContent = `${val.toFixed(1)}`;
       }
     });
   }

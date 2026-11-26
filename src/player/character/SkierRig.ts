@@ -40,52 +40,333 @@ export interface SkierCharacter {
   materials: Record<string, THREE.Material>;
   footContacts: THREE.Object3D[];
   skis: THREE.Group[];
+  twintipTails?: THREE.Mesh[];
+  flatTails?: THREE.Mesh[];
   setPalette: (key: string) => void;
   resetPose: () => void;
+  setSportVisuals?: (isSnowboard: boolean, hasTwintips: boolean) => void;
+}
+
+let _sharedCommonMaterials: Record<string, THREE.Material> | null = null;
+function getSharedCommonMaterials(): Record<string, THREE.Material> {
+  if (!_sharedCommonMaterials) {
+    _sharedCommonMaterials = {
+      skin: createMatteMaterial(0xdcc3ae, 0.88, 0.0),
+      innerShirt: createMatteMaterial(0x353b44, 0.92, 0.0),
+      goggleFrame: createMatteMaterial(0x1f242c, 0.65, 0.05),
+      goggleStrap: createMatteMaterial(0x222730, 0.88, 0.0),
+      glove: createMatteMaterial(0x23272e, 0.85, 0.03),
+      boot: createMatteMaterial(0x2b3038, 0.78, 0.04),
+      bootSole: createMatteMaterial(0x4c5460, 0.84, 0.03),
+      bootAccent: createMatteMaterial(0x8c95a3, 0.80, 0.03),
+      skiBase: createMatteMaterial(0x262c36, 0.62, 0.12),
+      poleShaft: new THREE.MeshStandardMaterial({
+        color: 0x69727e,
+        roughness: 0.52,
+        metalness: 0.32,
+        flatShading: true
+      }),
+      poleGrip: createMatteMaterial(0x2d333c, 0.86, 0.04),
+      poleBasket: createMatteMaterial(0x4a525e, 0.80, 0.04)
+    };
+  }
+  return _sharedCommonMaterials;
+}
+
+const _paletteMaterialsCache = new Map<string, Record<string, THREE.Material>>();
+function getCachedPaletteMaterials(paletteKey: string, customPal?: SkierPalette): Record<string, THREE.Material> {
+  let mats = _paletteMaterialsCache.get(paletteKey);
+  if (!mats) {
+    const pal = customPal || PALETTES[paletteKey] || PALETTES.coral;
+    const jacket = createMatteMaterial(pal.jacket, 0.86, 0.01);
+    const collarMat = jacket.clone();
+    collarMat.side = THREE.DoubleSide;
+    mats = {
+      jacket,
+      collarMat,
+      jacketInner: createMatteMaterial(pal.jacketInner, 0.90, 0.01),
+      pants: createMatteMaterial(pal.pants, 0.88, 0.01),
+      beanie: createMatteMaterial(pal.beanie, 0.94, 0.0),
+      beanieCuff: createMatteMaterial(pal.beanieCuff, 0.94, 0.0),
+      pomPom: createMatteMaterial(pal.pomPom, 0.96, 0.0),
+      goggleLens: new THREE.MeshStandardMaterial({
+        color: pal.goggleLens,
+        roughness: 0.42,
+        metalness: 0.16,
+        flatShading: true
+      }),
+      skiAccent: createMatteMaterial(pal.skiAccent, 0.55, 0.08)
+    };
+    _paletteMaterialsCache.set(paletteKey, mats);
+  }
+  return mats;
+}
+
+let _sharedGeos: any = null;
+function getSharedSkierGeometries() {
+  if (!_sharedGeos) {
+    function createGoggleShape(w: number, hTop: number, hBot: number, notchW: number, notchH: number): THREE.Shape {
+      const s = new THREE.Shape();
+      s.moveTo(-w * 0.72, hTop);
+      s.quadraticCurveTo(0, hTop + 0.006, w * 0.72, hTop);
+      s.quadraticCurveTo(w, hTop, w, hTop * 0.35);
+      s.lineTo(w * 0.94, -hBot * 0.45);
+      s.quadraticCurveTo(w * 0.88, -hBot, w * 0.48, -hBot);
+      s.lineTo(notchW, -hBot);
+      s.quadraticCurveTo(notchW * 0.55, -hBot + notchH * 0.25, 0, -hBot + notchH);
+      s.quadraticCurveTo(-notchW * 0.55, -hBot + notchH * 0.25, -notchW, -hBot);
+      s.lineTo(-w * 0.48, -hBot);
+      s.quadraticCurveTo(-w * 0.88, -hBot, -w * 0.94, -hBot * 0.45);
+      s.lineTo(-w, hTop * 0.35);
+      s.quadraticCurveTo(-w, hTop, -w * 0.72, hTop);
+      return s;
+    }
+
+    const bendGeometry = (geo: THREE.BufferGeometry, radius = 0.24) => {
+      const pos = geo.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i);
+        const z = pos.getZ(i);
+        const curveZ = -(x * x) / (2 * radius);
+        pos.setZ(i, z + curveZ);
+      }
+      geo.computeVertexNormals();
+    };
+
+    const frameShape = createGoggleShape(0.140, 0.048, 0.056, 0.042, 0.034);
+    let frameGeo: THREE.BufferGeometry = new THREE.ExtrudeGeometry(frameShape, {
+      depth: 0.048,
+      bevelEnabled: true,
+      bevelThickness: 0.009,
+      bevelSize: 0.008,
+      bevelSegments: 1,
+      curveSegments: 3
+    });
+    frameGeo.center();
+    if (frameGeo.index) frameGeo = frameGeo.toNonIndexed();
+    bendGeometry(frameGeo, 0.25);
+
+    const lensShape = createGoggleShape(0.124, 0.036, 0.044, 0.036, 0.030);
+    let lensGeo: THREE.BufferGeometry = new THREE.ExtrudeGeometry(lensShape, {
+      depth: 0.014,
+      bevelEnabled: true,
+      bevelThickness: 0.005,
+      bevelSize: 0.004,
+      bevelSegments: 1,
+      curveSegments: 3
+    });
+    lensGeo.center();
+    if (lensGeo.index) lensGeo = lensGeo.toNonIndexed();
+    bendGeometry(lensGeo, 0.24);
+
+    const upperRingsL: LoftRing[] = [
+      { pos: 0.020, r1: 0.088, r2: 0.094, offsetA: -0.005 },
+      { pos: 0.080, r1: 0.082, r2: 0.088, offsetA: -0.004 },
+      { pos: 0.150, r1: 0.078, r2: 0.084, offsetA: -0.002 },
+      { pos: 0.220, r1: 0.076, r2: 0.080, offsetA: 0.000 },
+      { pos: 0.288, r1: 0.080, r2: 0.084, offsetA: 0.000 }
+    ];
+    const upperRingsR: LoftRing[] = [
+      { pos: -0.288, r1: 0.080, r2: 0.084, offsetA: 0.000 },
+      { pos: -0.220, r1: 0.076, r2: 0.080, offsetA: 0.000 },
+      { pos: -0.150, r1: 0.078, r2: 0.084, offsetA: -0.002 },
+      { pos: -0.080, r1: 0.082, r2: 0.088, offsetA: -0.004 },
+      { pos: -0.020, r1: 0.088, r2: 0.094, offsetA: -0.005 }
+    ];
+
+    const foreRingsL: LoftRing[] = [
+      { pos: 0.000, r1: 0.078, r2: 0.082 },
+      { pos: 0.054, r1: 0.073, r2: 0.076 },
+      { pos: 0.118, r1: 0.079, r2: 0.082 },
+      { pos: 0.184, r1: 0.070, r2: 0.072 },
+      { pos: 0.248, r1: 0.073, r2: 0.075 },
+      { pos: 0.304, r1: 0.058, r2: 0.060 }
+    ];
+    const foreRingsR: LoftRing[] = [
+      { pos: -0.304, r1: 0.058, r2: 0.060 },
+      { pos: -0.248, r1: 0.073, r2: 0.075 },
+      { pos: -0.184, r1: 0.070, r2: 0.072 },
+      { pos: -0.118, r1: 0.079, r2: 0.082 },
+      { pos: -0.054, r1: 0.073, r2: 0.076 },
+      { pos: -0.000, r1: 0.078, r2: 0.082 }
+    ];
+
+    const deltoidGeo = new THREE.SphereGeometry(0.092, 10, 8);
+    deltoidGeo.scale(1.0, 0.88, 0.95);
+
+    const elbowGeo = new THREE.SphereGeometry(0.082, 10, 8);
+    elbowGeo.scale(0.94, 0.94, 0.96);
+
+    const gloveGeo = new THREE.IcosahedronGeometry(0.050, 1);
+    gloveGeo.scale(1.10, 0.84, 0.90);
+
+    const thumbGeo = new THREE.IcosahedronGeometry(0.021, 0);
+    thumbGeo.scale(1.15, 0.88, 1.25);
+
+    const kneeGeo = new THREE.SphereGeometry(0.095, 10, 8);
+    kneeGeo.scale(0.96, 1.02, 1.04);
+
+    const noseGeo = new THREE.ConeGeometry(0.020, 0.042, 4);
+    noseGeo.rotateX(Math.PI * 0.44);
+
+    const poleTipGeo = new THREE.ConeGeometry(0.0085, 0.095, 6);
+    poleTipGeo.rotateX(Math.PI);
+
+    _sharedGeos = {
+      pelvis: createLoftedGeometry(
+        [
+          { pos: -0.055, r1: 0.168, r2: 0.118 },
+          { pos: 0.005, r1: 0.178, r2: 0.125 },
+          { pos: 0.055, r1: 0.172, r2: 0.120 }
+        ],
+        8,
+        'y',
+        true,
+        true
+      ),
+      torso: createLoftedGeometry(
+        [
+          { pos: -0.095, r1: 0.236, r2: 0.162, twist: 0.0 },
+          { pos: -0.045, r1: 0.268, r2: 0.184, twist: 0.0 },
+          { pos: 0.065, r1: 0.258, r2: 0.178, twist: 0.08 },
+          { pos: 0.185, r1: 0.248, r2: 0.174, twist: 0.0 },
+          { pos: 0.310, r1: 0.272, r2: 0.186, twist: 0.08 },
+          { pos: 0.435, r1: 0.282, r2: 0.184, twist: 0.0 },
+          { pos: 0.515, r1: 0.232, r2: 0.158, twist: 0.08 },
+          { pos: 0.555, r1: 0.140, r2: 0.124, twist: 0.0 }
+        ],
+        10,
+        'y',
+        true,
+        true
+      ),
+      collar: createFlaredCollarGeometry(),
+      innerNeck: new THREE.CylinderGeometry(0.084, 0.096, 0.055, 10),
+      neckGaiter: new THREE.CylinderGeometry(0.080, 0.094, 0.078, 10),
+      head: createLoftedGeometry(
+        [
+          { pos: 0.0, r1: 0.062, r2: 0.060 },
+          { pos: 0.038, r1: 0.106, r2: 0.108, offsetB: 0.008 },
+          { pos: 0.102, r1: 0.132, r2: 0.134, offsetB: 0.006 },
+          { pos: 0.172, r1: 0.136, r2: 0.138, offsetB: 0.0 },
+          { pos: 0.232, r1: 0.120, r2: 0.122, offsetB: -0.004 },
+          { pos: 0.270, r1: 0.068, r2: 0.070, offsetB: -0.006 }
+        ],
+        10,
+        'y',
+        true,
+        true
+      ),
+      nose: noseGeo,
+      beanieCuff: createLoftedGeometry(
+        [
+          { pos: 0.110, r1: 0.138, r2: 0.144, offsetB: -0.012 },
+          { pos: 0.184, r1: 0.148, r2: 0.150, offsetB: -0.004 },
+          { pos: 0.224, r1: 0.152, r2: 0.154, offsetB: -0.005 }
+        ],
+        10,
+        'y',
+        true,
+        true
+      ),
+      beanieDome: createLoftedGeometry(
+        [
+          { pos: 0.220, r1: 0.145, r2: 0.147, offsetB: -0.005 },
+          { pos: 0.270, r1: 0.136, r2: 0.138, offsetB: -0.006 },
+          { pos: 0.318, r1: 0.104, r2: 0.106, offsetB: -0.007 },
+          { pos: 0.348, r1: 0.048, r2: 0.049, offsetB: -0.007 }
+        ],
+        10,
+        'y',
+        true,
+        true
+      ),
+      pomPomBase: new THREE.IcosahedronGeometry(0.036, 1),
+      pomPomTuft: new THREE.DodecahedronGeometry(0.020, 0),
+      goggleStrap: new THREE.CylinderGeometry(0.153, 0.151, 0.040, 12, 1, true),
+      goggleFrame: frameGeo,
+      goggleLens: lensGeo,
+      deltoid: deltoidGeo,
+      upperArmLeft: createLoftedGeometry(upperRingsL, 8, 'x', false, false),
+      upperArmRight: createLoftedGeometry(upperRingsR, 8, 'x', false, false),
+      elbow: elbowGeo,
+      foreArmLeft: createLoftedGeometry(foreRingsL, 8, 'x', false, true),
+      foreArmRight: createLoftedGeometry(foreRingsR, 8, 'x', true, false),
+      glove: gloveGeo,
+      thumb: thumbGeo,
+      poleGrip: new THREE.CylinderGeometry(0.017, 0.014, 0.136, 7),
+      poleCap: new THREE.CylinderGeometry(0.021, 0.019, 0.020, 7),
+      poleShaft: new THREE.CylinderGeometry(0.0095, 0.008, 1.03, 6),
+      poleBasket: new THREE.CylinderGeometry(0.045, 0.045, 0.011, 10),
+      poleTip: poleTipGeo,
+      thigh: createLoftedGeometry(
+        [
+          { pos: -0.34, r1: 0.092, r2: 0.094, twist: Math.PI / 8 },
+          { pos: -0.17, r1: 0.098, r2: 0.100, twist: Math.PI / 8 },
+          { pos: 0.03, r1: 0.106, r2: 0.108, twist: Math.PI / 8 }
+        ],
+        8,
+        'y',
+        false,
+        true
+      ),
+      knee: kneeGeo,
+      shin: createLoftedGeometry(
+        [
+          { pos: -0.325, r1: 0.086, r2: 0.088, twist: Math.PI / 8 },
+          { pos: -0.16, r1: 0.089, r2: 0.092, twist: Math.PI / 8 },
+          { pos: 0.0, r1: 0.092, r2: 0.094, twist: Math.PI / 8 }
+        ],
+        8,
+        'y',
+        true,
+        false
+      ),
+      bootUpper: new THREE.CylinderGeometry(0.070, 0.078, 0.095, 8),
+      bootBody: createLoftedGeometry(
+        [
+          { pos: -0.100, r1: 0.080, r2: 0.136, offsetB: 0.042 },
+          { pos: -0.052, r1: 0.074, r2: 0.120, offsetB: 0.032 },
+          { pos: -0.012, r1: 0.066, r2: 0.090, offsetB: 0.012 }
+        ],
+        8,
+        'y',
+        true,
+        true
+      ),
+      sole: createLoftedGeometry(
+        [
+          { pos: -0.130, r1: 0.084, r2: 0.142, offsetB: 0.042 },
+          { pos: -0.098, r1: 0.086, r2: 0.144, offsetB: 0.042 }
+        ],
+        8,
+        'y',
+        true,
+        true
+      )
+    };
+  }
+  return _sharedGeos;
 }
 
 /**
  * Builds the articulated low-poly skier character rig
  */
-export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.coral): SkierCharacter {
+export function buildSkierCharacter(
+  initialPalette: SkierPalette = PALETTES.coral,
+  initialPaletteKey = 'coral'
+): SkierCharacter {
   const root = new THREE.Group();
   root.name = 'skierRoot';
 
-  const materials: Record<string, THREE.MeshStandardMaterial> = {
-    jacket: createMatteMaterial(initialPalette.jacket, 0.86, 0.01),
-    jacketInner: createMatteMaterial(initialPalette.jacketInner, 0.90, 0.01),
-    pants: createMatteMaterial(initialPalette.pants, 0.88, 0.01),
-    beanie: createMatteMaterial(initialPalette.beanie, 0.94, 0.0),
-    beanieCuff: createMatteMaterial(initialPalette.beanieCuff, 0.94, 0.0),
-    pomPom: createMatteMaterial(initialPalette.pomPom, 0.96, 0.0),
-    skin: createMatteMaterial(0xdcc3ae, 0.88, 0.0),
-    innerShirt: createMatteMaterial(0x353b44, 0.92, 0.0),
-    goggleFrame: createMatteMaterial(0x1f242c, 0.65, 0.05),
-    goggleStrap: createMatteMaterial(0x222730, 0.88, 0.0),
-    goggleLens: new THREE.MeshStandardMaterial({
-      color: initialPalette.goggleLens,
-      roughness: 0.42,
-      metalness: 0.16,
-      flatShading: true
-    }),
-    glove: createMatteMaterial(0x23272e, 0.85, 0.03),
-    boot: createMatteMaterial(0x2b3038, 0.78, 0.04),
-    bootSole: createMatteMaterial(0x4c5460, 0.84, 0.03),
-    bootAccent: createMatteMaterial(0x8c95a3, 0.80, 0.03),
-    skiBase: createMatteMaterial(0x262c36, 0.62, 0.12),
-    skiAccent: createMatteMaterial(initialPalette.skiAccent, 0.55, 0.08),
-    poleShaft: new THREE.MeshStandardMaterial({
-      color: 0x69727e,
-      roughness: 0.52,
-      metalness: 0.32,
-      flatShading: true
-    }),
-    poleGrip: createMatteMaterial(0x2d333c, 0.86, 0.04),
-    poleBasket: createMatteMaterial(0x4a525e, 0.80, 0.04)
-  };
+  const geos = getSharedSkierGeometries();
+  const commonMats = getSharedCommonMaterials();
+  const palMats = getCachedPaletteMaterials(initialPaletteKey, initialPalette);
 
-  const collarMat = materials.jacket.clone();
-  collarMat.side = THREE.DoubleSide;
+  const materials: Record<string, THREE.Material> = {
+    ...commonMats,
+    ...palMats
+  };
 
   const enableShadows = (mesh: THREE.Mesh): THREE.Mesh => {
     mesh.castShadow = true;
@@ -96,6 +377,29 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
   const joints: SkierJoints = {} as SkierJoints;
   const skis: THREE.Group[] = [];
   const footContacts: THREE.Object3D[] = [];
+  const twintipTails: THREE.Mesh[] = [];
+  const flatTails: THREE.Mesh[] = [];
+
+  // Track meshes whose materials belong to the palette
+  const paletteMeshes: {
+    jacket: THREE.Mesh[];
+    collar: THREE.Mesh[];
+    pants: THREE.Mesh[];
+    beanie: THREE.Mesh[];
+    beanieCuff: THREE.Mesh[];
+    pomPom: THREE.Mesh[];
+    goggleLens: THREE.Mesh[];
+    skiAccent: THREE.Mesh[];
+  } = {
+    jacket: [],
+    collar: [],
+    pants: [],
+    beanie: [],
+    beanieCuff: [],
+    pomPom: [],
+    goggleLens: [],
+    skiAccent: []
+  };
 
   // 1. Hips (Pelvis pivot at y = 0.82)
   const hips = new THREE.Group();
@@ -104,18 +408,9 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
   root.add(hips);
   joints.hips = hips;
 
-  const pelvisGeo = createLoftedGeometry(
-    [
-      { pos: -0.055, r1: 0.168, r2: 0.118 },
-      { pos: 0.005, r1: 0.178, r2: 0.125 },
-      { pos: 0.055, r1: 0.172, r2: 0.120 }
-    ],
-    8,
-    'y',
-    true,
-    true
-  );
-  hips.add(enableShadows(new THREE.Mesh(pelvisGeo, materials.pants)));
+  const pelvisMesh = enableShadows(new THREE.Mesh(geos.pelvis, materials.pants));
+  hips.add(pelvisMesh);
+  paletteMeshes.pants.push(pelvisMesh);
 
   // 2. Spine & Lofted Puffer Jacket Torso
   const spine = new THREE.Group();
@@ -124,31 +419,16 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
   hips.add(spine);
   joints.spine = spine;
 
-  const torsoGeo = createLoftedGeometry(
-    [
-      { pos: -0.095, r1: 0.236, r2: 0.162, twist: 0.0 },
-      { pos: -0.045, r1: 0.268, r2: 0.184, twist: 0.0 },
-      { pos: 0.065, r1: 0.258, r2: 0.178, twist: 0.08 },
-      { pos: 0.185, r1: 0.248, r2: 0.174, twist: 0.0 },
-      { pos: 0.310, r1: 0.272, r2: 0.186, twist: 0.08 },
-      { pos: 0.435, r1: 0.282, r2: 0.184, twist: 0.0 },
-      { pos: 0.515, r1: 0.232, r2: 0.158, twist: 0.08 },
-      { pos: 0.555, r1: 0.140, r2: 0.124, twist: 0.0 }
-    ],
-    10,
-    'y',
-    true,
-    true
-  );
-  spine.add(enableShadows(new THREE.Mesh(torsoGeo, materials.jacket)));
+  const torsoMesh = enableShadows(new THREE.Mesh(geos.torso, materials.jacket));
+  spine.add(torsoMesh);
+  paletteMeshes.jacket.push(torsoMesh);
 
-  const collarGeo = createFlaredCollarGeometry();
-  const collarMesh = enableShadows(new THREE.Mesh(collarGeo, collarMat));
+  const collarMesh = enableShadows(new THREE.Mesh(geos.collar, materials.collarMat));
   collarMesh.position.set(0, 0.538, 0.004);
   spine.add(collarMesh);
+  paletteMeshes.collar.push(collarMesh);
 
-  const innerNeckGeo = new THREE.CylinderGeometry(0.084, 0.096, 0.055, 10);
-  const innerNeckMesh = enableShadows(new THREE.Mesh(innerNeckGeo, materials.innerShirt));
+  const innerNeckMesh = enableShadows(new THREE.Mesh(geos.innerNeck, materials.innerShirt));
   innerNeckMesh.position.set(0, 0.542, 0.004);
   spine.add(innerNeckMesh);
 
@@ -159,9 +439,7 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
   spine.add(neck);
   joints.neck = neck;
 
-  // Athletic thermal neck gaiter base layer covering neck & base of skull
-  const neckGaiterGeo = new THREE.CylinderGeometry(0.080, 0.094, 0.078, 10);
-  const neckGaiterMesh = enableShadows(new THREE.Mesh(neckGaiterGeo, materials.innerShirt));
+  const neckGaiterMesh = enableShadows(new THREE.Mesh(geos.neckGaiter, materials.innerShirt));
   neckGaiterMesh.position.set(0, 0.034, -0.004);
   neck.add(neckGaiterMesh);
 
@@ -171,59 +449,26 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
   neck.add(head);
   joints.head = head;
 
-  const headGeo = createLoftedGeometry(
-    [
-      { pos: 0.0, r1: 0.062, r2: 0.060 },
-      { pos: 0.038, r1: 0.106, r2: 0.108, offsetB: 0.008 },
-      { pos: 0.102, r1: 0.132, r2: 0.134, offsetB: 0.006 },
-      { pos: 0.172, r1: 0.136, r2: 0.138, offsetB: 0.0 },
-      { pos: 0.232, r1: 0.120, r2: 0.122, offsetB: -0.004 },
-      { pos: 0.270, r1: 0.068, r2: 0.070, offsetB: -0.006 }
-    ],
-    10,
-    'y',
-    true,
-    true
-  );
-  head.add(enableShadows(new THREE.Mesh(headGeo, materials.skin)));
+  head.add(enableShadows(new THREE.Mesh(geos.head, materials.skin)));
 
-  const noseGeo = new THREE.ConeGeometry(0.020, 0.042, 4);
-  noseGeo.rotateX(Math.PI * 0.44);
-  const noseMesh = enableShadows(new THREE.Mesh(noseGeo, materials.skin));
+  const noseMesh = enableShadows(new THREE.Mesh(geos.nose, materials.skin));
   noseMesh.position.set(0, 0.114, 0.139);
   head.add(noseMesh);
 
-  const beanieCuffGeo = createLoftedGeometry(
-    [
-      { pos: 0.110, r1: 0.138, r2: 0.144, offsetB: -0.012 },
-      { pos: 0.184, r1: 0.148, r2: 0.150, offsetB: -0.004 },
-      { pos: 0.224, r1: 0.152, r2: 0.154, offsetB: -0.005 }
-    ],
-    10,
-    'y',
-    true,
-    true
-  );
-  head.add(enableShadows(new THREE.Mesh(beanieCuffGeo, materials.beanieCuff)));
+  const beanieCuffMesh = enableShadows(new THREE.Mesh(geos.beanieCuff, materials.beanieCuff));
+  head.add(beanieCuffMesh);
+  paletteMeshes.beanieCuff.push(beanieCuffMesh);
 
-  const beanieDomeGeo = createLoftedGeometry(
-    [
-      { pos: 0.220, r1: 0.145, r2: 0.147, offsetB: -0.005 },
-      { pos: 0.270, r1: 0.136, r2: 0.138, offsetB: -0.006 },
-      { pos: 0.318, r1: 0.104, r2: 0.106, offsetB: -0.007 },
-      { pos: 0.348, r1: 0.048, r2: 0.049, offsetB: -0.007 }
-    ],
-    10,
-    'y',
-    true,
-    true
-  );
-  head.add(enableShadows(new THREE.Mesh(beanieDomeGeo, materials.beanie)));
+  const beanieDomeMesh = enableShadows(new THREE.Mesh(geos.beanieDome, materials.beanie));
+  head.add(beanieDomeMesh);
+  paletteMeshes.beanie.push(beanieDomeMesh);
 
   const pomGroup = new THREE.Group();
   pomGroup.position.set(0, 0.376, -0.008);
-  pomGroup.add(enableShadows(new THREE.Mesh(new THREE.IcosahedronGeometry(0.036, 1), materials.pomPom)));
-  const tuftGeo = new THREE.DodecahedronGeometry(0.020, 0);
+  const pomBase = enableShadows(new THREE.Mesh(geos.pomPomBase, materials.pomPom));
+  pomGroup.add(pomBase);
+  paletteMeshes.pomPom.push(pomBase);
+
   const tuftOffsets = [
     [0.022, 0.010, 0.010],
     [-0.022, 0.010, 0.010],
@@ -235,9 +480,10 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     [-0.016, -0.008, 0.014]
   ];
   tuftOffsets.forEach(([x, y, z]) => {
-    const tuft = enableShadows(new THREE.Mesh(tuftGeo, materials.pomPom));
+    const tuft = enableShadows(new THREE.Mesh(geos.pomPomTuft, materials.pomPom));
     tuft.position.set(x, y, z);
     pomGroup.add(tuft);
+    paletteMeshes.pomPom.push(tuft);
   });
   head.add(pomGroup);
 
@@ -247,72 +493,18 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
   gogglesGroup.position.set(0, 0.168, 0.004);
   head.add(gogglesGroup);
 
-  const strapGeo = new THREE.CylinderGeometry(0.153, 0.151, 0.040, 12, 1, true);
-  const strapMesh = enableShadows(new THREE.Mesh(strapGeo, materials.goggleStrap));
+  const strapMesh = enableShadows(new THREE.Mesh(geos.goggleStrap, materials.goggleStrap));
   strapMesh.position.set(0, 0.0, -0.008);
   gogglesGroup.add(strapMesh);
 
-  function createGoggleShape(w: number, hTop: number, hBot: number, notchW: number, notchH: number): THREE.Shape {
-    const s = new THREE.Shape();
-    s.moveTo(-w * 0.72, hTop);
-    s.quadraticCurveTo(0, hTop + 0.006, w * 0.72, hTop);
-    s.quadraticCurveTo(w, hTop, w, hTop * 0.35);
-    s.lineTo(w * 0.94, -hBot * 0.45);
-    s.quadraticCurveTo(w * 0.88, -hBot, w * 0.48, -hBot);
-    s.lineTo(notchW, -hBot);
-    s.quadraticCurveTo(notchW * 0.55, -hBot + notchH * 0.25, 0, -hBot + notchH);
-    s.quadraticCurveTo(-notchW * 0.55, -hBot + notchH * 0.25, -notchW, -hBot);
-    s.lineTo(-w * 0.48, -hBot);
-    s.quadraticCurveTo(-w * 0.88, -hBot, -w * 0.94, -hBot * 0.45);
-    s.lineTo(-w, hTop * 0.35);
-    s.quadraticCurveTo(-w, hTop, -w * 0.72, hTop);
-    return s;
-  }
-
-  const bendGeometry = (geo: THREE.BufferGeometry, radius = 0.24) => {
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i);
-      const z = pos.getZ(i);
-      const curveZ = -(x * x) / (2 * radius);
-      pos.setZ(i, z + curveZ);
-    }
-    geo.computeVertexNormals();
-  };
-
-  const frameShape = createGoggleShape(0.140, 0.048, 0.056, 0.042, 0.034);
-  let frameGeo: THREE.BufferGeometry = new THREE.ExtrudeGeometry(frameShape, {
-    depth: 0.048,
-    bevelEnabled: true,
-    bevelThickness: 0.009,
-    bevelSize: 0.008,
-    bevelSegments: 1,
-    curveSegments: 3
-  });
-  frameGeo.center();
-  if (frameGeo.index) frameGeo = frameGeo.toNonIndexed();
-  bendGeometry(frameGeo, 0.25);
-
-  const frameMesh = enableShadows(new THREE.Mesh(frameGeo, materials.goggleFrame));
+  const frameMesh = enableShadows(new THREE.Mesh(geos.goggleFrame, materials.goggleFrame));
   frameMesh.position.set(0, -0.004, 0.130);
   gogglesGroup.add(frameMesh);
 
-  const lensShape = createGoggleShape(0.124, 0.036, 0.044, 0.036, 0.030);
-  let lensGeo: THREE.BufferGeometry = new THREE.ExtrudeGeometry(lensShape, {
-    depth: 0.014,
-    bevelEnabled: true,
-    bevelThickness: 0.005,
-    bevelSize: 0.004,
-    bevelSegments: 1,
-    curveSegments: 3
-  });
-  lensGeo.center();
-  if (lensGeo.index) lensGeo = lensGeo.toNonIndexed();
-  bendGeometry(lensGeo, 0.24);
-
-  const lensMesh = enableShadows(new THREE.Mesh(lensGeo, materials.goggleLens));
+  const lensMesh = enableShadows(new THREE.Mesh(geos.goggleLens, materials.goggleLens));
   lensMesh.position.set(0, -0.004, 0.153);
   gogglesGroup.add(lensMesh);
+  paletteMeshes.goggleLens.push(lensMesh);
 
   // 4. Arms, Gloves & Ski Poles
   function buildArm(side: number) {
@@ -324,22 +516,15 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     spine.add(shoulder);
     joints[`${prefix}Shoulder`] = shoulder;
 
-    const deltoidGeo = new THREE.SphereGeometry(0.092, 10, 8);
-    deltoidGeo.scale(1.0, 0.88, 0.95);
-    const deltoidMesh = enableShadows(new THREE.Mesh(deltoidGeo, materials.jacket));
+    const deltoidMesh = enableShadows(new THREE.Mesh(geos.deltoid, materials.jacket));
     deltoidMesh.position.set(side * 0.015, -0.010, 0);
     shoulder.add(deltoidMesh);
+    paletteMeshes.jacket.push(deltoidMesh);
 
-    const upperRings: LoftRing[] = [
-      { pos: side * 0.020, r1: 0.088, r2: 0.094, offsetA: -0.005 },
-      { pos: side * 0.080, r1: 0.082, r2: 0.088, offsetA: -0.004 },
-      { pos: side * 0.150, r1: 0.078, r2: 0.084, offsetA: -0.002 },
-      { pos: side * 0.220, r1: 0.076, r2: 0.080, offsetA: 0.000 },
-      { pos: side * 0.288, r1: 0.080, r2: 0.084, offsetA: 0.000 }
-    ];
-    if (side < 0) upperRings.reverse();
-    const upperArmGeo = createLoftedGeometry(upperRings, 8, 'x', false, false);
-    shoulder.add(enableShadows(new THREE.Mesh(upperArmGeo, materials.jacket)));
+    const upperArmGeo = side > 0 ? geos.upperArmLeft : geos.upperArmRight;
+    const upperArmMesh = enableShadows(new THREE.Mesh(upperArmGeo, materials.jacket));
+    shoulder.add(upperArmMesh);
+    paletteMeshes.jacket.push(upperArmMesh);
 
     const elbow = new THREE.Group();
     elbow.name = `${prefix}Elbow`;
@@ -347,25 +532,15 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     shoulder.add(elbow);
     joints[`${prefix}Elbow`] = elbow;
 
-    const elbowGeo = new THREE.SphereGeometry(0.082, 10, 8);
-    elbowGeo.scale(0.94, 0.94, 0.96);
-    const elbowMesh = enableShadows(new THREE.Mesh(elbowGeo, materials.jacket));
+    const elbowMesh = enableShadows(new THREE.Mesh(geos.elbow, materials.jacket));
     elbowMesh.position.set(0, 0, 0);
     elbow.add(elbowMesh);
+    paletteMeshes.jacket.push(elbowMesh);
 
-    const foreRings: LoftRing[] = [
-      { pos: side * 0.000, r1: 0.078, r2: 0.082 },
-      { pos: side * 0.054, r1: 0.073, r2: 0.076 },
-      { pos: side * 0.118, r1: 0.079, r2: 0.082 },
-      { pos: side * 0.184, r1: 0.070, r2: 0.072 },
-      { pos: side * 0.248, r1: 0.073, r2: 0.075 },
-      { pos: side * 0.304, r1: 0.058, r2: 0.060 }
-    ];
-    if (side < 0) foreRings.reverse();
-    const capStart = side < 0;
-    const capEnd = side > 0;
-    const foreArmGeo = createLoftedGeometry(foreRings, 8, 'x', capStart, capEnd);
-    elbow.add(enableShadows(new THREE.Mesh(foreArmGeo, materials.jacket)));
+    const foreArmGeo = side > 0 ? geos.foreArmLeft : geos.foreArmRight;
+    const foreArmMesh = enableShadows(new THREE.Mesh(foreArmGeo, materials.jacket));
+    elbow.add(foreArmMesh);
+    paletteMeshes.jacket.push(foreArmMesh);
 
     const wrist = new THREE.Group();
     wrist.name = `${prefix}Wrist`;
@@ -373,15 +548,11 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     elbow.add(wrist);
     joints[`${prefix}Wrist`] = wrist;
 
-    const gloveGeo = new THREE.IcosahedronGeometry(0.050, 1);
-    gloveGeo.scale(1.10, 0.84, 0.90);
-    const gloveMesh = enableShadows(new THREE.Mesh(gloveGeo, materials.glove));
+    const gloveMesh = enableShadows(new THREE.Mesh(geos.glove, materials.glove));
     gloveMesh.position.set(side * 0.042, -0.004, 0.004);
     wrist.add(gloveMesh);
 
-    const thumbGeo = new THREE.IcosahedronGeometry(0.021, 0);
-    thumbGeo.scale(1.15, 0.88, 1.25);
-    const thumbMesh = enableShadows(new THREE.Mesh(thumbGeo, materials.glove));
+    const thumbMesh = enableShadows(new THREE.Mesh(geos.thumb, materials.glove));
     thumbMesh.position.set(side * 0.034, -0.020, 0.034);
     wrist.add(thumbMesh);
 
@@ -393,30 +564,24 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     wrist.add(poleGroup);
     joints[`${prefix}Pole`] = poleGroup;
 
-    const gripGeo = new THREE.CylinderGeometry(0.017, 0.014, 0.136, 7);
-    const gripMesh = enableShadows(new THREE.Mesh(gripGeo, materials.poleGrip));
+    const gripMesh = enableShadows(new THREE.Mesh(geos.poleGrip, materials.poleGrip));
     gripMesh.position.set(0, -0.008, 0);
     poleGroup.add(gripMesh);
 
-    const capGeo = new THREE.CylinderGeometry(0.021, 0.019, 0.020, 7);
-    const capMesh = enableShadows(new THREE.Mesh(capGeo, materials.poleGrip));
+    const capMesh = enableShadows(new THREE.Mesh(geos.poleCap, materials.poleGrip));
     capMesh.position.set(0, 0.064, 0);
     poleGroup.add(capMesh);
 
     const shaftLength = 1.03;
-    const shaftGeo = new THREE.CylinderGeometry(0.0095, 0.008, shaftLength, 6);
-    const shaftMesh = enableShadows(new THREE.Mesh(shaftGeo, materials.poleShaft));
+    const shaftMesh = enableShadows(new THREE.Mesh(geos.poleShaft, materials.poleShaft));
     shaftMesh.position.set(0, -0.072 - shaftLength / 2, 0);
     poleGroup.add(shaftMesh);
 
-    const basketGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.011, 10);
-    const basketMesh = enableShadows(new THREE.Mesh(basketGeo, materials.poleBasket));
+    const basketMesh = enableShadows(new THREE.Mesh(geos.poleBasket, materials.poleBasket));
     basketMesh.position.set(0, -0.072 - shaftLength + 0.045, 0);
     poleGroup.add(basketMesh);
 
-    const tipGeo = new THREE.ConeGeometry(0.0085, 0.095, 6);
-    tipGeo.rotateX(Math.PI);
-    const tipMesh = enableShadows(new THREE.Mesh(tipGeo, materials.poleShaft));
+    const tipMesh = enableShadows(new THREE.Mesh(geos.poleTip, materials.poleShaft));
     tipMesh.position.set(0, -0.072 - shaftLength - 0.012, 0);
     poleGroup.add(tipMesh);
   }
@@ -434,18 +599,9 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     hips.add(hip);
     joints[`${prefix}Hip`] = hip;
 
-    const thighGeo = createLoftedGeometry(
-      [
-        { pos: -0.34, r1: 0.092, r2: 0.094, twist: Math.PI / 8 },
-        { pos: -0.17, r1: 0.098, r2: 0.100, twist: Math.PI / 8 },
-        { pos: 0.03, r1: 0.106, r2: 0.108, twist: Math.PI / 8 }
-      ],
-      8,
-      'y',
-      false,
-      true
-    );
-    hip.add(enableShadows(new THREE.Mesh(thighGeo, materials.pants)));
+    const thighMesh = enableShadows(new THREE.Mesh(geos.thigh, materials.pants));
+    hip.add(thighMesh);
+    paletteMeshes.pants.push(thighMesh);
 
     const knee = new THREE.Group();
     knee.name = `${prefix}Knee`;
@@ -453,24 +609,14 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     hip.add(knee);
     joints[`${prefix}Knee`] = knee;
 
-    const kneeGeo = new THREE.SphereGeometry(0.095, 10, 8);
-    kneeGeo.scale(0.96, 1.02, 1.04);
-    const kneeMesh = enableShadows(new THREE.Mesh(kneeGeo, materials.pants));
+    const kneeMesh = enableShadows(new THREE.Mesh(geos.knee, materials.pants));
     kneeMesh.position.set(0, 0, 0.006);
     knee.add(kneeMesh);
+    paletteMeshes.pants.push(kneeMesh);
 
-    const shinGeo = createLoftedGeometry(
-      [
-        { pos: -0.325, r1: 0.086, r2: 0.088, twist: Math.PI / 8 },
-        { pos: -0.16, r1: 0.089, r2: 0.092, twist: Math.PI / 8 },
-        { pos: 0.0, r1: 0.092, r2: 0.094, twist: Math.PI / 8 }
-      ],
-      8,
-      'y',
-      true,
-      false
-    );
-    knee.add(enableShadows(new THREE.Mesh(shinGeo, materials.pants)));
+    const shinMesh = enableShadows(new THREE.Mesh(geos.shin, materials.pants));
+    knee.add(shinMesh);
+    paletteMeshes.pants.push(shinMesh);
 
     const ankle = new THREE.Group();
     ankle.name = `${prefix}Ankle`;
@@ -478,35 +624,15 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
     knee.add(ankle);
     joints[`${prefix}Ankle`] = ankle;
 
-    const bootUpperGeo = new THREE.CylinderGeometry(0.070, 0.078, 0.095, 8);
-    const bootUpper = enableShadows(new THREE.Mesh(bootUpperGeo, materials.boot));
+    const bootUpper = enableShadows(new THREE.Mesh(geos.bootUpper, materials.boot));
     bootUpper.position.set(0, -0.025, -0.004);
     ankle.add(bootUpper);
 
-    const bootBodyGeo = createLoftedGeometry(
-      [
-        { pos: -0.100, r1: 0.080, r2: 0.136, offsetB: 0.042 },
-        { pos: -0.052, r1: 0.074, r2: 0.120, offsetB: 0.032 },
-        { pos: -0.012, r1: 0.066, r2: 0.090, offsetB: 0.012 }
-      ],
-      8,
-      'y',
-      true,
-      true
-    );
-    ankle.add(enableShadows(new THREE.Mesh(bootBodyGeo, materials.boot)));
+    const bootBody = enableShadows(new THREE.Mesh(geos.bootBody, materials.boot));
+    ankle.add(bootBody);
 
-    const soleGeo = createLoftedGeometry(
-      [
-        { pos: -0.130, r1: 0.084, r2: 0.142, offsetB: 0.042 },
-        { pos: -0.098, r1: 0.086, r2: 0.144, offsetB: 0.042 }
-      ],
-      8,
-      'y',
-      true,
-      true
-    );
-    ankle.add(enableShadows(new THREE.Mesh(soleGeo, materials.bootSole)));
+    const sole = enableShadows(new THREE.Mesh(geos.sole, materials.bootSole));
+    ankle.add(sole);
 
     function addInstepStrap(yPos: number, zPos: number, width: number) {
       const strapGroup = new THREE.Group();
@@ -528,6 +654,8 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
 
     // Alpine Carving Ski Attached to Boot
     const ski = createAlpineSki(materials.skiBase, materials.skiAccent, materials.bootAccent, enableShadows);
+    if (ski.userData.tailTwintip) twintipTails.push(ski.userData.tailTwintip);
+    if (ski.userData.tailFlat) flatTails.push(ski.userData.tailFlat);
     ankle.add(ski);
     skis.push(ski);
 
@@ -575,17 +703,24 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
   buildLeg(-1);
 
   function setPalette(paletteKey: string) {
-    const p = PALETTES[paletteKey];
-    if (!p) return;
-    materials.jacket.color.setHex(p.jacket);
-    collarMat.color.setHex(p.jacket);
-    materials.jacketInner.color.setHex(p.jacketInner);
-    materials.beanie.color.setHex(p.beanie);
-    materials.beanieCuff.color.setHex(p.beanieCuff);
-    materials.pomPom.color.setHex(p.pomPom);
-    materials.goggleLens.color.setHex(p.goggleLens);
-    materials.pants.color.setHex(p.pants);
-    materials.skiAccent.color.setHex(p.skiAccent);
+    const newMats = getCachedPaletteMaterials(paletteKey);
+    Object.assign(materials, newMats);
+
+    paletteMeshes.jacket.forEach((m) => (m.material = newMats.jacket));
+    paletteMeshes.collar.forEach((m) => (m.material = newMats.collarMat));
+    paletteMeshes.pants.forEach((m) => (m.material = newMats.pants));
+    paletteMeshes.beanie.forEach((m) => (m.material = newMats.beanie));
+    paletteMeshes.beanieCuff.forEach((m) => (m.material = newMats.beanieCuff));
+    paletteMeshes.pomPom.forEach((m) => (m.material = newMats.pomPom));
+    paletteMeshes.goggleLens.forEach((m) => (m.material = newMats.goggleLens));
+    paletteMeshes.skiAccent.forEach((m) => (m.material = newMats.skiAccent));
+  }
+
+  function setSportVisuals(isSnowboard: boolean, hasTwintips: boolean) {
+    if (joints.leftPole) joints.leftPole.visible = !isSnowboard;
+    if (joints.rightPole) joints.rightPole.visible = !isSnowboard;
+    twintipTails.forEach((t) => (t.visible = hasTwintips));
+    flatTails.forEach((f) => (f.visible = !hasTwintips));
   }
 
   function resetPose() {
@@ -610,7 +745,7 @@ export function buildSkierCharacter(initialPalette: SkierPalette = PALETTES.cora
   // Rotate root 180 deg around Y so character faces -Z in the game coordinate system
   root.rotation.y = Math.PI;
 
-  return { root, joints, materials, footContacts, skis, setPalette, resetPose };
+  return { root, joints, materials, footContacts, skis, twintipTails, flatTails, setPalette, resetPose, setSportVisuals };
 }
 
 // Persistent pre-allocated scratch objects for zero-allocation ragdoll posing

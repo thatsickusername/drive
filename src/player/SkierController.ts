@@ -327,11 +327,13 @@ export class SkierController {
   }
 
   public updateSportVisuals(): void {
-    // Skier character uses authentic alpine skis and dual poles
+    const isSnowboard = this.gmaPhysics.sport === SportType.Snowboard;
+    this.skierCharacter.setSportVisuals?.(isSnowboard, this.gmaPhysics.hasTwintips);
   }
 
   public toggleTwintips(): boolean {
     this.gmaPhysics.hasTwintips = !this.gmaPhysics.hasTwintips;
+    this.updateSportVisuals();
     return this.gmaPhysics.hasTwintips;
   }
 
@@ -346,6 +348,7 @@ export class SkierController {
     this.animator.onPolePlantAudio = () => this.audio.playPolePlant();
     this.skierCharacter.root.position.y = -this.cfg.sphereRadius + 0.02;
     this.visualRoot.add(this.skierCharacter.root);
+    this.updateSportVisuals();
   }
 
   /**

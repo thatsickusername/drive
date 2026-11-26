@@ -169,6 +169,31 @@ export function createFlaredCollarGeometry(): THREE.BufferGeometry {
   return geo;
 }
 
+let _sharedSkiGeos: {
+  main: THREE.BufferGeometry;
+  stripe: THREE.BufferGeometry;
+  tip: THREE.BufferGeometry;
+  tailTwintip: THREE.BufferGeometry;
+  tailFlat: THREE.BufferGeometry;
+  toeBind: THREE.BufferGeometry;
+  heelBind: THREE.BufferGeometry;
+} | null = null;
+
+export function getSharedSkiGeometries() {
+  if (!_sharedSkiGeos) {
+    _sharedSkiGeos = {
+      main: new THREE.BoxGeometry(0.142, 0.034, 1.42),
+      stripe: new THREE.BoxGeometry(0.106, 0.010, 1.30),
+      tip: new THREE.BoxGeometry(0.136, 0.028, 0.28),
+      tailTwintip: new THREE.BoxGeometry(0.132, 0.026, 0.22),
+      tailFlat: new THREE.BoxGeometry(0.132, 0.026, 0.22),
+      toeBind: new THREE.BoxGeometry(0.102, 0.032, 0.088),
+      heelBind: new THREE.BoxGeometry(0.102, 0.032, 0.096)
+    };
+  }
+  return _sharedSkiGeos;
+}
+
 export function createAlpineSki(
   skiBaseMat: THREE.Material,
   skiAccentMat: THREE.Material,
@@ -176,35 +201,39 @@ export function createAlpineSki(
   enableShadows: (m: THREE.Mesh) => THREE.Mesh
 ): THREE.Group {
   const skiGroup = new THREE.Group();
+  const geos = getSharedSkiGeometries();
 
-  const mainGeo = new THREE.BoxGeometry(0.142, 0.034, 1.42);
-  const mainMesh = enableShadows(new THREE.Mesh(mainGeo, skiBaseMat));
+  const mainMesh = enableShadows(new THREE.Mesh(geos.main, skiBaseMat));
   mainMesh.position.set(0, -0.130, 0.06);
   skiGroup.add(mainMesh);
 
-  const stripeGeo = new THREE.BoxGeometry(0.106, 0.010, 1.30);
-  const stripeMesh = enableShadows(new THREE.Mesh(stripeGeo, skiAccentMat));
+  const stripeMesh = enableShadows(new THREE.Mesh(geos.stripe, skiAccentMat));
   stripeMesh.position.set(0, -0.111, 0.06);
   skiGroup.add(stripeMesh);
 
-  const tipGeo = new THREE.BoxGeometry(0.136, 0.028, 0.28);
-  const tipMesh = enableShadows(new THREE.Mesh(tipGeo, skiAccentMat));
+  const tipMesh = enableShadows(new THREE.Mesh(geos.tip, skiAccentMat));
   tipMesh.position.set(0, -0.092, 0.88);
   tipMesh.rotation.x = -0.32;
   skiGroup.add(tipMesh);
 
-  const tailGeo = new THREE.BoxGeometry(0.132, 0.026, 0.22);
-  const tailMesh = enableShadows(new THREE.Mesh(tailGeo, skiBaseMat));
-  tailMesh.position.set(0, -0.112, -0.73);
-  tailMesh.rotation.x = 0.22;
-  skiGroup.add(tailMesh);
+  const tailTwintipMesh = enableShadows(new THREE.Mesh(geos.tailTwintip, skiBaseMat));
+  tailTwintipMesh.position.set(0, -0.112, -0.73);
+  tailTwintipMesh.rotation.x = 0.22;
+  skiGroup.add(tailTwintipMesh);
 
-  const toeBindGeo = new THREE.BoxGeometry(0.102, 0.032, 0.088);
-  const toeBind = enableShadows(new THREE.Mesh(toeBindGeo, bindingMat));
+  const tailFlatMesh = enableShadows(new THREE.Mesh(geos.tailFlat, skiBaseMat));
+  tailFlatMesh.position.set(0, -0.126, -0.73);
+  tailFlatMesh.rotation.x = 0.0;
+  tailFlatMesh.visible = false;
+  skiGroup.add(tailFlatMesh);
+
+  skiGroup.userData.tailTwintip = tailTwintipMesh;
+  skiGroup.userData.tailFlat = tailFlatMesh;
+
+  const toeBind = enableShadows(new THREE.Mesh(geos.toeBind, bindingMat));
   toeBind.position.set(0, -0.097, 0.22);
 
-  const heelBindGeo = new THREE.BoxGeometry(0.102, 0.032, 0.096);
-  const heelBind = enableShadows(new THREE.Mesh(heelBindGeo, bindingMat));
+  const heelBind = enableShadows(new THREE.Mesh(geos.heelBind, bindingMat));
   heelBind.position.set(0, -0.097, -0.14);
   skiGroup.add(toeBind, heelBind);
 

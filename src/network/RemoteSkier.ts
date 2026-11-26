@@ -31,6 +31,16 @@ const JUMP_VARIATIONS: RemoteJumpVariation[] = [
   'nordic'
 ];
 
+// Pre-allocated scratch vectors to eliminate per-frame allocations in RemoteSkier
+const _scratchRight = new THREE.Vector3();
+const _scratchNormal = new THREE.Vector3();
+const _scratchWorldPos = new THREE.Vector3();
+const _scratchProjected = new THREE.Vector3();
+const _scratchFwd = new THREE.Vector3();
+const _scratchLinvel = new THREE.Vector3();
+const _scratchCamFwd = new THREE.Vector3();
+const _scratchToCam = new THREE.Vector3();
+
 export class RemoteSkier {
   public readonly id: number;
   public readonly root = new THREE.Group();
@@ -298,8 +308,8 @@ export class RemoteSkier {
     const isCrashing = this.movementState === 3;
     if (isCrashing && (!this.wasCrashing || !this.ragdoll.active)) {
       if (this.trail) this.trail.onCrash();
-      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.currentQuat);
-      const linvel = fwd.clone().multiplyScalar(Math.max(4.0, this.currentSpeed));
+      const fwd = _scratchFwd.set(0, 0, -1).applyQuaternion(this.currentQuat);
+      const linvel = _scratchLinvel.copy(fwd).multiplyScalar(Math.max(4.0, this.currentSpeed));
       if (this.terrainSampler) {
         this.ragdoll.setTerrainSampler(this.terrainSampler);
       }
@@ -314,6 +324,23 @@ export class RemoteSkier {
     }
     this.wasCrashing = isCrashing;
 
+    // LOD & Distance Culling against camera
+    const distSq = this.currentPos.distanceToSquared(camera.position);
+    const isBeyondFar = distSq > 600 * 600; // > 600m
+    const isBeyondLOD = distSq > 280 * 280; // > 280m
+
+    // Check if in front of camera
+    _scratchToCam.subVectors(this.currentPos, camera.position);
+    camera.getWorldDirection(_scratchCamFwd);
+    const inFront = _scratchToCam.dot(_scratchCamFwd) > -15.0;
+
+    if (isBeyondFar) {
+      this.root.visible = false;
+      if (this.tagElement) this.tagElement.style.display = 'none';
+      return;
+    }
+    this.root.visible = true;
+
     if (isCrashing) {
       if (this.ragdoll.points.length >= 21) {
         this.ragdoll.points[0].pos.copy(this.currentPos);
@@ -323,8 +350,8 @@ export class RemoteSkier {
         this.root.position.copy(this.ragdoll.points[0].pos);
         applyRagdollPose(this.skierRig, this.root, this.ragdoll.points);
       }
-    } else {
-      // Dynamic procedural animation update
+    } else if (!isBeyondLOD) {
+      // Dynamic procedural animation update within LOD range
       this.animator.update({
         dt,
         speed: this.currentSpeed,
@@ -344,18 +371,18 @@ export class RemoteSkier {
       });
     }
 
-    // Update dedicated Carved Snow Trail for remote skier
-    if (this.trail) {
+    // Update dedicated Carved Snow Trail for remote skier (cull if beyond LOD or behind camera)
+    if (this.trail && !isBeyondLOD && inFront) {
       if (terrainSampler) {
         this.trail.setTerrainSampler(terrainSampler);
       }
-      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.currentQuat);
-      const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(this.currentQuat);
+      _scratchRight.set(1, 0, 0).applyQuaternion(this.currentQuat);
+      _scratchNormal.set(0, 1, 0).applyQuaternion(this.currentQuat);
       const slipAngle = this.isDrifting ? 40 : Math.abs(this.currentLeanAngle) * 20;
       this.trail.update(
         this.currentPos,
-        right,
-        normal,
+        _scratchRight,
+        _scratchNormal,
         this.isGrounded && !isCrashing,
         slipAngle,
         this.currentSpeed,
@@ -364,8 +391,10 @@ export class RemoteSkier {
       );
     }
 
-    // Snow spray particles for remote skier
-    this.updateSnowSpray(dt, isCrashing);
+    // Snow spray particles for remote skier (cull if beyond LOD or behind camera)
+    if (!isBeyondLOD && inFront) {
+      this.updateSnowSpray(dt, isCrashing);
+    }
 
     // Update screen-space name tag & trick banner position
     if (this.tagElement) {
@@ -377,18 +406,23 @@ export class RemoteSkier {
         }
       }
 
-      const worldPos = this.currentPos.clone().add(new THREE.Vector3(0, 1.85, 0));
-      const projected = worldPos.project(camera);
-
-      // Check if behind camera
-      if (projected.z > 1.0) {
+      if (!inFront || isBeyondLOD) {
         this.tagElement.style.display = 'none';
       } else {
-        const x = (projected.x * 0.5 + 0.5) * window.innerWidth;
-        const y = (-(projected.y * 0.5) + 0.5) * window.innerHeight;
-        this.tagElement.style.display = 'flex';
-        this.tagElement.style.left = `${x.toFixed(1)}px`;
-        this.tagElement.style.top = `${y.toFixed(1)}px`;
+        _scratchWorldPos.copy(this.currentPos);
+        _scratchWorldPos.y += 1.85;
+        _scratchProjected.copy(_scratchWorldPos).project(camera);
+
+        // Check if behind camera clipping plane
+        if (_scratchProjected.z > 1.0) {
+          this.tagElement.style.display = 'none';
+        } else {
+          const x = (_scratchProjected.x * 0.5 + 0.5) * window.innerWidth;
+          const y = (-(_scratchProjected.y * 0.5) + 0.5) * window.innerHeight;
+          this.tagElement.style.display = 'flex';
+          this.tagElement.style.left = `${x.toFixed(1)}px`;
+          this.tagElement.style.top = `${y.toFixed(1)}px`;
+        }
       }
     }
   }
@@ -423,7 +457,7 @@ export class RemoteSkier {
 
     if (isEmitting) {
       const emitCount = isCrashing ? 4 : (this.isDrifting ? 3 : 1);
-      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.currentQuat);
+      _scratchRight.set(1, 0, 0).applyQuaternion(this.currentQuat);
       const leanSign = this.currentLeanAngle >= 0 ? 1 : -1;
       let emitted = 0;
 
@@ -435,8 +469,8 @@ export class RemoteSkier {
           this.sprayPositions[idx + 1] = this.currentPos.y + 0.05;
           this.sprayPositions[idx + 2] = this.currentPos.z + (Math.random() - 0.5) * 0.3;
 
-          const sprayDirX = right.x * leanSign * 2.5 + (Math.random() - 0.5) * 1.5;
-          const sprayDirZ = right.z * leanSign * 2.5 + (Math.random() - 0.5) * 1.5;
+          const sprayDirX = _scratchRight.x * leanSign * 2.5 + (Math.random() - 0.5) * 1.5;
+          const sprayDirZ = _scratchRight.z * leanSign * 2.5 + (Math.random() - 0.5) * 1.5;
           this.sprayVelocities[idx] = sprayDirX;
           this.sprayVelocities[idx + 1] = 1.8 + Math.random() * 1.8;
           this.sprayVelocities[idx + 2] = sprayDirZ;
@@ -467,6 +501,9 @@ export class RemoteSkier {
 
   public dispose(scene: THREE.Scene): void {
     scene.remove(this.root);
+    if (this.trail) {
+      this.trail.dispose(scene);
+    }
     if (this.sprayParticles) {
       scene.remove(this.sprayParticles);
       this.sprayParticles.geometry.dispose();
@@ -475,6 +512,7 @@ export class RemoteSkier {
     }
     if (this.tagElement && this.tagElement.parentNode) {
       this.tagElement.parentNode.removeChild(this.tagElement);
+      this.tagElement = null;
     }
   }
 }
