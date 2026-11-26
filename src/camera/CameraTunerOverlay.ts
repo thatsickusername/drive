@@ -362,4 +362,13 @@ export const userCameraSettings = {
   mouseSensitivity: ${this.settings.mouseSensitivity.toFixed(2)},
 };`;
   }
+
+  public dispose(): void {
+    if (this.panelElement && this.panelElement.parentNode) {
+      this.panelElement.parentNode.removeChild(this.panelElement);
+    }
+    if (this.toggleBtnElement && this.toggleBtnElement.parentNode) {
+      this.toggleBtnElement.parentNode.removeChild(this.toggleBtnElement);
+    }
+  }
 }

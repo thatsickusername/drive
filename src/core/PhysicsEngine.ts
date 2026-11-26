@@ -40,4 +40,10 @@ export class PhysicsEngine {
   public getInterpolationAlpha(): number {
     return Math.max(0, Math.min(1, this.accumulator / this.fixedTimeStep));
   }
+
+  public dispose(): void {
+    if (this.world) {
+      this.world.free();
+    }
+  }
 }

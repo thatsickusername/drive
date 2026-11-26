@@ -1,6 +1,7 @@
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
+import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 
@@ -23,6 +24,8 @@ const MIME_TYPES = {
   '.jpg': 'image/jpeg',
   '.svg': 'image/svg+xml'
 };
+
+const COMPRESSIBLE_EXTS = new Set(['.html', '.js', '.css', '.wasm', '.json', '.svg']);
 
 const server = http.createServer((req, res) => {
   const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -47,13 +50,30 @@ const server = http.createServer((req, res) => {
     const ext = path.extname(targetPath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
     const isAsset = urlPath.startsWith('/assets/');
-    res.writeHead(200, {
+    const headers = {
       'Content-Type': contentType,
       'Cache-Control': isAsset ? 'public, max-age=31536000, immutable' : 'no-cache',
       'X-Content-Type-Options': 'nosniff'
-    });
-    fs.createReadStream(targetPath).pipe(res);
-    return;
+    };
+
+    const acceptEncoding = (req.headers['accept-encoding'] || '').toLowerCase();
+    const canCompress = COMPRESSIBLE_EXTS.has(ext);
+
+    if (canCompress && acceptEncoding.includes('br')) {
+      headers['Content-Encoding'] = 'br';
+      res.writeHead(200, headers);
+      fs.createReadStream(targetPath).pipe(zlib.createBrotliCompress()).pipe(res);
+      return;
+    } else if (canCompress && acceptEncoding.includes('gzip')) {
+      headers['Content-Encoding'] = 'gzip';
+      res.writeHead(200, headers);
+      fs.createReadStream(targetPath).pipe(zlib.createGzip()).pipe(res);
+      return;
+    } else {
+      res.writeHead(200, headers);
+      fs.createReadStream(targetPath).pipe(res);
+      return;
+    }
   }
 
   res.writeHead(200, { 'Content-Type': 'text/plain' });

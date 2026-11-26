@@ -378,4 +378,13 @@ export class HudOverlay {
       this.lastAirActive = false;
     }
   }
+
+  public dispose(): void {
+    if (this.hudElement && this.hudElement.parentNode) {
+      this.hudElement.parentNode.removeChild(this.hudElement);
+    }
+    if (this.trickBannerElement && this.trickBannerElement.parentNode) {
+      this.trickBannerElement.parentNode.removeChild(this.trickBannerElement);
+    }
+  }
 }

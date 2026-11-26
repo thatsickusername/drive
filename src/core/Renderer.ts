@@ -74,6 +74,8 @@ export class Renderer {
   private readonly _lightDir = new THREE.Vector3(-190, 130, -50).normalize();
   private readonly _shadowTexelSize: number = 200.0 / 2048.0;
 
+  private readonly boundResize = () => this.onWindowResize();
+
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xf6eef3);
@@ -135,7 +137,7 @@ export class Renderer {
     this.sparkles = new AirborneSparkles();
     this.scene.add(this.sparkles.points);
 
-    window.addEventListener('resize', this.onWindowResize.bind(this));
+    window.addEventListener('resize', this.boundResize);
   }
 
   public setLightingMode(mode: LightingMode, instant: boolean = false): void {
@@ -272,5 +274,16 @@ export class Renderer {
 
   public render(): void {
     this.renderer.render(this.scene, this.camera);
+  }
+
+  public dispose(): void {
+    window.removeEventListener('resize', this.boundResize);
+    this.skyDome.dispose();
+    this.sparkles.dispose();
+    if (this.dirLight.shadow.map) {
+      this.dirLight.shadow.map.dispose();
+    }
+    this.renderer.dispose();
+    this.scene.clear();
   }
 }

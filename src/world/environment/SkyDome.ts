@@ -238,4 +238,9 @@ export class SkyDome {
     this.material.uniforms.uGoldenFactor.value = goldenFactor;
     this.material.uniforms.uNightFactor.value = nightFactor;
   }
+
+  public dispose(): void {
+    this.mesh.geometry.dispose();
+    this.material.dispose();
+  }
 }

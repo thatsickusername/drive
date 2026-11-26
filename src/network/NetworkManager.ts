@@ -305,4 +305,20 @@ export class NetworkManager {
       remote.setTerrainSampler(sampler);
     }
   }
+
+  public dispose(): void {
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) {
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws.close();
+      this.ws = null;
+    }
+    this.cleanup();
+  }
 }

@@ -44,38 +44,45 @@ export class UnifiedInputController {
     pitchDelta: 0
   };
 
-  constructor() {
-    window.addEventListener('gamepadconnected', () => { this.hasGamepads = true; });
-    window.addEventListener('gamepaddisconnected', () => {
-      const gps = navigator.getGamepads ? navigator.getGamepads() : [];
-      let anyConnected = false;
-      for (const gp of gps) {
-        if (gp && gp.connected) {
-          anyConnected = true;
-          break;
-        }
+  private readonly boundGamepadConnected = () => { this.hasGamepads = true; };
+  private readonly boundGamepadDisconnected = () => {
+    const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+    let anyConnected = false;
+    for (const gp of gps) {
+      if (gp && gp.connected) {
+        anyConnected = true;
+        break;
       }
-      this.hasGamepads = anyConnected;
-    });
+    }
+    this.hasGamepads = anyConnected;
+  };
+  private readonly boundKeyDown = (e: KeyboardEvent) => this.onKeyDown(e);
+  private readonly boundKeyUp = (e: KeyboardEvent) => this.onKeyUp(e);
+  private readonly boundMouseDown = (e: MouseEvent) => {
+    if ((e.target as HTMLElement)?.closest('#camera-tuner-panel') || (e.target as HTMLElement)?.closest('#camera-tuner-toggle-btn')) {
+      return;
+    }
+    this.isPointerActive = true;
+  };
+  private readonly boundMouseUp = () => { this.isPointerActive = false; };
+  private readonly boundMouseMove = (e: MouseEvent) => {
+    if ((e.target as HTMLElement)?.closest('#camera-tuner-panel') || (e.target as HTMLElement)?.closest('#camera-tuner-toggle-btn')) {
+      return;
+    }
+    if (this.isPointerActive || e.buttons > 0 || document.pointerLockElement) {
+      this.mouseDeltaX += e.movementX;
+      this.mouseDeltaY += e.movementY;
+    }
+  };
 
-    window.addEventListener('keydown', this.onKeyDown.bind(this));
-    window.addEventListener('keyup', this.onKeyUp.bind(this));
-    window.addEventListener('mousedown', (e: MouseEvent) => {
-      if ((e.target as HTMLElement)?.closest('#camera-tuner-panel') || (e.target as HTMLElement)?.closest('#camera-tuner-toggle-btn')) {
-        return;
-      }
-      this.isPointerActive = true;
-    });
-    window.addEventListener('mouseup', () => { this.isPointerActive = false; });
-    window.addEventListener('mousemove', (e) => {
-      if ((e.target as HTMLElement)?.closest('#camera-tuner-panel') || (e.target as HTMLElement)?.closest('#camera-tuner-toggle-btn')) {
-        return;
-      }
-      if (this.isPointerActive || e.buttons > 0 || document.pointerLockElement) {
-        this.mouseDeltaX += e.movementX;
-        this.mouseDeltaY += e.movementY;
-      }
-    });
+  constructor() {
+    window.addEventListener('gamepadconnected', this.boundGamepadConnected);
+    window.addEventListener('gamepaddisconnected', this.boundGamepadDisconnected);
+    window.addEventListener('keydown', this.boundKeyDown);
+    window.addEventListener('keyup', this.boundKeyUp);
+    window.addEventListener('mousedown', this.boundMouseDown);
+    window.addEventListener('mouseup', this.boundMouseUp);
+    window.addEventListener('mousemove', this.boundMouseMove);
   }
 
   private onKeyDown(e: KeyboardEvent): void {
@@ -333,5 +340,16 @@ export class UnifiedInputController {
     fi.yawDelta = yawDelta;
     fi.pitchDelta = pitchDelta;
     return fi;
+  }
+
+  public dispose(): void {
+    window.removeEventListener('gamepadconnected', this.boundGamepadConnected);
+    window.removeEventListener('gamepaddisconnected', this.boundGamepadDisconnected);
+    window.removeEventListener('keydown', this.boundKeyDown);
+    window.removeEventListener('keyup', this.boundKeyUp);
+    window.removeEventListener('mousedown', this.boundMouseDown);
+    window.removeEventListener('mouseup', this.boundMouseUp);
+    window.removeEventListener('mousemove', this.boundMouseMove);
+    this.keyState = {};
   }
 }

@@ -26,7 +26,32 @@ export class Game {
 
   private lastTime: number = 0;
   private lastHudUpdateTime: number = 0;
+  private animFrameId: number | null = null;
   private readonly boundLoop = (time: number) => this.loop(time);
+  private readonly boundKeyDown = (e: KeyboardEvent) => {
+    if (e.code === 'Digit1') this.teleportTo(this.locations.summit);
+    else if (e.code === 'Digit2') this.teleportTo(this.locations.west);
+    else if (e.code === 'Digit3') this.teleportTo(this.locations.east);
+    else if (e.code === 'Digit4') this.teleportTo(this.locations.canyon);
+    else if (e.code === 'Digit5') this.teleportTo(this.locations.mid);
+    else if (e.code === 'Digit6') this.teleportTo(this.locations.halfpipe);
+    else if (e.code === 'KeyV') this.cameraDirector.togglePerspectiveMode();
+    else if (e.code === 'KeyO') this.cameraTuner.toggle();
+    else if (e.code === 'KeyH') this.toggleHUD();
+    else if (e.code === 'KeyL' || e.code === 'KeyN') this.lightingControls.toggle();
+    else if (e.code === 'KeyP') {
+      this.renderer.cycle.togglePause();
+      this.lightingControls.update();
+    }
+  };
+  private readonly boundVisibilityChange = () => {
+    if (document.hidden) {
+      this.physics.resetAccumulator();
+    } else {
+      this.lastTime = performance.now();
+      this.physics.resetAccumulator();
+    }
+  };
 
   // Preset mountain locations (2.4km x 2.4km Grand Mountain Adventure Resort)
   public readonly locations = {
@@ -104,22 +129,7 @@ export class Game {
     this.inputController.onToggleTwintipsRequested = () => this.player.toggleTwintips();
     this.inputController.onToggleReverseTurnRequested = () => this.player.toggleReverseTurn();
 
-    window.addEventListener('keydown', (e) => {
-      if (e.code === 'Digit1') this.teleportTo(this.locations.summit);
-      else if (e.code === 'Digit2') this.teleportTo(this.locations.west);
-      else if (e.code === 'Digit3') this.teleportTo(this.locations.east);
-      else if (e.code === 'Digit4') this.teleportTo(this.locations.canyon);
-      else if (e.code === 'Digit5') this.teleportTo(this.locations.mid);
-      else if (e.code === 'Digit6') this.teleportTo(this.locations.halfpipe);
-      else if (e.code === 'KeyV') this.cameraDirector.togglePerspectiveMode();
-      else if (e.code === 'KeyO') this.cameraTuner.toggle();
-      else if (e.code === 'KeyH') this.toggleHUD();
-      else if (e.code === 'KeyL' || e.code === 'KeyN') this.lightingControls.toggle();
-      else if (e.code === 'KeyP') {
-        this.renderer.cycle.togglePause();
-        this.lightingControls.update();
-      }
-    });
+    window.addEventListener('keydown', this.boundKeyDown);
 
     // 8. Setup UI Overlays & Realtime Multiplayer Client
     this.hudOverlay = new HudOverlay(this.player, this.cameraDirector);
@@ -156,18 +166,11 @@ export class Game {
     (window as any).game = this;
 
     // Handle tab switching / visibility changes to pause accumulation cleanly
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        this.physics.resetAccumulator();
-      } else {
-        this.lastTime = performance.now();
-        this.physics.resetAccumulator();
-      }
-    });
+    document.addEventListener('visibilitychange', this.boundVisibilityChange);
 
     // 9. Start Game Loop
     this.lastTime = performance.now();
-    requestAnimationFrame(this.boundLoop);
+    this.animFrameId = requestAnimationFrame(this.boundLoop);
   }
 
   public teleportTo(loc: { name: string; x: number; z: number; heading: number }): void {
@@ -321,6 +324,29 @@ export class Game {
       });
     }
 
-    requestAnimationFrame(this.boundLoop);
+    this.animFrameId = requestAnimationFrame(this.boundLoop);
+  }
+
+  public dispose(): void {
+    if (this.animFrameId !== null) {
+      cancelAnimationFrame(this.animFrameId);
+      this.animFrameId = null;
+    }
+    window.removeEventListener('keydown', this.boundKeyDown);
+    document.removeEventListener('visibilitychange', this.boundVisibilityChange);
+
+    if (this.networkManager) this.networkManager.dispose();
+    if (this.hudOverlay) this.hudOverlay.dispose();
+    if (this.lightingControls) this.lightingControls.dispose();
+    if (this.cameraTuner) this.cameraTuner.dispose();
+    if (this.inputController) this.inputController.dispose();
+    if (this.player) this.player.dispose();
+    if (this.massif) this.massif.dispose();
+    if (this.renderer) this.renderer.dispose();
+    if (this.physics) this.physics.dispose();
+
+    if ((window as any).game === this) {
+      (window as any).game = null;
+    }
   }
 }

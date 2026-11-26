@@ -145,4 +145,10 @@ export class LightingControls {
       }
     }
   }
+
+  public dispose(): void {
+    if (this.container && this.container.parentNode) {
+      this.container.parentNode.removeChild(this.container);
+    }
+  }
 }

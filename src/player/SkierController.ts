@@ -167,6 +167,8 @@ export class SkierController {
   private readonly _contactWorldPos = new THREE.Vector3();
   private terrainSampler: ((x: number, z: number) => number) | null = null;
   private groundClearanceOffset = 0.0;
+  private scene: THREE.Scene;
+  private audioInitHandler: (() => void) | null = null;
 
   // Persistent Rapier & simulation scratch objects (zero per-frame allocations)
   private readonly _rayCenter: RAPIER.Ray;
@@ -204,6 +206,7 @@ export class SkierController {
     config: Partial<BoarderConfig> = {}
   ) {
     this.world = world;
+    this.scene = scene;
     this.cfg = { ...DEFAULT_CONFIG, ...config };
     this._rayCenter = new RAPIER.Ray(this._rayOrigin, this._rayDir);
     this._rayNose = new RAPIER.Ray(this._rayOriginNose, this._rayDir);
@@ -247,7 +250,9 @@ export class SkierController {
       this.audio.init();
       window.removeEventListener('keydown', initAudio);
       window.removeEventListener('pointerdown', initAudio);
+      this.audioInitHandler = null;
     };
+    this.audioInitHandler = initAudio;
     window.addEventListener('keydown', initAudio, { once: true });
     window.addEventListener('pointerdown', initAudio, { once: true });
   }
@@ -927,6 +932,30 @@ export class SkierController {
       }
     }
     this.sprayGeo.attributes.position.needsUpdate = true;
+  }
+
+  public dispose(): void {
+    if (this.audioInitHandler) {
+      window.removeEventListener('keydown', this.audioInitHandler);
+      window.removeEventListener('pointerdown', this.audioInitHandler);
+      this.audioInitHandler = null;
+    }
+    this.audio.dispose();
+    this.trailRibbon.dispose(this.scene);
+    if (this.sprayParticles) {
+      this.scene.remove(this.sprayParticles);
+      this.sprayGeo.dispose();
+      (this.sprayParticles.material as THREE.Material).dispose();
+    }
+    if (this.root) {
+      this.scene.remove(this.root);
+    }
+    if (this.collider && this.world) {
+      this.world.removeCollider(this.collider, false);
+    }
+    if (this.rigidBody && this.world) {
+      this.world.removeRigidBody(this.rigidBody);
+    }
   }
 }
 

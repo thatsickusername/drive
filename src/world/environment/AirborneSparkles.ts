@@ -107,4 +107,9 @@ export class AirborneSparkles {
   public setColor(color: THREE.Color): void {
     this.material.uniforms.uColor.value.copy(color);
   }
+
+  public dispose(): void {
+    this.geometry.dispose();
+    this.material.dispose();
+  }
 }

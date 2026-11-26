@@ -560,6 +560,10 @@ export class AlpineMassif {
       this.treeMaterial = null;
     }
 
+    if (this.terrainMaterial) {
+      this.terrainMaterial.dispose();
+    }
+
     this.scene.remove(this.group);
   }
 

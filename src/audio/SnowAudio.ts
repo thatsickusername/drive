@@ -213,4 +213,45 @@ export class SnowAudio {
       this.currentQ = targetQ;
     }
   }
+
+  public dispose(): void {
+    if (this.noiseNode) {
+      try { this.noiseNode.stop(); } catch { /* no-op */ }
+      this.noiseNode.disconnect();
+      this.noiseNode = null;
+    }
+    if (this.filter) {
+      this.filter.disconnect();
+      this.filter = null;
+    }
+    if (this.gain) {
+      this.gain.disconnect();
+      this.gain = null;
+    }
+    if (this.thumpFilter) {
+      this.thumpFilter.disconnect();
+      this.thumpFilter = null;
+    }
+    if (this.thumpGain) {
+      this.thumpGain.disconnect();
+      this.thumpGain = null;
+    }
+    if (this.clickFilter) {
+      this.clickFilter.disconnect();
+      this.clickFilter = null;
+    }
+    if (this.clickGain) {
+      this.clickGain.disconnect();
+      this.clickGain = null;
+    }
+    if (this.tapGain) {
+      this.tapGain.disconnect();
+      this.tapGain = null;
+    }
+    if (this.ctx && this.ctx.state !== 'closed') {
+      this.ctx.close().catch(() => {});
+      this.ctx = null;
+    }
+    this.initialized = false;
+  }
 }
