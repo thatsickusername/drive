@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { AlpineHeightfield, TerrainSample } from './alpineHeightfield';
+import { AlpineHeightfield } from './alpineHeightfield';
 import { createSnowMaterial } from './shaders/SnowMaterial';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
@@ -10,8 +10,13 @@ export class AlpineMassif {
   private chunkMeshes: THREE.Mesh[] = [];
   private rigidBodies: RAPIER.RigidBody[] = [];
   private colliders: RAPIER.Collider[] = [];
-  private treeInstancedMesh: THREE.InstancedMesh | null = null;
+  private treeMeshes: THREE.InstancedMesh[] = [];
+  private treeFoliageGeom: THREE.BufferGeometry | null = null;
+  private treeMaterial: THREE.MeshStandardMaterial | null = null;
   private iceMesh: THREE.Mesh | null = null;
+
+  // Single static scratch buffer for 103x103 extended chunk heights (reused across all 36 chunks)
+  private static readonly extHeightGrid = new Float32Array(103 * 103);
 
   // Fixed 6x6 Grid of 400m chunks (2,400m x 2,400m total span)
   public readonly chunkSize = 400.0;
@@ -47,6 +52,8 @@ export class AlpineMassif {
     const V = N + 1;
     const chunkSize = this.chunkSize;
     const skirtDepth = 45.0;
+    const delta = chunkSize / N;
+    const twoDelta = 2.0 * delta;
 
     const gridVerts = V * V;
     const skirtVerts = V * 4;
@@ -63,71 +70,106 @@ export class AlpineMassif {
     const colorIce = new THREE.Color(0x729ab8); // Glacial frozen lake blue ice
     const sunDir = this.sunDir;
 
+    const extW = V + 2; // 103
+    const extH = AlpineMassif.extHeightGrid;
+    const tempColor = new THREE.Color();
+    const scale = new this.rapier.Vector3(chunkSize, 1.0, chunkSize);
+
     // 6x6 chunks: cx in [-3, -2, -1, 0, 1, 2], cz in [-3, -2, -1, 0, 1, 2]
     for (let cx = -3; cx <= 2; cx++) {
       for (let cz = -3; cz <= 2; cz++) {
         const worldChunkCenterX = (cx + 0.5) * chunkSize;
         const worldChunkCenterZ = (cz + 0.5) * chunkSize;
 
+        // 1. Single-pass height evaluation into scratch buffer (respecting Invariant 1: r * V + c)
+        for (let r = -1; r <= N + 1; r++) {
+          const localX = (r / N - 0.5) * chunkSize;
+          const wx = worldChunkCenterX + localX;
+          const rowOffset = (r + 1) * extW;
+
+          for (let c = -1; c <= N + 1; c++) {
+            const localZ = (c / N - 0.5) * chunkSize;
+            const wz = worldChunkCenterZ + localZ;
+            extH[rowOffset + (c + 1)] = this.heightfield.sampleHeightQuick(wx, wz);
+          }
+        }
+
         const rapierHeights = new Float32Array(gridVerts);
         const positions = new Float32Array(totalVerts * 3);
         const normals = new Float32Array(totalVerts * 3);
-        const colors = new Float32Array(totalVerts * 3);
-        const indices = new Uint32Array(totalTriangles * 3);
+        const colors = new Uint8Array(totalVerts * 3);
+        const indices = new Uint16Array(totalTriangles * 3);
 
-        const tempColor = new THREE.Color();
-
-        // 1. Evaluate heights, normals, and vertex colors
+        // 2. Derive heights, central-difference normals, and vertex colors directly from buffer
         for (let r = 0; r <= N; r++) {
           const localX = (r / N - 0.5) * chunkSize;
           const wx = worldChunkCenterX + localX;
+          const rowOffset = (r + 1) * extW;
 
           for (let c = 0; c <= N; c++) {
             const localZ = (c / N - 0.5) * chunkSize;
             const wz = worldChunkCenterZ + localZ;
+            const colIdx = c + 1;
 
-            const sample: TerrainSample = this.heightfield.sampleTerrain(wx, wz);
-            const wy = sample.height;
+            const wy = extH[rowOffset + colIdx];
 
-            const rapierIndex = r * V + c;
-            rapierHeights[rapierIndex] = wy;
-
+            // Invariant 1: Rapier heightfield indexing strictly r * V + c (row along X, col along Z)
             const vertIndex = r * V + c;
+            rapierHeights[vertIndex] = wy;
+
             const pIdx = vertIndex * 3;
             positions[pIdx + 0] = localX;
             positions[pIdx + 1] = wy;
             positions[pIdx + 2] = localZ;
 
-            normals[pIdx + 0] = sample.normal.x;
-            normals[pIdx + 1] = sample.normal.y;
-            normals[pIdx + 2] = sample.normal.z;
+            // Central difference normal from height buffer
+            const hL = extH[r * extW + colIdx];
+            const hR = extH[(r + 2) * extW + colIdx];
+            const hD = extH[rowOffset + c];
+            const hU = extH[rowOffset + (c + 2)];
+
+            const dx = hL - hR;
+            const dy = twoDelta;
+            const dz = hD - hU;
+            const invLen = 1.0 / Math.sqrt(dx * dx + dy * dy + dz * dz);
+            const nx = dx * invLen;
+            const ny = dy * invLen;
+            const nz = dz * invLen;
+
+            normals[pIdx + 0] = nx;
+            normals[pIdx + 1] = ny;
+            normals[pIdx + 2] = nz;
+
+            const slopeDeg = Math.acos(Math.min(1.0, Math.max(0.0, ny))) * (180.0 / Math.PI);
+            const pisteDist = this.heightfield.getPisteDistance(wx, wz);
+            const surfaceType = this.heightfield.getSurfaceType(wy, slopeDeg, pisteDist, wz);
 
             // Vertex Color blending (Clear visual distinction: PISTE, POWDER, ROCK, ICE)
             if (wy <= 0.5) {
               tempColor.copy(colorIce);
-            } else if (sample.surfaceType === 'ROCK' || sample.slopeDeg > 42.0) {
-              const rockBlend = Math.min(1.0, Math.max(0.0, (sample.slopeDeg - 40.0) / 10.0));
+            } else if (surfaceType === 'ROCK' || slopeDeg > 42.0) {
+              const rockBlend = Math.min(1.0, Math.max(0.0, (slopeDeg - 40.0) / 10.0));
               tempColor.copy(colorPowder).lerp(colorRock, Math.max(0.70, rockBlend));
-            } else if (sample.surfaceType === 'PISTE' || sample.pisteDist < 26.0) {
-              const blend = Math.max(0, Math.min(1, 1.0 - sample.pisteDist / 26.0));
+            } else if (surfaceType === 'PISTE' || pisteDist < 26.0) {
+              const blend = Math.max(0, Math.min(1, 1.0 - pisteDist / 26.0));
               tempColor.copy(colorPowder).lerp(colorPiste, blend);
             } else {
               tempColor.copy(colorPowder);
               // Subtle leeward shadow tinting on deep hollows
-              const nDotSun = sample.normal.x * sunDir.x + sample.normal.y * sunDir.y + sample.normal.z * sunDir.z;
+              const nDotSun = nx * sunDir.x + ny * sunDir.y + nz * sunDir.z;
               if (nDotSun < 0.25) {
                 const leewardFactor = Math.max(0, (0.25 - nDotSun) / 0.75);
                 tempColor.lerp(colorSnowShadow, leewardFactor * 0.25);
               }
             }
 
-            colors[pIdx + 0] = tempColor.r;
-            colors[pIdx + 1] = tempColor.g;
-            colors[pIdx + 2] = tempColor.b;
+            colors[pIdx + 0] = Math.round(tempColor.r * 255);
+            colors[pIdx + 1] = Math.round(tempColor.g * 255);
+            colors[pIdx + 2] = Math.round(tempColor.b * 255);
           }
         }
 
-        // 2. Build surface grid triangle indices
+        // 3. Build surface grid triangle indices
         let idxOffset = 0;
         for (let r = 0; r < N; r++) {
           for (let c = 0; c < N; c++) {
@@ -146,7 +188,7 @@ export class AlpineMassif {
           }
         }
 
-        // 3. Perimeter skirts
+        // 4. Perimeter skirts
         let vIdx = gridVerts;
         const addSkirtEdge = (startGridIdx: number, stride: number, count: number, isReversed: boolean) => {
           const edgeStart = vIdx;
@@ -160,9 +202,9 @@ export class AlpineMassif {
             normals[vIdx * 3 + 1] = normals[surfaceIdx * 3 + 1];
             normals[vIdx * 3 + 2] = normals[surfaceIdx * 3 + 2];
 
-            colors[vIdx * 3 + 0] = colors[surfaceIdx * 3 + 0] * 0.7;
-            colors[vIdx * 3 + 1] = colors[surfaceIdx * 3 + 1] * 0.7;
-            colors[vIdx * 3 + 2] = colors[surfaceIdx * 3 + 2] * 0.7;
+            colors[vIdx * 3 + 0] = Math.round(colors[surfaceIdx * 3 + 0] * 0.7);
+            colors[vIdx * 3 + 1] = Math.round(colors[surfaceIdx * 3 + 1] * 0.7);
+            colors[vIdx * 3 + 2] = Math.round(colors[surfaceIdx * 3 + 2] * 0.7);
 
             vIdx++;
           }
@@ -198,23 +240,26 @@ export class AlpineMassif {
         addSkirtEdge(0, V, V, false);
         addSkirtEdge(N, V, V, true);
 
-        // 4. Create Mesh
+        // 5. Create Mesh with static matrix flags and precomputed bounding volumes
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3, true));
         geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+        geometry.computeBoundingBox();
+        geometry.computeBoundingSphere();
 
         const mesh = new THREE.Mesh(geometry, this.terrainMaterial);
         mesh.position.set(worldChunkCenterX, 0, worldChunkCenterZ);
         mesh.receiveShadow = true;
         mesh.castShadow = false;
+        mesh.matrixAutoUpdate = false;
+        mesh.updateMatrix();
 
         this.group.add(mesh);
         this.chunkMeshes.push(mesh);
 
-        // 5. Build Rapier Heightfield Collider
-        const scale = new this.rapier.Vector3(chunkSize, 1.0, chunkSize);
+        // 6. Build Rapier Heightfield Collider
         const bodyDesc = this.rapier.RigidBodyDesc.fixed().setTranslation(worldChunkCenterX, 0, worldChunkCenterZ);
         const rigidBody = this.world.createRigidBody(bodyDesc);
 
@@ -238,6 +283,9 @@ export class AlpineMassif {
   private createFrozenRiverPlane(): void {
     const iceGeom = new THREE.PlaneGeometry(2400, 420);
     iceGeom.rotateX(-Math.PI / 2);
+    iceGeom.computeBoundingBox();
+    iceGeom.computeBoundingSphere();
+
     const iceMat = new THREE.MeshStandardMaterial({
       color: 0x7da3b8,
       roughness: 0.12,
@@ -247,6 +295,8 @@ export class AlpineMassif {
     this.iceMesh = new THREE.Mesh(iceGeom, iceMat);
     this.iceMesh.position.set(0, 0, 1010);
     this.iceMesh.receiveShadow = true;
+    this.iceMesh.matrixAutoUpdate = false;
+    this.iceMesh.updateMatrix();
     this.group.add(this.iceMesh);
   }
 
@@ -301,26 +351,42 @@ export class AlpineMassif {
 
     const merged = mergeGeometries(parts, false);
     for (const p of parts) p.dispose();
-    return merged || new THREE.ConeGeometry(3.8, 16.0, 6);
+    const finalGeom = merged || new THREE.ConeGeometry(3.8, 16.0, 6);
+    finalGeom.computeBoundingBox();
+    finalGeom.computeBoundingSphere();
+    return finalGeom;
   }
 
-  // Spawn 14m - 24m tall alpine pine trees (roughly 10x player height to sell real mountain scale)
+  // Spawn 14m - 24m tall alpine pine trees partitioned spatially per chunk for frustum culling
   private spawnInstancedPines(): void {
-    const treeFoliageGeom = this.createSnowyPineGeometry();
+    this.treeFoliageGeom = this.createSnowyPineGeometry();
 
-    const treeMaterial = new THREE.MeshStandardMaterial({
+    this.treeMaterial = new THREE.MeshStandardMaterial({
       vertexColors: true,
       roughness: 0.82,
       metalness: 0.03
     });
 
     const maxTrees = 1200;
-    this.treeInstancedMesh = new THREE.InstancedMesh(treeFoliageGeom, treeMaterial, maxTrees);
-    this.treeInstancedMesh.castShadow = true;
-    this.treeInstancedMesh.receiveShadow = true;
-
     const dummy = new THREE.Object3D();
-    let treeCount = 0;
+    let totalTreeCount = 0;
+
+    // 36 chunk buckets for spatial partitioning (cx in [-3, 2], cz in [-3, 2])
+    const chunkMatrices: THREE.Matrix4[][] = Array.from({ length: 36 }, () => []);
+
+    const addTree = (x: number, y: number, z: number, rotY: number, sx: number, sy: number, sz: number) => {
+      const cx = Math.min(2, Math.max(-3, Math.floor(x / this.chunkSize)));
+      const cz = Math.min(2, Math.max(-3, Math.floor(z / this.chunkSize)));
+      const chunkIdx = (cx + 3) * 6 + (cz + 3);
+
+      dummy.position.set(x, y, z);
+      dummy.rotation.set(0, rotY, 0);
+      dummy.scale.set(sx, sy, sz);
+      dummy.updateMatrix();
+
+      chunkMatrices[chunkIdx].push(dummy.matrix.clone());
+      totalTreeCount++;
+    };
 
     // 1. Curated stand of snowy pines along the right ridge shoulder (matching acceptance criteria 1)
     const canyonRightPines = [
@@ -361,13 +427,10 @@ export class AlpineMassif {
     ];
 
     for (const p of canyonRightPines) {
-      if (treeCount >= maxTrees) break;
+      if (totalTreeCount >= maxTrees) break;
       const sample = this.heightfield.sampleTerrain(p.x, p.z);
-      dummy.position.set(p.x, sample.height - 0.4, p.z);
-      dummy.rotation.y = Math.sin(p.x * 2.1 + p.z * 4.3) * Math.PI;
-      dummy.scale.set(p.s * 0.95, p.s * 1.05, p.s * 0.95);
-      dummy.updateMatrix();
-      this.treeInstancedMesh.setMatrixAt(treeCount++, dummy.matrix);
+      const rotY = Math.sin(p.x * 2.1 + p.z * 4.3) * Math.PI;
+      addTree(p.x, sample.height - 0.4, p.z, rotY, p.s * 0.95, p.s * 1.05, p.s * 0.95);
     }
 
     // Deterministic organic grove clustering (natural pine stands instead of grid lines)
@@ -375,7 +438,7 @@ export class AlpineMassif {
     const treesPerGrove = 22;
 
     for (let g = 0; g < groveCount; g++) {
-      if (treeCount >= maxTrees) break;
+      if (totalTreeCount >= maxTrees) break;
 
       // Seeded pseudo-random placement for grove centers
       const gAngle = g * 2.39996; // Golden angle distribution
@@ -388,10 +451,11 @@ export class AlpineMassif {
       if (distToSpawn4 < 200.0) continue;
 
       // Check grove center validity
+      const centerH = this.heightfield.sampleHeightQuick(gcx, gcz);
+      if (centerH < 2.0 || centerH > 270.0) continue;
+
       const centerSample = this.heightfield.sampleTerrain(gcx, gcz);
       if (
-        centerSample.height < 2.0 ||
-        centerSample.height > 270.0 ||
         centerSample.slopeDeg > 30.0 ||
         centerSample.surfaceType === 'ROCK' ||
         centerSample.surfaceType === 'ICE'
@@ -403,7 +467,7 @@ export class AlpineMassif {
       const groveRadius = 38.0 + Math.abs(Math.sin(g * 3.7)) * 25.0;
 
       for (let t = 0; t < treesPerGrove; t++) {
-        if (treeCount >= maxTrees) break;
+        if (totalTreeCount >= maxTrees) break;
 
         const subAngle = (t * 2.39996) + Math.sin(t * 1.5);
         const subDist = Math.sqrt((t + 0.5) / treesPerGrove) * groveRadius;
@@ -412,32 +476,50 @@ export class AlpineMassif {
 
         if (Math.hypot(tx - (-190.0), tz - (-245.0)) < 180.0) continue;
 
+        const h = this.heightfield.sampleHeightQuick(tx, tz);
+        if (h <= 1.5 || h >= 280.0) continue;
+
         const sample = this.heightfield.sampleTerrain(tx, tz);
 
         if (
-          sample.height > 1.5 &&
-          sample.height < 280.0 &&
           sample.slopeDeg < 32.0 &&
           sample.surfaceType !== 'ROCK' &&
           sample.surfaceType !== 'ICE'
         ) {
           const scaleY = 0.85 + Math.abs(Math.sin(tx * 0.05 + tz * 0.05)) * 0.45;
           const scaleXZ = 0.80 + Math.abs(Math.cos(tx * 0.05)) * 0.35;
+          const rotY = Math.sin(tx * 3.1 + tz * 5.7) * Math.PI;
 
-          dummy.position.set(tx, sample.height - 0.5, tz);
-          dummy.rotation.y = Math.sin(tx * 3.1 + tz * 5.7) * Math.PI;
-          dummy.scale.set(scaleXZ, scaleY, scaleXZ);
-          dummy.updateMatrix();
-
-          this.treeInstancedMesh.setMatrixAt(treeCount, dummy.matrix);
-          treeCount++;
+          addTree(tx, sample.height - 0.5, tz, rotY, scaleXZ, scaleY, scaleXZ);
         }
       }
     }
 
-    this.treeInstancedMesh.count = treeCount;
-    this.treeInstancedMesh.instanceMatrix.needsUpdate = true;
-    this.group.add(this.treeInstancedMesh);
+    // Instantiate partitioned InstancedMeshes per chunk for frustum culling & shadow discipline
+    for (let chunkIdx = 0; chunkIdx < 36; chunkIdx++) {
+      const matrices = chunkMatrices[chunkIdx];
+      if (matrices.length === 0) continue;
+
+      const cz = (chunkIdx % 6) - 3;
+      const instancedMesh = new THREE.InstancedMesh(this.treeFoliageGeom, this.treeMaterial, matrices.length);
+      for (let i = 0; i < matrices.length; i++) {
+        instancedMesh.setMatrixAt(i, matrices[i]);
+      }
+
+      // Invariant 4: instanceMatrix.needsUpdate set once at boot, never per frame
+      instancedMesh.instanceMatrix.needsUpdate = true;
+      instancedMesh.matrixAutoUpdate = false;
+      instancedMesh.updateMatrix();
+      instancedMesh.computeBoundingSphere();
+      instancedMesh.computeBoundingBox();
+
+      // Shadow discipline: only chunks in active mountain terrain cast shadows, distant river bed skipped
+      instancedMesh.castShadow = (cz <= 0);
+      instancedMesh.receiveShadow = true;
+
+      this.group.add(instancedMesh);
+      this.treeMeshes.push(instancedMesh);
+    }
   }
 
   public dispose(): void {
@@ -463,10 +545,18 @@ export class AlpineMassif {
       this.iceMesh = null;
     }
 
-    if (this.treeInstancedMesh) {
-      this.treeInstancedMesh.geometry.dispose();
-      this.group.remove(this.treeInstancedMesh);
-      this.treeInstancedMesh = null;
+    for (const treeMesh of this.treeMeshes) {
+      this.group.remove(treeMesh);
+    }
+    this.treeMeshes = [];
+
+    if (this.treeFoliageGeom) {
+      this.treeFoliageGeom.dispose();
+      this.treeFoliageGeom = null;
+    }
+    if (this.treeMaterial) {
+      this.treeMaterial.dispose();
+      this.treeMaterial = null;
     }
 
     this.scene.remove(this.group);

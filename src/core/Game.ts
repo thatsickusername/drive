@@ -88,7 +88,7 @@ export class Game {
       spawnPos
     );
     this.player.heading = this.currentSpawn.heading;
-    const terrainSampler = (x: number, z: number) => this.massif.heightfield.sampleTerrain(x, z).height;
+    const terrainSampler = (x: number, z: number) => this.massif.heightfield.sampleHeightQuick(x, z);
     this.player.setTerrainSampler(terrainSampler);
 
     // 6. Initialize Camera Director
