@@ -26,10 +26,56 @@ const MIME_TYPES = {
 };
 
 const COMPRESSIBLE_EXTS = new Set(['.html', '.js', '.css', '.wasm', '.json', '.svg']);
+const BROTLI_OPTIONS = { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } };
+const GZIP_OPTIONS = { level: 6 };
 
-const server = http.createServer((req, res) => {
-  const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-  const urlPath = decodeURIComponent(parsedUrl.pathname);
+/**
+ * In-memory cache of static files and pre-compressed variants to avoid
+ * starving Node's libuv threadpool with repeated Brotli/Gzip compression.
+ * @type {Map<string, { raw: Buffer, br?: Buffer, gzip?: Buffer }>}
+ */
+const assetCache = new Map();
+/** @type {Map<string, Promise<Buffer>>} */
+const inflightCompress = new Map();
+
+function compressAsync(key, buf, encoding) {
+  const cacheKey = `${key}:${encoding}`;
+  const existing = inflightCompress.get(cacheKey);
+  if (existing) return existing;
+
+  const promise = new Promise((resolve, reject) => {
+    const cb = (err, out) => {
+      inflightCompress.delete(cacheKey);
+      if (err) reject(err);
+      else resolve(out);
+    };
+    if (encoding === 'br') zlib.brotliCompress(buf, BROTLI_OPTIONS, cb);
+    else zlib.gzip(buf, GZIP_OPTIONS, cb);
+  });
+  inflightCompress.set(cacheKey, promise);
+  return promise;
+}
+
+async function getAssetEntry(targetPath) {
+  let entry = assetCache.get(targetPath);
+  if (!entry) {
+    const raw = await fs.promises.readFile(targetPath);
+    entry = { raw };
+    assetCache.set(targetPath, entry);
+  }
+  return entry;
+}
+
+const server = http.createServer(async (req, res) => {
+  let urlPath = '/';
+  try {
+    const parsedUrl = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+    urlPath = decodeURIComponent(parsedUrl.pathname);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('Bad Request');
+    return;
+  }
 
   if (urlPath === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -38,8 +84,11 @@ const server = http.createServer((req, res) => {
   }
 
   // Safe path resolution inside DIST_DIR preventing path traversal
-  const safeRelativePath = path.normalize(urlPath).replace(/^(\.\.[/\\])+/, '');
-  let targetPath = path.join(DIST_DIR, safeRelativePath === '/' || safeRelativePath === '\\' ? 'index.html' : safeRelativePath);
+  const relPath = path.posix.normalize('/' + urlPath).replace(/^\/+/, '');
+  let targetPath = path.resolve(DIST_DIR, relPath || 'index.html');
+  if (!targetPath.startsWith(DIST_DIR)) {
+    targetPath = path.join(DIST_DIR, 'index.html');
+  }
 
   // Fallback to index.html for SPA routing if not found or is directory
   if (!fs.existsSync(targetPath) || fs.statSync(targetPath).isDirectory()) {
@@ -50,28 +99,36 @@ const server = http.createServer((req, res) => {
     const ext = path.extname(targetPath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
     const isAsset = urlPath.startsWith('/assets/');
+    const canCompress = COMPRESSIBLE_EXTS.has(ext);
     const headers = {
       'Content-Type': contentType,
       'Cache-Control': isAsset ? 'public, max-age=31536000, immutable' : 'no-cache',
-      'X-Content-Type-Options': 'nosniff'
+      'X-Content-Type-Options': 'nosniff',
+      ...(canCompress ? { Vary: 'Accept-Encoding' } : {})
     };
 
-    const acceptEncoding = (req.headers['accept-encoding'] || '').toLowerCase();
-    const canCompress = COMPRESSIBLE_EXTS.has(ext);
+    try {
+      const entry = await getAssetEntry(targetPath);
+      const acceptEncoding = (req.headers['accept-encoding'] || '').toLowerCase();
+      let payload = entry.raw;
 
-    if (canCompress && acceptEncoding.includes('br')) {
-      headers['Content-Encoding'] = 'br';
+      if (canCompress && acceptEncoding.includes('br')) {
+        if (!entry.br) entry.br = await compressAsync(targetPath, entry.raw, 'br');
+        payload = entry.br;
+        headers['Content-Encoding'] = 'br';
+      } else if (canCompress && acceptEncoding.includes('gzip')) {
+        if (!entry.gzip) entry.gzip = await compressAsync(targetPath, entry.raw, 'gzip');
+        payload = entry.gzip;
+        headers['Content-Encoding'] = 'gzip';
+      }
+
+      headers['Content-Length'] = payload.length;
       res.writeHead(200, headers);
-      fs.createReadStream(targetPath).pipe(zlib.createBrotliCompress()).pipe(res);
+      res.end(req.method === 'HEAD' ? undefined : payload);
       return;
-    } else if (canCompress && acceptEncoding.includes('gzip')) {
-      headers['Content-Encoding'] = 'gzip';
-      res.writeHead(200, headers);
-      fs.createReadStream(targetPath).pipe(zlib.createGzip()).pipe(res);
-      return;
-    } else {
-      res.writeHead(200, headers);
-      fs.createReadStream(targetPath).pipe(res);
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Internal Server Error');
       return;
     }
   }
