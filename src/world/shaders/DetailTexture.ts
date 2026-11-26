@@ -13,7 +13,13 @@ import * as THREE from 'three';
  * - B: Tactile snow grain height & cavity ambient occlusion [0..255]
  * - A: Stochastic sparkle phase seed [0..255]
  */
-export function createSnowDetailTexture(): THREE.DataTexture {
+let cachedSnowDetailTexture: THREE.DataTexture | null = null;
+
+export function createSnowDetailTexture(anisotropy: number = 4): THREE.DataTexture {
+  if (cachedSnowDetailTexture) {
+    return cachedSnowDetailTexture;
+  }
+
   const size = 1024;
   const data = new Uint8Array(size * size * 4);
 
@@ -173,7 +179,9 @@ export function createSnowDetailTexture(): THREE.DataTexture {
   texture.minFilter = THREE.LinearMipmapLinearFilter;
   texture.magFilter = THREE.LinearFilter;
   texture.generateMipmaps = true;
+  texture.anisotropy = Math.max(1, Math.min(4, anisotropy));
   texture.needsUpdate = true;
 
+  cachedSnowDetailTexture = texture;
   return texture;
 }

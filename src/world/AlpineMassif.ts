@@ -295,6 +295,7 @@ export class AlpineMassif {
     this.iceMesh = new THREE.Mesh(iceGeom, iceMat);
     this.iceMesh.position.set(0, 0, 1010);
     this.iceMesh.receiveShadow = true;
+    this.iceMesh.castShadow = false;
     this.iceMesh.matrixAutoUpdate = false;
     this.iceMesh.updateMatrix();
     this.group.add(this.iceMesh);

@@ -33,15 +33,30 @@ export class CarvedSnowTrail {
     this.positions = new Float32Array(totalVerts * 3);
     this.normals = new Float32Array(totalVerts * 3);
     this.colors = new Float32Array(totalVerts * 3);
+    this.colors.fill(1.0);
     this.uvs = new Float32Array(totalVerts * 2);
     this.alphas = new Float32Array(totalVerts);
 
     this.geometry = new THREE.BufferGeometry();
-    this.geometry.setAttribute('position', new THREE.BufferAttribute(this.positions, 3));
-    this.geometry.setAttribute('normal', new THREE.BufferAttribute(this.normals, 3));
-    this.geometry.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
-    this.geometry.setAttribute('uv', new THREE.BufferAttribute(this.uvs, 2));
-    this.geometry.setAttribute('aAlpha', new THREE.BufferAttribute(this.alphas, 1));
+    const posAttr = new THREE.BufferAttribute(this.positions, 3);
+    posAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('position', posAttr);
+
+    const normAttr = new THREE.BufferAttribute(this.normals, 3);
+    normAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('normal', normAttr);
+
+    const colAttr = new THREE.BufferAttribute(this.colors, 3);
+    colAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('color', colAttr);
+
+    const uvAttr = new THREE.BufferAttribute(this.uvs, 2);
+    uvAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('uv', uvAttr);
+
+    const alphaAttr = new THREE.BufferAttribute(this.alphas, 1);
+    alphaAttr.setUsage(THREE.DynamicDrawUsage);
+    this.geometry.setAttribute('aAlpha', alphaAttr);
 
     // Build quad strip index buffer across 19-point slices
     // Each pair of adjacent slices has (19 - 1) = 18 quads = 36 triangles
@@ -116,15 +131,16 @@ export class CarvedSnowTrail {
     this.baseAlphas.fill(0);
     this.positions.fill(0);
     this.normals.fill(0);
-    this.colors.fill(0);
+    this.colors.fill(1.0);
     this.uvs.fill(0);
     this.alphas.fill(0);
     this.geometry.setDrawRange(0, 0);
-    this.geometry.attributes.position.needsUpdate = true;
-    this.geometry.attributes.normal.needsUpdate = true;
-    this.geometry.attributes.color.needsUpdate = true;
-    this.geometry.attributes.uv.needsUpdate = true;
-    this.geometry.attributes.aAlpha.needsUpdate = true;
+    const totalVerts = this.maxSegments * this.VERTS_PER_SEG;
+    this.setAttributeUpdateRange(this.geometry.attributes.position as THREE.BufferAttribute, 0, totalVerts * 3);
+    this.setAttributeUpdateRange(this.geometry.attributes.normal as THREE.BufferAttribute, 0, totalVerts * 3);
+    this.setAttributeUpdateRange(this.geometry.attributes.color as THREE.BufferAttribute, 0, totalVerts * 3);
+    this.setAttributeUpdateRange(this.geometry.attributes.uv as THREE.BufferAttribute, 0, totalVerts * 2);
+    this.setAttributeUpdateRange(this.geometry.attributes.aAlpha as THREE.BufferAttribute, 0, totalVerts);
   }
 
   public onJumpStart(): void {
@@ -402,7 +418,6 @@ export class CarvedSnowTrail {
       this.basePositions.copyWithin(stride, 0, (this.maxSegments - 1) * stride);
       this.baseAlphas.copyWithin(alphaStride, 0, (this.maxSegments - 1) * alphaStride);
       this.normals.copyWithin(stride, 0, (this.maxSegments - 1) * stride);
-      this.colors.copyWithin(stride, 0, (this.maxSegments - 1) * stride);
       this.uvs.copyWithin(uvStride, 0, (this.maxSegments - 1) * uvStride);
 
       this.segmentGaps.copyWithin(1, 0, this.maxSegments - 1);
@@ -545,16 +560,26 @@ export class CarvedSnowTrail {
         }
       }
       if (needsUpdate) {
-        this.geometry.attributes.aAlpha.needsUpdate = true;
+        const start = fadeStart * this.VERTS_PER_SEG;
+        const count = (this.count - fadeStart) * this.VERTS_PER_SEG;
+        this.setAttributeUpdateRange(this.geometry.attributes.aAlpha as THREE.BufferAttribute, start, count);
       }
     }
   }
 
+  private setAttributeUpdateRange(attr: THREE.BufferAttribute, offset: number, count: number): void {
+    if (count <= 0) return;
+    attr.clearUpdateRanges();
+    attr.addUpdateRange(offset, count);
+    attr.needsUpdate = true;
+  }
+
   private notifyGeometryUpdate(): void {
-    this.geometry.attributes.position.needsUpdate = true;
-    this.geometry.attributes.normal.needsUpdate = true;
-    this.geometry.attributes.color.needsUpdate = true;
-    this.geometry.attributes.uv.needsUpdate = true;
-    this.geometry.attributes.aAlpha.needsUpdate = true;
+    if (this.count <= 0) return;
+    const activeVerts = this.count * this.VERTS_PER_SEG;
+    this.setAttributeUpdateRange(this.geometry.attributes.position as THREE.BufferAttribute, 0, activeVerts * 3);
+    this.setAttributeUpdateRange(this.geometry.attributes.normal as THREE.BufferAttribute, 0, activeVerts * 3);
+    this.setAttributeUpdateRange(this.geometry.attributes.uv as THREE.BufferAttribute, 0, activeVerts * 2);
+    this.setAttributeUpdateRange(this.geometry.attributes.aAlpha as THREE.BufferAttribute, 0, activeVerts);
   }
 }

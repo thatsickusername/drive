@@ -107,7 +107,7 @@ export class SkyDome {
         vec3 horizDir = normalize(vec3(dir.x, 0.0, dir.z));
         vec3 horizSun = normalize(vec3(uGoldenSunDir.x, 0.0, uGoldenSunDir.z));
         float sunAzimuth = max(0.0, dot(horizDir, horizSun));
-        float azimuthGlow = pow(sunAzimuth, 2.0);
+        float azimuthGlow = sunAzimuth * sunAzimuth;
 
         vec3 goldenDuskHorizon = vec3(0.68, 0.58, 0.70); // Soft twilight lavender away from sun
         vec3 goldenSunHorizon = uGoldenHorizonColor;       // Warm luminous peach-amber near sun
@@ -175,7 +175,7 @@ export class SkyDome {
             float halo1 = pow(moonDot, 140.0) * 0.85;
             float halo2 = pow(moonDot, 32.0) * 0.40;
             float halo3 = pow(moonDot, 8.0) * 0.18;
-            float halo4 = pow(moonDot, 2.0) * 0.08;
+            float halo4 = (moonDot * moonDot) * 0.08;
             float totalHalo = (halo1 + halo2 + halo3 + halo4);
 
             vec3 moonDiskCol = vec3(1.0, 0.99, 0.97) * moonDisk * 3.8;
@@ -220,6 +220,8 @@ export class SkyDome {
     });
 
     this.mesh = new THREE.Mesh(geometry, this.material);
+    this.mesh.castShadow = false;
+    this.mesh.receiveShadow = false;
     this.mesh.renderOrder = -1000;
   }
 

@@ -94,6 +94,8 @@ export class AirborneSparkles {
     });
 
     this.points = new THREE.Points(this.geometry, this.material);
+    this.points.castShadow = false;
+    this.points.receiveShadow = false;
     this.points.frustumCulled = false;
   }
 

@@ -98,6 +98,10 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       varying vec2 vTrailUV;
       varying float vTrailAlpha;
 
+      vec3 gCrossTrack;
+      float gTrailDistCam;
+      float gTrailNearFade;
+
       // Hash for fine snow crystalline micro-sparkle
       vec3 hash33(vec3 p) {
         p = fract(p * vec3(0.1031, 0.1030, 0.0973));
@@ -118,8 +122,9 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       vec3 dPdy = dFdy(vWorldPosition);
       float du_dx = dFdx(vTrailUV.x);
       float du_dy = dFdy(vTrailUV.x);
-      vec3 crossTrack = normalize(dPdx * du_dx + dPdy * du_dy);
-      if (length(crossTrack) < 0.01) crossTrack = vec3(1.0, 0.0, 0.0);
+      gCrossTrack = normalize(dPdx * du_dx + dPdy * du_dy);
+      if (length(gCrossTrack) < 0.01) gCrossTrack = vec3(1.0, 0.0, 0.0);
+      vec3 crossTrack = gCrossTrack;
 
       // Micro-striation normal perturbation inside each ski rut (soft, fine grooming)
       float tRutL_n = clamp((vTrailUV.x - 0.16) / 0.22, 0.0, 1.0);
@@ -160,8 +165,10 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       vec3 baseSnow = mix(mix(dayPowder, goldenPowder, uGoldenFactor), nightPowder, uNightFactor);
 
       // High-frequency granular snow powder texture matching mountain terrain
-      float trailDistCam = length(vWorldPosition - uCameraPos);
-      float trailNearFade = 1.0 - smoothstep(10.0, 75.0, trailDistCam);
+      gTrailDistCam = length(vWorldPosition - uCameraPos);
+      gTrailNearFade = 1.0 - smoothstep(10.0, 75.0, gTrailDistCam);
+      float trailDistCam = gTrailDistCam;
+      float trailNearFade = gTrailNearFade;
       float trailGrainHash = fract(sin(dot(floor(vWorldPosition * 24.0), vec3(12.9898, 78.233, 45.164))) * 43758.5453);
       float trailPowderGrain = (trailGrainHash - 0.5) * 0.035 * trailNearFade;
 
@@ -186,8 +193,8 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       float shadowFactor = smoothstep(0.04, 0.18, directSum);
 
       // Granular powder micro-contrast
-      float lightDistCam = length(vWorldPosition - uCameraPos);
-      float lightNearFade = 1.0 - smoothstep(10.0, 75.0, lightDistCam);
+      float lightDistCam = gTrailDistCam;
+      float lightNearFade = gTrailNearFade;
       float lightGrainHash = fract(sin(dot(floor(vWorldPosition * 24.0), vec3(12.9898, 78.233, 45.164))) * 43758.5453);
       float lightPowderGrain = (lightGrainHash - 0.5) * 0.045 * lightNearFade;
       reflectedLight.directDiffuse += lightPowderGrain * 3.8 * reflectedLight.directDiffuse * shadowFactor;
@@ -201,12 +208,7 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       reflectedLight.indirectDiffuse *= (1.0 - cavityMask * 0.05);
 
       // 2. Directional contact shadow cast along the raised berm shoulders:
-      vec3 dPdx_l = dFdx(vWorldPosition);
-      vec3 dPdy_l = dFdy(vWorldPosition);
-      float du_dx_l = dFdx(vTrailUV.x);
-      float du_dy_l = dFdy(vTrailUV.x);
-      vec3 crossTrack_l = normalize(dPdx_l * du_dx_l + dPdy_l * du_dy_l);
-      if (length(crossTrack_l) < 0.01) crossTrack_l = vec3(1.0, 0.0, 0.0);
+      vec3 crossTrack_l = gCrossTrack;
       float sunLateral = dot(uSunDir, crossTrack_l);
 
       // Soft, diffuse contact shadow across the sun-opposing shoulder and rut bowl:

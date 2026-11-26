@@ -5,6 +5,7 @@ export interface SnowMaterialOptions {
   sunDir?: THREE.Vector3;
   sunColor?: THREE.Color;
   shadowColor?: THREE.Color;
+  anisotropy?: number;
 }
 
 export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.MeshStandardMaterial {
@@ -12,8 +13,8 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
   const sunColor = options.sunColor || new THREE.Color(0xfff6ec);
   const shadowColor = options.shadowColor || new THREE.Color(0x9ca9cb);
 
-  // Generate shared 1024x1024 procedural detail texture
-  const detailTexture = createSnowDetailTexture();
+  // Generate or retrieve shared 1024x1024 procedural detail texture
+  const detailTexture = createSnowDetailTexture(options.anisotropy ?? 4);
 
   const uniforms = {
     uDetailTex: { value: detailTexture },
@@ -268,7 +269,8 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
           float glint2 = spec2 * point2 * step(0.88, rnd2.y) * 42.0;
 
           // Grazing Fresnel enhancement & distance fade
-          float glintGrazing = 1.0 + 3.5 * pow(1.0 - NdotV, 3.0);
+          float oneMinusNdotV = 1.0 - NdotV;
+          float glintGrazing = 1.0 + 3.5 * (oneMinusNdotV * oneMinusNdotV * oneMinusNdotV);
           float glintFade = 1.0 - smoothstep(1.5, 60.0, gDistToCam);
 
           float totalSparkle = (glint1 + glint2) * glintGrazing * glintFade * shadowFactor * gRockMask;

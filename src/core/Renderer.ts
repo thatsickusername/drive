@@ -64,6 +64,16 @@ export class Renderer {
   public readonly currentSunColor = new THREE.Color();
   public readonly currentShadowColor = new THREE.Color();
 
+  private lastAppliedLightingFactor: number = -1.0;
+
+  // Pre-allocated scratch vectors for shadow camera texel-snapping without per-frame allocations
+  private readonly _shadowCamRight = new THREE.Vector3();
+  private readonly _shadowCamUp = new THREE.Vector3();
+  private readonly _snappedTarget = new THREE.Vector3();
+  private readonly _lightOffset = new THREE.Vector3(-190, 130, -50);
+  private readonly _lightDir = new THREE.Vector3(-190, 130, -50).normalize();
+  private readonly _shadowTexelSize: number = 200.0 / 2048.0;
+
   constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xf6eef3);
@@ -142,6 +152,7 @@ export class Renderer {
     if (instant) {
       this.lightingFactor = this.targetLightingFactor;
       this.applyLightingLerp(this.lightingFactor);
+      this.lastAppliedLightingFactor = this.lightingFactor;
     }
   }
 
@@ -214,20 +225,36 @@ export class Renderer {
   public updateLighting(time: number, targetPos: THREE.Vector3, cameraPos: THREE.Vector3, delta: number = 0.016): void {
     if (this.autoCycle && !this.cycle.isPaused) {
       this.lightingFactor = this.cycle.update(delta);
-      this.applyLightingLerp(this.lightingFactor);
-    } else {
+    } else if (!this.autoCycle) {
       if (Math.abs(this.lightingFactor - this.targetLightingFactor) > 0.0005) {
         this.lightingFactor = THREE.MathUtils.damp(this.lightingFactor, this.targetLightingFactor, 7.5, delta);
-        this.applyLightingLerp(this.lightingFactor);
       }
     }
 
-    // Keep high-resolution shadow map centered on player
-    this.dirLight.target.position.copy(targetPos);
+    if (Math.abs(this.lightingFactor - this.lastAppliedLightingFactor) > 0.0001) {
+      this.applyLightingLerp(this.lightingFactor);
+      this.lastAppliedLightingFactor = this.lightingFactor;
+    }
+
+    // Keep high-resolution shadow map centered on player, snapped to world-space shadow texels
+    const up = THREE.Object3D.DEFAULT_UP;
+    this._shadowCamRight.crossVectors(up, this._lightDir).normalize();
+    this._shadowCamUp.crossVectors(this._lightDir, this._shadowCamRight).normalize();
+
+    const projX = targetPos.dot(this._shadowCamRight);
+    const projY = targetPos.dot(this._shadowCamUp);
+    const snapX = Math.floor(projX / this._shadowTexelSize) * this._shadowTexelSize;
+    const snapY = Math.floor(projY / this._shadowTexelSize) * this._shadowTexelSize;
+
+    this._snappedTarget.copy(targetPos)
+      .addScaledVector(this._shadowCamRight, snapX - projX)
+      .addScaledVector(this._shadowCamUp, snapY - projY);
+
+    this.dirLight.target.position.copy(this._snappedTarget);
     this.dirLight.position.set(
-      targetPos.x - 190,
-      targetPos.y + 130,
-      targetPos.z - 50
+      this._snappedTarget.x + this._lightOffset.x,
+      this._snappedTarget.y + this._lightOffset.y,
+      this._snappedTarget.z + this._lightOffset.z
     );
     this.dirLight.target.updateMatrixWorld();
     this.dirLight.updateMatrixWorld();
@@ -240,6 +267,7 @@ export class Renderer {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   }
 
   public render(): void {

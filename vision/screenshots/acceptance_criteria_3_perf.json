@@ -1,0 +1,40 @@
+{
+  "startup": {
+    "wasmInitMs": 14.3,
+    "massifBuildMs": 574.1,
+    "timeToFirstFrameMs": 1082.9
+  },
+  "framesSampled": 278,
+  "frameTime": {
+    "avg": 2.81,
+    "p50": 0.6,
+    "p95": 1.5,
+    "p99": 7.6,
+    "max": 409.6,
+    "min": 0.3
+  },
+  "physicsStepTime": {
+    "avg": 0.41,
+    "p95": 0.4,
+    "max": 59.1
+  },
+  "renderTime": {
+    "avg": 2.36,
+    "p95": 0.9,
+    "max": 406.9
+  },
+  "gpuInfo": {
+    "drawCalls": 110,
+    "triangles": 450026,
+    "lines": 0,
+    "points": 320,
+    "geometries": 102,
+    "textures": 2,
+    "shaderPrograms": 12
+  },
+  "memory": {
+    "initialHeapMB": 10.11,
+    "latestHeapMB": 10.11,
+    "heapDeltaMB": 0
+  }
+}
