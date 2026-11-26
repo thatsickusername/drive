@@ -420,6 +420,7 @@ export class CarvedSnowTrail {
       this.normals.copyWithin(stride, 0, (this.maxSegments - 1) * stride);
       this.uvs.copyWithin(uvStride, 0, (this.maxSegments - 1) * uvStride);
 
+      this.count = Math.min(this.count + 1, this.maxSegments);
       this.segmentGaps.copyWithin(1, 0, this.maxSegments - 1);
       this.segmentGaps[0] = isJumpLanding ? 1 : 0;
       if (isJumpLanding) {
@@ -528,7 +529,6 @@ export class CarvedSnowTrail {
         this.baseAlphas[i] = node.alpha;
       }
 
-      this.count = Math.min(this.count + 1, this.maxSegments);
       this.applyTrailCaps();
       const numQuadsPerSegment = this.VERTS_PER_SEG - 1;
       this.geometry.setDrawRange(0, Math.max(0, this.count - 1) * numQuadsPerSegment * 6);

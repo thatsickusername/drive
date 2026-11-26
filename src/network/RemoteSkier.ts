@@ -59,6 +59,7 @@ export class RemoteSkier {
   private currentSpeed = 0;
   private currentLeanAngle = 0;
   private isGrounded = true;
+  private wasGrounded = true;
   private isDrifting = false;
   private isStaking = false;
   private isSlideTurn = false;
@@ -71,6 +72,10 @@ export class RemoteSkier {
   private movementState = 1;
   private currentJumpVariation: RemoteJumpVariation = 'jump';
   private wasCrashing = false;
+  private wasTrailCulled = false;
+  private lastSnapshotTime = -1;
+  private lastSnapshotPos = new THREE.Vector3();
+  private hasLastSnapshot = false;
 
   // 50Hz Verlet Ragdoll Physics for authentic crash tumbles
   private ragdoll = new VerletRagdollSolver();
@@ -204,7 +209,9 @@ export class RemoteSkier {
     const jumpVarIdx = (stylePacked >> 4) & 0x0f;
     const jumpVariation = JUMP_VARIATIONS[jumpVarIdx] || 'jump';
 
-    const now = performance.now() * 0.001;
+    const prevSnap = this.snapshots[this.snapshots.length - 1];
+    const rawNow = performance.now() * 0.001;
+    const now = prevSnap ? Math.max(rawNow, prevSnap.time + 0.001) : rawNow;
     this.snapshots.push({
       time: now,
       pos: new THREE.Vector3(posX, posY, posZ),
@@ -263,20 +270,19 @@ export class RemoteSkier {
 
     // Snapshot interpolation
     if (this.snapshots.length > 0) {
+      let activeSnap: RemoteSkierStateSnapshot;
       if (this.snapshots.length === 1 || targetTime <= this.snapshots[0].time) {
-        const s = this.snapshots[0];
-        this.currentPos.copy(s.pos);
-        this.currentQuat.copy(s.quat);
-        this.currentSpeed = s.speed;
-        this.currentLeanAngle = s.leanAngle;
-        this.applyFlags(s.flags, s.movementState, s.turnType, s.jumpVariation);
+        activeSnap = this.snapshots[0];
+        this.currentPos.copy(activeSnap.pos);
+        this.currentQuat.copy(activeSnap.quat);
+        this.currentSpeed = activeSnap.speed;
+        this.currentLeanAngle = activeSnap.leanAngle;
       } else if (targetTime >= this.snapshots[this.snapshots.length - 1].time) {
-        const s = this.snapshots[this.snapshots.length - 1];
-        this.currentPos.copy(s.pos);
-        this.currentQuat.copy(s.quat);
-        this.currentSpeed = s.speed;
-        this.currentLeanAngle = s.leanAngle;
-        this.applyFlags(s.flags, s.movementState, s.turnType, s.jumpVariation);
+        activeSnap = this.snapshots[this.snapshots.length - 1];
+        this.currentPos.copy(activeSnap.pos);
+        this.currentQuat.copy(activeSnap.quat);
+        this.currentSpeed = activeSnap.speed;
+        this.currentLeanAngle = activeSnap.leanAngle;
       } else {
         // Find surrounding snapshots
         let s0 = this.snapshots[0];
@@ -288,16 +294,27 @@ export class RemoteSkier {
             break;
           }
         }
-        const span = s1.time - s0.time;
-        const alpha = span > 0.0001 ? THREE.MathUtils.clamp((targetTime - s0.time) / span, 0, 1) : 0;
+        activeSnap = s0;
+        const isTeleport = s0.pos.distanceToSquared(s1.pos) > 225; // >15m between 50ms packets
+        if (isTeleport) {
+          this.currentPos.copy(s0.pos);
+          this.currentQuat.copy(s0.quat);
+          this.currentSpeed = s0.speed;
+          this.currentLeanAngle = s0.leanAngle;
+        } else {
+          const span = s1.time - s0.time;
+          const alpha = span > 0.0001 ? THREE.MathUtils.clamp((targetTime - s0.time) / span, 0, 1) : 0;
 
-        // Hermite / Lerp position & Slerp quaternion
-        this.currentPos.lerpVectors(s0.pos, s1.pos, alpha);
-        this.currentQuat.slerpQuaternions(s0.quat, s1.quat, alpha);
-        this.currentSpeed = THREE.MathUtils.lerp(s0.speed, s1.speed, alpha);
-        this.currentLeanAngle = THREE.MathUtils.lerp(s0.leanAngle, s1.leanAngle, alpha);
-        this.applyFlags(s1.flags, s1.movementState, s1.turnType, s1.jumpVariation);
+          // Hermite / Lerp position & Slerp quaternion
+          this.currentPos.lerpVectors(s0.pos, s1.pos, alpha);
+          this.currentQuat.slerpQuaternions(s0.quat, s1.quat, alpha);
+          this.currentSpeed = THREE.MathUtils.lerp(s0.speed, s1.speed, alpha);
+          this.currentLeanAngle = THREE.MathUtils.lerp(s0.leanAngle, s1.leanAngle, alpha);
+        }
       }
+
+      this.processSnapshotTransitions(activeSnap);
+      this.applyFlags(activeSnap.flags, activeSnap.movementState, activeSnap.turnType, activeSnap.jumpVariation);
     }
 
     // Apply interpolated transform to root
@@ -324,6 +341,13 @@ export class RemoteSkier {
     }
     this.wasCrashing = isCrashing;
 
+    // Airborne / jump transition for snow trail gap
+    const isAirborne = !this.isGrounded || this.movementState === 2;
+    if (isAirborne && this.wasGrounded && !isCrashing && this.trail) {
+      this.trail.onJumpStart();
+    }
+    this.wasGrounded = !isAirborne && !isCrashing;
+
     // LOD & Distance Culling against camera
     const distSq = this.currentPos.distanceToSquared(camera.position);
     const isBeyondFar = distSq > 600 * 600; // > 600m
@@ -336,6 +360,7 @@ export class RemoteSkier {
 
     if (isBeyondFar) {
       this.root.visible = false;
+      this.wasTrailCulled = true;
       if (this.tagElement) this.tagElement.style.display = 'none';
       return;
     }
@@ -373,6 +398,10 @@ export class RemoteSkier {
 
     // Update dedicated Carved Snow Trail for remote skier (cull if beyond LOD or behind camera)
     if (this.trail && !isBeyondLOD && inFront) {
+      if (this.wasTrailCulled) {
+        this.trail.onRespawn();
+        this.wasTrailCulled = false;
+      }
       if (terrainSampler) {
         this.trail.setTerrainSampler(terrainSampler);
       }
@@ -383,12 +412,14 @@ export class RemoteSkier {
         this.currentPos,
         _scratchRight,
         _scratchNormal,
-        this.isGrounded && !isCrashing,
+        this.isGrounded && !isCrashing && this.movementState !== 2,
         slipAngle,
         this.currentSpeed,
         this.isDrifting,
         this.currentLeanAngle
       );
+    } else {
+      this.wasTrailCulled = true;
     }
 
     // Snow spray particles for remote skier (cull if beyond LOD or behind camera)
@@ -424,6 +455,34 @@ export class RemoteSkier {
           this.tagElement.style.top = `${y.toFixed(1)}px`;
         }
       }
+    }
+  }
+
+  private processSnapshotTransitions(activeSnap: RemoteSkierStateSnapshot): void {
+    if (this.trail && this.hasLastSnapshot && activeSnap.time > this.lastSnapshotTime) {
+      // Catch any skipped intermediate airborne/crash/teleport snapshots between frames
+      for (let i = 0; i < this.snapshots.length; i++) {
+        const snap = this.snapshots[i];
+        if (snap.time <= this.lastSnapshotTime) continue;
+        if (snap.time > activeSnap.time) break;
+
+        if (this.lastSnapshotPos.distanceToSquared(snap.pos) > 225) {
+          this.trail.onRespawn();
+        } else if (snap.time < activeSnap.time) {
+          const snapGrounded = (snap.flags & 0x01) !== 0;
+          if (snap.movementState === 3) {
+            this.trail.onCrash();
+          } else if (!snapGrounded || snap.movementState === 2) {
+            this.trail.onJumpStart();
+          }
+        }
+        this.lastSnapshotPos.copy(snap.pos);
+        this.lastSnapshotTime = snap.time;
+      }
+    } else if (!this.hasLastSnapshot) {
+      this.lastSnapshotPos.copy(activeSnap.pos);
+      this.lastSnapshotTime = activeSnap.time;
+      this.hasLastSnapshot = true;
     }
   }
 
