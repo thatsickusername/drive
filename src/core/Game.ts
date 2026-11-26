@@ -26,6 +26,7 @@ export class Game {
 
   private lastTime: number = 0;
   private lastHudUpdateTime: number = 0;
+  private readonly boundLoop = (time: number) => this.loop(time);
 
   // Preset mountain locations (2.4km x 2.4km Grand Mountain Adventure Resort)
   public readonly locations = {
@@ -154,9 +155,19 @@ export class Game {
 
     (window as any).game = this;
 
+    // Handle tab switching / visibility changes to pause accumulation cleanly
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this.physics.resetAccumulator();
+      } else {
+        this.lastTime = performance.now();
+        this.physics.resetAccumulator();
+      }
+    });
+
     // 9. Start Game Loop
     this.lastTime = performance.now();
-    requestAnimationFrame(this.loop.bind(this));
+    requestAnimationFrame(this.boundLoop);
   }
 
   public teleportTo(loc: { name: string; x: number; z: number; heading: number }): void {
@@ -310,6 +321,6 @@ export class Game {
       });
     }
 
-    requestAnimationFrame(this.loop.bind(this));
+    requestAnimationFrame(this.boundLoop);
   }
 }

@@ -54,6 +54,15 @@ export class TrickScoringSystem {
   public isGrabbing: boolean = false;
   public grabName: string = '';
 
+  private readonly _scoreResult: ScoreFinalization = {
+    totalScore: 0,
+    comboMultiplier: 1,
+    speedBoostMultiplier: 1.0,
+    forwardSpeedBoost: 0.0,
+    landing: LandingQuality.Crash,
+    trickHistory: []
+  };
+
   constructor() {
     this.reset();
   }
@@ -207,19 +216,18 @@ export class TrickScoringSystem {
 
   public finalizeScore(landing: LandingQuality, entrySpeed: number = 0): ScoreFinalization {
     if (landing === LandingQuality.Crash) {
-      const result: ScoreFinalization = {
-        totalScore: 0,
-        comboMultiplier: 1,
-        speedBoostMultiplier: 1.0,
-        forwardSpeedBoost: 0.0,
-        landing: LandingQuality.Crash,
-        trickHistory: []
-      };
+      this._scoreResult.totalScore = 0;
+      this._scoreResult.comboMultiplier = 1;
+      this._scoreResult.speedBoostMultiplier = 1.0;
+      this._scoreResult.forwardSpeedBoost = 0.0;
+      this._scoreResult.landing = LandingQuality.Crash;
+      this._scoreResult.trickHistory.length = 0;
+
       this.lastFinalizedTrickName = 'CRASH / WIPEOUT';
       this.lastFinalizedPoints = 0;
       this.displayTimer = 2.5;
       this.reset();
-      return result;
+      return this._scoreResult;
     }
 
     const { title, baseScore, comboElements } = this.determineTrickName();
@@ -257,17 +265,18 @@ export class TrickScoringSystem {
     this.totalGameScore += totalScore;
     this.comboMultiplier = comboElements;
 
-    const result: ScoreFinalization = {
-      totalScore,
-      comboMultiplier: this.comboMultiplier,
-      speedBoostMultiplier: 1.0,
-      forwardSpeedBoost,
-      landing,
-      trickHistory: title ? [{ name: title, points: totalScore, rotationOrLength: this.maxAirSpinDeg }] : []
-    };
+    this._scoreResult.totalScore = totalScore;
+    this._scoreResult.comboMultiplier = this.comboMultiplier;
+    this._scoreResult.speedBoostMultiplier = 1.0;
+    this._scoreResult.forwardSpeedBoost = forwardSpeedBoost;
+    this._scoreResult.landing = landing;
+    this._scoreResult.trickHistory.length = 0;
+    if (title) {
+      this._scoreResult.trickHistory.push({ name: title, points: totalScore, rotationOrLength: this.maxAirSpinDeg });
+    }
 
     this.reset();
-    return result;
+    return this._scoreResult;
   }
 
   public updateDisplay(dt: number): void {

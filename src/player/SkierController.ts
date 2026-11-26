@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { SkierCharacter, SkierAnimator, buildSkierCharacter, PALETTES, applyRagdollPose } from './character/SkierRig';
+import { SkierCharacter, SkierAnimator, SkierAnimParams, buildSkierCharacter, PALETTES, applyRagdollPose } from './character/SkierRig';
 import { SurfaceType, TerrainSample } from '../world/alpineHeightfield';
 import { GmaPlayerPhysics } from '../mechanics/GmaPlayerPhysics';
 import { TrickScoringSystem } from '../mechanics/TrickScoring';
@@ -168,6 +168,35 @@ export class SkierController {
   private terrainSampler: ((x: number, z: number) => number) | null = null;
   private groundClearanceOffset = 0.0;
 
+  // Persistent Rapier & simulation scratch objects (zero per-frame allocations)
+  private readonly _rayCenter: RAPIER.Ray;
+  private readonly _rayNose: RAPIER.Ray;
+  private readonly _rayTail: RAPIER.Ray;
+  private readonly _airQuat = new THREE.Quaternion();
+  private readonly _rbTranslation = { x: 0, y: 0, z: 0 };
+  private readonly _nextTranslation = { x: 0, y: 0, z: 0 };
+  private readonly _inputState: InputState = {
+    steerX: 0,
+    steerY: 0,
+    trickSpinX: 0,
+    trickFlipY: 0,
+    trickRoll: 0,
+    jump: false,
+    sharpTurn: false,
+    slideTurn: false,
+    brake: false,
+    slapTackle: false,
+    stakePole: false,
+    reverseTurnEnabled: false
+  };
+  private readonly _animParams: SkierAnimParams = {
+    dt: 0,
+    speed: 0,
+    leanAngle: 0,
+    isGrounded: false,
+    isStaking: false
+  };
+
   constructor(
     world: RAPIER.World,
     scene: THREE.Scene,
@@ -176,6 +205,9 @@ export class SkierController {
   ) {
     this.world = world;
     this.cfg = { ...DEFAULT_CONFIG, ...config };
+    this._rayCenter = new RAPIER.Ray(this._rayOrigin, this._rayDir);
+    this._rayNose = new RAPIER.Ray(this._rayOriginNose, this._rayDir);
+    this._rayTail = new RAPIER.Ray(this._rayOriginTail, this._rayDir);
     this.gmaPhysics = new GmaPlayerPhysics(SportType.Skis, true);
     this.gmaPhysics.reset(spawnPos, 0);
 
@@ -357,7 +389,11 @@ export class SkierController {
     surfaceOrSample: SurfaceType | TerrainSample = 'POWDER'
   ): void {
     const terrainSample = typeof surfaceOrSample === 'object' ? surfaceOrSample : undefined;
-    const pos = this.rigidBody.translation();
+    const t = this.rigidBody.translation();
+    this._rbTranslation.x = t.x;
+    this._rbTranslation.y = t.y;
+    this._rbTranslation.z = t.z;
+    const pos = this._rbTranslation;
 
     // 1. Multi-Point Ground Detection (Nose, Center, Tail probes for smooth cresting)
     const fwdX = -Math.sin(this.yaw);
@@ -377,13 +413,10 @@ export class SkierController {
     this._rayOriginTail.z = pos.z - fwdZ * probeHalfLen;
 
     const maxRayDist = this.cfg.sphereRadius + 0.15 + 1.25;
-    const rayCenter = new RAPIER.Ray(this._rayOrigin, this._rayDir);
-    const rayNose = new RAPIER.Ray(this._rayOriginNose, this._rayDir);
-    const rayTail = new RAPIER.Ray(this._rayOriginTail, this._rayDir);
 
-    const hitCenter = this.world.castRayAndGetNormal(rayCenter, maxRayDist, true, undefined, undefined, this.collider);
-    const hitNose = this.world.castRayAndGetNormal(rayNose, maxRayDist, true, undefined, undefined, this.collider);
-    const hitTail = this.world.castRayAndGetNormal(rayTail, maxRayDist, true, undefined, undefined, this.collider);
+    const hitCenter = this.world.castRayAndGetNormal(this._rayCenter, maxRayDist, true, undefined, undefined, this.collider);
+    const hitNose = this.world.castRayAndGetNormal(this._rayNose, maxRayDist, true, undefined, undefined, this.collider);
+    const hitTail = this.world.castRayAndGetNormal(this._rayTail, maxRayDist, true, undefined, undefined, this.collider);
 
     const distCenter = hitCenter ? hitCenter.timeOfImpact - 0.15 : 999.0;
     const distNose = hitNose ? hitNose.timeOfImpact - 0.15 : 999.0;
@@ -437,31 +470,28 @@ export class SkierController {
     else if (input.left && !input.right) steerVal = -1.0;
     else if (input.right && !input.left) steerVal = 1.0;
 
-    const inputState: InputState = {
-      steerX: steerVal,
-      steerY: input.brake ? -1.0 : 0.0,
-      trickSpinX: input.trickSpinX !== undefined ? input.trickSpinX : (input.left ? 1.0 : (input.right ? -1.0 : 0.0)),
-      trickFlipY: input.trickFlipY !== undefined ? input.trickFlipY : 0.0,
-      trickRoll: input.trickRoll !== undefined ? input.trickRoll : 0.0,
-      jump: input.jump,
-      sharpTurn: !!input.sharpTurn,
-      slideTurn: !!input.slideTurn,
-      brake: input.brake,
-      slapTackle: !!input.tackle,
-      stakePole: !!input.forward,
-      reverseTurnEnabled: this.gmaPhysics.controls.reverseTurn
-    };
+    this._inputState.steerX = steerVal;
+    this._inputState.steerY = input.brake ? -1.0 : 0.0;
+    this._inputState.trickSpinX = input.trickSpinX !== undefined ? input.trickSpinX : (input.left ? 1.0 : (input.right ? -1.0 : 0.0));
+    this._inputState.trickFlipY = input.trickFlipY !== undefined ? input.trickFlipY : 0.0;
+    this._inputState.trickRoll = input.trickRoll !== undefined ? input.trickRoll : 0.0;
+    this._inputState.jump = input.jump;
+    this._inputState.sharpTurn = !!input.sharpTurn;
+    this._inputState.slideTurn = !!input.slideTurn;
+    this._inputState.brake = input.brake;
+    this._inputState.slapTackle = !!input.tackle;
+    this._inputState.stakePole = !!input.forward;
+    this._inputState.reverseTurnEnabled = this.gmaPhysics.controls.reverseTurn;
 
     // 3. Step 333.3 Hz GMA Player Physics
     const surfaceType = terrainSample ? terrainSample.surfaceType : 'POWDER';
-    this.gmaPhysics.update(dt, inputState, groundElevation, this.smoothNormal, surfaceType);
+    this.gmaPhysics.update(dt, this._inputState, groundElevation, this.smoothNormal, surfaceType);
 
     // 4. Sync Rapier Kinematic Collider Translation (zero double-integration jitter)
-    this.rigidBody.setNextKinematicTranslation({
-      x: this.gmaPhysics.position.x,
-      y: this.gmaPhysics.position.y + this.cfg.sphereRadius,
-      z: this.gmaPhysics.position.z
-    });
+    this._nextTranslation.x = this.gmaPhysics.position.x;
+    this._nextTranslation.y = this.gmaPhysics.position.y + this.cfg.sphereRadius;
+    this._nextTranslation.z = this.gmaPhysics.position.z;
+    this.rigidBody.setNextKinematicTranslation(this._nextTranslation);
 
     // Handle player jump trigger for snow trail interruption and variation selection
     const jumpTriggered = this.gmaPhysics.jumpActionTriggered || (input.jump && !this.prevJumpInput && this.wasGrounded);
@@ -618,8 +648,8 @@ export class SkierController {
 
       if (!this.isGrounded) {
         this._airEuler.set(this.gmaPhysics.airPitch, 0, this.gmaPhysics.airRoll);
-        const airQ = new THREE.Quaternion().setFromEuler(this._airEuler);
-        this._targetQuat.multiply(airQ);
+        this._airQuat.setFromEuler(this._airEuler);
+        this._targetQuat.multiply(this._airQuat);
       }
       this.visualRoot.quaternion.slerp(this._targetQuat, Math.min(1, dt * 24));
 
@@ -653,31 +683,31 @@ export class SkierController {
       this.isBackFlipping = isBackFlipping;
       this.isGrabActive = !!input.grab;
 
-      this.animator.update({
-        dt,
-        speed: this.speed,
-        leanAngle: this.leanAngle,
-        isGrounded: this.isGrounded,
-        isStaking: this.gmaPhysics.isStaking,
-        isDrifting: this.isDrifting,
-        isSlideTurn: !!input.slideTurn || this.gmaPhysics.currentTurnType === TurnType.SlideTurn,
-        isSharpTurn: !!input.sharpTurn || this.gmaPhysics.currentTurnType === TurnType.SharpTurn,
-        tuck: !!input.forward && this.speed > 8,
-        inputLeft: !!input.left || (input.steerX !== undefined && input.steerX < -0.25),
-        inputRight: !!input.right || (input.steerX !== undefined && input.steerX > 0.25),
-        isGliding: this.gmaPhysics.isGliding,
-        airTime: this.airTimer,
-        jumpPressed: input.jump,
-        grabPressed: !!input.grab,
-        isSpinning,
-        spinProgress,
-        spinDirection: spinDir,
-        spinRate: this.gmaPhysics.angularVelocitySpin,
-        isFrontFlipping,
-        isBackFlipping,
-        flipProgress,
-        flipRate
-      });
+      this._animParams.dt = dt;
+      this._animParams.speed = this.speed;
+      this._animParams.leanAngle = this.leanAngle;
+      this._animParams.isGrounded = this.isGrounded;
+      this._animParams.isStaking = this.gmaPhysics.isStaking;
+      this._animParams.isDrifting = this.isDrifting;
+      this._animParams.isSlideTurn = !!input.slideTurn || this.gmaPhysics.currentTurnType === TurnType.SlideTurn;
+      this._animParams.isSharpTurn = !!input.sharpTurn || this.gmaPhysics.currentTurnType === TurnType.SharpTurn;
+      this._animParams.tuck = !!input.forward && this.speed > 8;
+      this._animParams.inputLeft = !!input.left || (input.steerX !== undefined && input.steerX < -0.25);
+      this._animParams.inputRight = !!input.right || (input.steerX !== undefined && input.steerX > 0.25);
+      this._animParams.isGliding = this.gmaPhysics.isGliding;
+      this._animParams.airTime = this.airTimer;
+      this._animParams.jumpPressed = input.jump;
+      this._animParams.grabPressed = !!input.grab;
+      this._animParams.isSpinning = isSpinning;
+      this._animParams.spinProgress = spinProgress;
+      this._animParams.spinDirection = spinDir;
+      this._animParams.spinRate = this.gmaPhysics.angularVelocitySpin;
+      this._animParams.isFrontFlipping = isFrontFlipping;
+      this._animParams.isBackFlipping = isBackFlipping;
+      this._animParams.flipProgress = flipProgress;
+      this._animParams.flipRate = flipRate;
+
+      this.animator.update(this._animParams);
 
       // 3. Foot Grounding & Ski Elevation Clamping:
       // Skis sit inside the carved rut floor (+0.016m) nestled between raised displaced snow berms.
@@ -776,7 +806,7 @@ export class SkierController {
 
   private triggerCrashSpray(): void {
     if (!this.sprayPositions) return;
-    const pos = this.rigidBody.translation();
+    const pos = this._rbTranslation;
     let emitted = 0;
     for (let i = 0; i < this.sprayCount && emitted < 55; i++) {
       if (this.sprayLifetimes[i] <= 0) {
@@ -794,7 +824,7 @@ export class SkierController {
   }
 
   private updateSnowSpray(dt: number): void {
-    const pos = this.rigidBody.translation();
+    const pos = this._rbTranslation;
     const isEmitting = this.isGrounded && this.speed > 1.2;
     const absLat = Math.abs(this.vLateral);
 

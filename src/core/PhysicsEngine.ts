@@ -5,6 +5,7 @@ export class PhysicsEngine {
   public world!: RAPIER.World;
   public fixedTimeStep: number = 1 / 60;
   private accumulator: number = 0;
+  private readonly maxSubSteps: number = 5;
 
   public async init(): Promise<void> {
     await RAPIER.init();
@@ -13,17 +14,27 @@ export class PhysicsEngine {
   }
 
   public step(deltaSeconds: number, onFixedStep?: (dt: number) => void): void {
-
     const clampedDelta = Math.min(deltaSeconds, 0.1);
     this.accumulator += clampedDelta;
 
-    while (this.accumulator >= this.fixedTimeStep) {
+    let subSteps = 0;
+    while (this.accumulator >= this.fixedTimeStep && subSteps < this.maxSubSteps) {
       if (onFixedStep) {
         onFixedStep(this.fixedTimeStep);
       }
       this.world.step();
       this.accumulator -= this.fixedTimeStep;
+      subSteps++;
     }
+
+    if (this.accumulator >= this.fixedTimeStep) {
+      // Discard remaining backlog to prevent spiral of death after tab-switching or stall
+      this.accumulator = 0;
+    }
+  }
+
+  public resetAccumulator(): void {
+    this.accumulator = 0;
   }
 
   public getInterpolationAlpha(): number {

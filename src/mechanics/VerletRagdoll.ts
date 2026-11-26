@@ -61,6 +61,8 @@ export class VerletRagdollSolver {
   private terrainSampler: ((x: number, z: number) => number) | null = null;
   private static readonly STRIDE = 24;
   private connectedSticks: Uint8Array = new Uint8Array(24 * 24);
+  private readonly _grav = new THREE.Vector3(0, -this.gravityMag, 0);
+  private readonly _com = new THREE.Vector3();
 
   constructor() {}
 
@@ -221,21 +223,29 @@ export class VerletRagdollSolver {
   }
 
   private applyForces(): void {
-    const grav = new THREE.Vector3(0, -this.gravityMag, 0);
-    for (const pt of this.points) {
+    for (let i = 0; i < this.points.length; i++) {
+      const pt = this.points[i];
       if (!pt.pinned) {
-        pt.acceleration.copy(grav);
+        pt.acceleration.copy(this._grav);
       }
     }
   }
 
   private verletIntegrate(): void {
-    for (const pt of this.points) {
+    const dt2 = this.timeStep * this.timeStep;
+    const damp = this.gravityDamp;
+    for (let i = 0; i < this.points.length; i++) {
+      const pt = this.points[i];
       if (pt.pinned) continue;
 
-      const vel = pt.pos.clone().sub(pt.prevPos).multiplyScalar(this.gravityDamp);
+      const vx = (pt.pos.x - pt.prevPos.x) * damp;
+      const vy = (pt.pos.y - pt.prevPos.y) * damp;
+      const vz = (pt.pos.z - pt.prevPos.z) * damp;
+
       pt.prevPos.copy(pt.pos);
-      pt.pos.add(vel).addScaledVector(pt.acceleration, this.timeStep * this.timeStep);
+      pt.pos.x += vx + pt.acceleration.x * dt2;
+      pt.pos.y += vy + pt.acceleration.y * dt2;
+      pt.pos.z += vz + pt.acceleration.z * dt2;
       pt.acceleration.set(0, 0, 0);
     }
   }
@@ -407,12 +417,14 @@ export class VerletRagdollSolver {
     }
   }
 
-  public getCenterOfMass(): THREE.Vector3 {
-    if (this.points.length === 0) return new THREE.Vector3();
-    const com = new THREE.Vector3();
-    for (const pt of this.points) {
-      com.add(pt.pos);
+  public getCenterOfMass(target?: THREE.Vector3): THREE.Vector3 {
+    const out = target || this._com;
+    out.set(0, 0, 0);
+    const count = this.points.length;
+    if (count === 0) return out;
+    for (let i = 0; i < count; i++) {
+      out.add(this.points[i].pos);
     }
-    return com.divideScalar(this.points.length);
+    return out.divideScalar(count);
   }
 }

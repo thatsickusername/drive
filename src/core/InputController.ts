@@ -16,8 +16,48 @@ export class UnifiedInputController {
   private isPointerActive: boolean = false;
   private keyboardSteer: number = 0;
   private lastInputTime: number = performance.now();
+  private hasGamepads: boolean = false;
+
+  private readonly _boarderInput: BoarderInput = {
+    forward: false,
+    brake: false,
+    left: false,
+    right: false,
+    jump: false,
+    grab: false,
+    sharpTurn: false,
+    slideTurn: false,
+    tackle: false,
+    steerX: undefined,
+    trickSpinX: undefined,
+    trickFlipY: undefined,
+    trickRoll: undefined
+  };
+
+  private readonly _cameraLookInputs = { yawDelta: 0, pitchDelta: 0 };
+
+  private readonly _flyCamInputs = {
+    moveForward: 0,
+    moveRight: 0,
+    moveUp: 0,
+    yawDelta: 0,
+    pitchDelta: 0
+  };
 
   constructor() {
+    window.addEventListener('gamepadconnected', () => { this.hasGamepads = true; });
+    window.addEventListener('gamepaddisconnected', () => {
+      const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+      let anyConnected = false;
+      for (const gp of gps) {
+        if (gp && gp.connected) {
+          anyConnected = true;
+          break;
+        }
+      }
+      this.hasGamepads = anyConnected;
+    });
+
     window.addEventListener('keydown', this.onKeyDown.bind(this));
     window.addEventListener('keyup', this.onKeyUp.bind(this));
     window.addEventListener('mousedown', (e: MouseEvent) => {
@@ -141,66 +181,69 @@ export class UnifiedInputController {
       trickFlipY = -1.0; // Backflip
     }
 
-    // HTML5 Gamepad API Poll (Xbox / DualShock / Switch Pro)
-    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-    for (const gp of gamepads) {
-      if (!gp || !gp.connected) continue;
+    // HTML5 Gamepad API Poll (Xbox / DualShock / Switch Pro) - guarded by connection state
+    if (this.hasGamepads && navigator.getGamepads) {
+      const gamepads = navigator.getGamepads();
+      for (const gp of gamepads) {
+        if (!gp || !gp.connected) continue;
 
-      const stickX = gp.axes[0] ?? 0;
-      if (Math.abs(stickX) > 0.05) {
-        steerX = stickX;
+        const stickX = gp.axes[0] ?? 0;
+        if (Math.abs(stickX) > 0.05) {
+          steerX = stickX;
+        }
+        if (stickX < -0.15) left = true;
+        if (stickX > 0.15) right = true;
+
+        const stickY = gp.axes[1] ?? 0;
+        const triggerR = (gp.buttons[7]?.value ?? 0) > 0.2;
+        const triggerL = (gp.buttons[6]?.value ?? 0) > 0.2;
+
+        // GMA controller triggers & buttons:
+        // RT = Sharp carve / drift trigger
+        // LT = Snowplow brake
+        if (triggerR) slideTurn = true;
+        if (triggerL || (gp.buttons[1]?.pressed ?? false) || stickY > 0.35) brake = true;
+        if (gp.buttons[0]?.pressed) jump = true;       // A button
+        if (gp.buttons[1]?.pressed) slideTurn = true;  // B button
+        if (gp.buttons[2]?.pressed) sharpTurn = true;  // X button
+        if (gp.buttons[3]?.pressed) tackle = true;     // Y button
+        if (gp.buttons[4]?.pressed || gp.buttons[5]?.pressed) grab = true; // LB / RB
+
+        // Right Stick (Tricks in Air)
+        const rStickX = gp.axes[2] ?? 0;
+        const rStickY = gp.axes[3] ?? 0;
+        if (Math.abs(rStickX) > 0.1) trickSpinX = rStickX;
+        if (Math.abs(rStickY) > 0.1) trickFlipY = -rStickY;
+
+        // Quick hotkeys on D-pad:
+        // D-Pad Up: Toggle Sport (Skis <-> Snowboard)
+        if (gp.buttons[12]?.pressed && this.onToggleSportRequested) {
+          this.onToggleSportRequested();
+        }
+        // D-Pad Down: Reset/Respawn
+        if (gp.buttons[13]?.pressed && this.onResetRequested) {
+          this.onResetRequested();
+        }
+        break;
       }
-      if (stickX < -0.15) left = true;
-      if (stickX > 0.15) right = true;
-
-      const stickY = gp.axes[1] ?? 0;
-      const triggerR = (gp.buttons[7]?.value ?? 0) > 0.2;
-      const triggerL = (gp.buttons[6]?.value ?? 0) > 0.2;
-
-      // GMA controller triggers & buttons:
-      // RT = Sharp carve / drift trigger
-      // LT = Snowplow brake
-      if (triggerR) slideTurn = true;
-      if (triggerL || (gp.buttons[1]?.pressed ?? false) || stickY > 0.35) brake = true;
-      if (gp.buttons[0]?.pressed) jump = true;       // A button
-      if (gp.buttons[1]?.pressed) slideTurn = true;  // B button
-      if (gp.buttons[2]?.pressed) sharpTurn = true;  // X button
-      if (gp.buttons[3]?.pressed) tackle = true;     // Y button
-      if (gp.buttons[4]?.pressed || gp.buttons[5]?.pressed) grab = true; // LB / RB
-
-      // Right Stick (Tricks in Air)
-      const rStickX = gp.axes[2] ?? 0;
-      const rStickY = gp.axes[3] ?? 0;
-      if (Math.abs(rStickX) > 0.1) trickSpinX = rStickX;
-      if (Math.abs(rStickY) > 0.1) trickFlipY = -rStickY;
-
-      // Quick hotkeys on D-pad:
-      // D-Pad Up: Toggle Sport (Skis <-> Snowboard)
-      if (gp.buttons[12]?.pressed && this.onToggleSportRequested) {
-        this.onToggleSportRequested();
-      }
-      // D-Pad Down: Reset/Respawn
-      if (gp.buttons[13]?.pressed && this.onResetRequested) {
-        this.onResetRequested();
-      }
-      break;
     }
 
-    return {
-      forward,
-      brake,
-      left,
-      right,
-      jump,
-      grab,
-      sharpTurn,
-      slideTurn,
-      tackle,
-      steerX,
-      trickSpinX,
-      trickFlipY,
-      trickRoll
-    };
+    const bi = this._boarderInput;
+    bi.forward = forward;
+    bi.brake = brake;
+    bi.left = left;
+    bi.right = right;
+    bi.jump = jump;
+    bi.grab = grab;
+    bi.sharpTurn = sharpTurn;
+    bi.slideTurn = slideTurn;
+    bi.tackle = tackle;
+    bi.steerX = steerX;
+    bi.trickSpinX = trickSpinX;
+    bi.trickFlipY = trickFlipY;
+    bi.trickRoll = trickRoll;
+
+    return bi;
   }
 
   public getCameraLookInputs(dt: number): { yawDelta: number; pitchDelta: number } {
@@ -216,23 +259,27 @@ export class UnifiedInputController {
     }
 
     // Controller Right Stick Look when grounded
-    const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-    for (const gp of gamepads) {
-      if (!gp || !gp.connected) continue;
+    if (this.hasGamepads && navigator.getGamepads) {
+      const gamepads = navigator.getGamepads();
+      for (const gp of gamepads) {
+        if (!gp || !gp.connected) continue;
 
-      const rightX = gp.axes[2] ?? 0;
-      const rightY = gp.axes[3] ?? 0;
+        const rightX = gp.axes[2] ?? 0;
+        const rightY = gp.axes[3] ?? 0;
 
-      if (Math.abs(rightX) > 0.12) {
-        yawDelta -= rightX * 2.8 * dt;
+        if (Math.abs(rightX) > 0.12) {
+          yawDelta -= rightX * 2.8 * dt;
+        }
+        if (Math.abs(rightY) > 0.12) {
+          pitchDelta += rightY * 2.2 * dt;
+        }
+        break;
       }
-      if (Math.abs(rightY) > 0.12) {
-        pitchDelta += rightY * 2.2 * dt;
-      }
-      break;
     }
 
-    return { yawDelta, pitchDelta };
+    this._cameraLookInputs.yawDelta = yawDelta;
+    this._cameraLookInputs.pitchDelta = pitchDelta;
+    return this._cameraLookInputs;
   }
 
   public getFlyCamInputs(): {
@@ -279,12 +326,12 @@ export class UnifiedInputController {
     this.mouseDeltaX = 0;
     this.mouseDeltaY = 0;
 
-    return {
-      moveForward,
-      moveRight,
-      moveUp,
-      yawDelta,
-      pitchDelta
-    };
+    const fi = this._flyCamInputs;
+    fi.moveForward = moveForward;
+    fi.moveRight = moveRight;
+    fi.moveUp = moveUp;
+    fi.yawDelta = yawDelta;
+    fi.pitchDelta = pitchDelta;
+    return fi;
   }
 }

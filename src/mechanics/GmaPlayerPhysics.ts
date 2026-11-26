@@ -76,6 +76,8 @@ export class GmaPlayerPhysics {
   private readonly _fPull = new THREE.Vector3();
   private readonly _velDir = new THREE.Vector3();
   private readonly _targetDir = new THREE.Vector3();
+  private readonly _boardUp = new THREE.Vector3();
+  private readonly _axisX = new THREE.Vector3(1, 0, 0);
 
   // Systems
   public controls = new ControlsProcessor();
@@ -302,7 +304,7 @@ export class GmaPlayerPhysics {
         }
 
         // Landing quality evaluation
-        const boardUp = new THREE.Vector3(0, 1, 0).applyAxisAngle(new THREE.Vector3(1, 0, 0), this.airPitch);
+        const boardUp = this._boardUp.set(0, 1, 0).applyAxisAngle(this._axisX, this.airPitch);
         const tiltDeg = Math.acos(THREE.MathUtils.clamp(boardUp.dot(this.groundNormal), -1, 1)) * RAD2DEG;
 
         let yawDevDeg = 0;

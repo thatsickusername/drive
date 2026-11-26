@@ -76,17 +76,23 @@ export class SkierAnimator {
   private backFlipAnimTime = 0.0;
   private currentJumpVariation: 'jump' | 'grab' | 'shifty' | 'daffy' | 'mutegrab' | 'ironcross' | 'nordic' = 'jump';
 
+  private static readonly JUMP_VARIATIONS: Array<'jump' | 'grab' | 'shifty' | 'daffy' | 'mutegrab'> = [
+    'jump',
+    'grab',
+    'shifty',
+    'daffy',
+    'mutegrab'
+  ];
+
   public pickRandomJumpVariation(): 'jump' | 'grab' | 'shifty' | 'daffy' | 'mutegrab' {
-    const variations: Array<'jump' | 'grab' | 'shifty' | 'daffy' | 'mutegrab'> = [
-      'jump',
-      'grab',
-      'shifty',
-      'daffy',
-      'mutegrab'
-    ];
-    const pool = variations.filter((v) => v !== this.currentJumpVariation);
-    this.currentJumpVariation = pool[Math.floor(Math.random() * pool.length)] || 'jump';
-    return this.currentJumpVariation as 'jump' | 'grab' | 'shifty' | 'daffy' | 'mutegrab';
+    const list = SkierAnimator.JUMP_VARIATIONS;
+    let nextVar = list[Math.floor(Math.random() * list.length)];
+    if (nextVar === this.currentJumpVariation) {
+      const idx = list.indexOf(nextVar);
+      nextVar = list[(idx + 1) % list.length];
+    }
+    this.currentJumpVariation = nextVar;
+    return this.currentJumpVariation;
   }
 
   public get activeJumpVariation(): 'jump' | 'grab' | 'shifty' | 'daffy' | 'mutegrab' | 'ironcross' | 'nordic' {
@@ -130,17 +136,20 @@ export class SkierAnimator {
 
   constructor(skier: SkierCharacter) {
     this.skier = skier;
-    this.jointNames.forEach((name) => {
-      this.targets[name] = { rx: 0, ry: 0, rz: 0 };
-    });
+    for (let i = 0; i < this.jointNames.length; i++) {
+      this.targets[this.jointNames[i]] = { rx: 0, ry: 0, rz: 0 };
+    }
   }
 
   private clearTargets() {
-    this.jointNames.forEach((name) => {
-      this.targets[name].rx = 0;
-      this.targets[name].ry = 0;
-      this.targets[name].rz = 0;
-    });
+    for (let i = 0; i < this.jointNames.length; i++) {
+      const t = this.targets[this.jointNames[i]];
+      if (t) {
+        t.rx = 0;
+        t.ry = 0;
+        t.rz = 0;
+      }
+    }
     this.hipPosTarget.x = 0;
     this.hipPosTarget.y = 0.82;
     this.hipPosTarget.z = 0;
@@ -1345,7 +1354,10 @@ export class SkierAnimator {
     // 8. Exponential Damping towards targets
     const blendRate = 1 - Math.exp(-12.0 * clampedDt);
 
-    this.jointNames.forEach((name) => {
+    const names = this.jointNames;
+    const len = names.length;
+    for (let i = 0; i < len; i++) {
+      const name = names[i];
       const j = this.skier.joints[name];
       const tgt = this.targets[name];
       if (j && tgt) {
@@ -1358,7 +1370,7 @@ export class SkierAnimator {
           j.rotation.z += (tgt.rz - j.rotation.z) * blendRate;
         }
       }
-    });
+    }
 
     // Apply stable damped hips (zero vertical 60Hz matrix oscillation)
     this.skier.joints.hips.position.y = this.hipY;

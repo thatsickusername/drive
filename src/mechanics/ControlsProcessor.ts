@@ -26,6 +26,16 @@ export interface ProcessedControls {
 export class ControlsProcessor {
   public reverseTurn: boolean = false;
 
+  private readonly _result: ProcessedControls = {
+    steer: 0,
+    sharp: false,
+    slide: false,
+    jump: false,
+    brake: false,
+    stake: false,
+    slapTackle: false
+  };
+
   // Staking double-tap state
   private lastStakeTapTime: number = 999.0;
   private wasStakePressed: boolean = false;
@@ -106,14 +116,14 @@ export class ControlsProcessor {
     const outStake = rawInput.stakePole || emergentStake;
     const outTackle = rawInput.slapTackle;
 
-    return {
-      steer: outSteer,
-      sharp: outSharp,
-      slide: outSlide,
-      jump: outJump,
-      brake: outBrake,
-      stake: outStake,
-      slapTackle: outTackle
-    };
+    this._result.steer = outSteer;
+    this._result.sharp = outSharp;
+    this._result.slide = outSlide;
+    this._result.jump = outJump;
+    this._result.brake = outBrake;
+    this._result.stake = outStake;
+    this._result.slapTackle = outTackle;
+
+    return this._result;
   }
 }
