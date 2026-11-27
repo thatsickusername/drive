@@ -1,372 +1,256 @@
-Alpine Freeride — Production-Readiness Audit Report 
+# Alpine Freeride — Architectural Deepening Plan
 
-  │ Scope & Evidence Discipline: Static findings below are verified directly from the src/ TypeScript modules, package.json, index.html, and server/index.js. Live       
-  │ runtime baselines were captured via 30-second headless Playwright Chromium traces (--use-gl=angle --use-angle=d3d11, 1280×720, deviceScaleFactor: 1, Vite dev    
-  │ server, ?perf=1, single-player Day mode, summit drop + carving + jumps + canyon run). Metrics requiring real mobile GPUs, multi-peer rooms, or production dist/      
-  │ bundles are explicitly separated.
-  ──────
-  1. Detailed Performance & Rendering Audit
+> **Purpose:** Execute 5 targeted architectural deepenings derived from the codebase review.  
+> **Execution Model:** This file is written so **5 fresh agents** can each pick up **exactly one item** (`Item 1`–`Item 5`) with optimal context usage and zero wasted exploration.
 
-  Live 30-Second Baseline (Desktop Headless ANGLE/D3D11)
+---
 
-  Pre-Phase-1 baseline: 1,812 frames (30,172.1 ms wall elapsed, 0 page errors).
-  Post-Phase-1 re-measurement: 1,808 frames / 1,800 sampled (30,153.7 ms wall elapsed, 0 page errors).
-  Post-Phase-2 re-measurement: 1,800 sampled frames (0 page errors, 1280×720 ANGLE/D3D11 ?perf=1).
-  Post-Phase-3 re-measurement: 1,888 frames / 1,800 sampled (31,478.2 ms wall elapsed, 0 page errors, 1280×720 ANGLE/D3D11 ?perf=1).
+## 0. Global Rules & Shared Contracts (All 5 Agents Must Read)
 
-   Metric                                     │ Pre-Phase-1 Baseline                                         │ Post-Phase-1 Observed                                    │ Post-Phase-2 Observed                                     │ Post-Phase-3 Observed                                     │ Phase 2 → Phase 3 Delta
-  ────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────
-   Average FPS / 1% Low FPS                   │ 60.02 FPS / 48.87 FPS                                        │ 59.97 FPS / 47.51 FPS                                    │ 59.97 FPS / 49.09 FPS                                     │ 59.94 FPS / 48.14 FPS                                     │ VSync-locked ~60 FPS; max CPU frame spike cut 7.40 → 5.20 ms
-   JS CPU Frame Time                          │ avg 0.74 ms, p50 0.70 ms, p95 1.00 ms, p99 1.40 ms, max 8.00 │ avg 0.76 ms, p50 0.70 ms, p95 1.00 ms, p99 1.30 ms, max  │ avg 0.43 ms, p50 0.40 ms, p95 0.60 ms, p99 0.80 ms, max   │ avg 0.40 ms, p50 0.40 ms, p95 0.60 ms, p99 0.80 ms, max   │ -7.0% avg CPU (0.43 → 0.40 ms); max spike -29.7% (7.40 → 5.20
-                                              │ ms                                                           │ 7.50 ms                                                  │ 7.40 ms                                                   │ 5.20 ms                                                   │ ms)
-   Physics vs. Render CPU Time                │ Physics: avg 0.24 ms (p95 0.40 ms, max 6.20 ms)Render        │ Physics: avg 0.25 ms (p95 0.40 ms, max 1.50 ms)Render    │ Physics: avg 0.14 ms (p95 0.20 ms, max 1.00 ms)Render     │ Physics: avg 0.14 ms (p95 0.30 ms, max 1.20 ms)Render     │ Render avg -7.7% (0.26 → 0.24 ms); render max -29.6% (7.10 →
-                                              │ dispatch: avg 0.47 ms (p95 0.60 ms, max 7.60 ms)             │ dispatch: avg 0.47 ms (p95 0.60 ms, max 6.90 ms)         │ dispatch: avg 0.26 ms (p95 0.40 ms, max 7.10 ms)          │ dispatch: avg 0.24 ms (p95 0.40 ms, max 5.00 ms)          │ 5.00 ms via compileAsync)
-   Draw Calls (renderer.info.render.calls)    │ min 92, avg 112.9, max 124                                   │ min 85, avg 104.9, max 124                               │ min 35, avg 60.1, max 73                                  │ min 34, avg 45.9, max 69                                  │ 45.9 avg draw calls (-59.3% vs pre-Ph1)
-   Triangles (renderer.info.render.triangles) │ min 319,186, avg 529,569, max 709,330                        │ min 137,008, avg 411,831, max 709,330                    │ min 112,392, avg 156,227, max 186,528                     │ min 72,766, avg 122,572, max 170,626                      │ 122,572 avg tris/frame (-76.9% vs pre-Ph1)
-   GPU Memory (renderer.info.memory)          │ 83 geometries, 2 textures, 12 shader programs                │ 85 geometries, 2 textures, 13 shader programs            │ 81 geometries, 2 textures, 13 shader programs             │ 90 geometries, 2 textures, 12 shader programs             │ 12 shader programs pre-warmed via compileAsync
-   JS Heap (performance.memory)               │ 41.34 MB start → 43.71 MB end (min 41.28, max 49.74 MB)      │ 10.11 MB flat (gcDropsOver1MB: 0, maxGcDropMB: 0,        │ 10.11 MB flat (gcDropsOver1MB: 0, maxGcDropMB: 0,         │ 10.68 MB flat (gcDropsOver1MB: 0, maxGcDropMB: 0,         │ 0 GC drops > 1 MB; 0 GC spike frames
-                                              │ (~90 GC drops > 1 MB in 30s)                                 │ gcSpikeFrames: 0)                                        │ gcSpikeFrames: 0)                                         │ gcSpikeFrames: 0)                                         │
-   Startup (?perf=1 marks)                    │ wasmInitMs: 16.3 ms, massifBuildMs: 567.9 ms,                │ wasmInitMs: 13.9 ms, massifBuildMs: 546.2 ms,            │ wasmInitMs: 14.3 ms, massifBuildMs: 543.4 ms,             │ wasmInitMs: 17.6 ms, massifBuildMs: 14.9 ms (main thread),│ Main-thread massifBuildMs -97.3% (543.4 → 14.9 ms; 15.3 ms in
-                                              │ timeToFirstFrameMs: 1,081.6 ms                               │ timeToFirstFrameMs: 997.9 ms                             │ timeToFirstFrameMs: 953.2 ms                              │ timeToFirstFrameMs: 988.0 ms                              │ prod dist/); workerized + compileAsync behind BootOverlay
+### Operating Guardrails (`AGENTS.md`)
+- Never inspect `node_modules/`, `dist/`, `build/`, `.git/`, `.cache/`, logs, or binary assets.
+- Never read a file `> 100` lines in full; read targeted `<= 100`-line ranges.
+- Max 2 shell commands per interaction loop; pipe verbose output (`| Select-Object -First 25`).
+- Do **not** run full slow suites unconditionally; verify TypeScript (`npx tsc --noEmit`), build (`npm run build`), and targeted checks after your final edit.
+- Preserve **zero per-frame heap allocations** in hot loops (`Game.loop`, `fixedUpdate`, `renderUpdate`, `RemoteSkier.update`, `CarvedSnowTrail.update`, `SnowSpraySystem.update`, `VerletRagdoll.stepSimulation`).
+- Preserve all invariants in `PROJECT.md` §7 (Heightfield `r * V + c` indexing, C1/C2 terrain continuity, snow coverage, pre-allocated `Float32Array` buffers).
+- Preserve all runtime assertions in `tests/regression.mjs` unless explicitly noted in your item's section (notably DOM IDs `#hud`, `#lighting-toggle-container`, `#camera-tuner-toggle-btn`, `#camera-tuner-panel`, `#boot-overlay`, `#webgl-context-lost-banner`, `window.game`, `window.getPerfReport()`, `massifBuildMs < 100`, `WEBGL_lose_context` recovery, and `Game.dispose()` teardown).
 
-  Requires additional live profiling (not covered by this desktop trace):
+### Design Vocabulary (`codebase-design` / `improve-codebase-architecture`)
+Use exact terms in code comments, docstrings, and PR notes: **module**, **interface**, **implementation**, **depth**, **deep**, **shallow**, **seam**, **adapter**, **leverage**, **locality**.
 
-  • Real mobile GPU fragment/fill-rate cost (desktop D3D11 hides pixel-shader bottlenecks).
-  • Multiplayer draw-call & bandwidth scaling with 4–16+ active peers.
-  • Sunset/Sunrise transition frames (where Renderer.applyLightingLerp runs every frame).
-  • Production gzip/brotli dist/ download + parse time over throttled 4G.
-  ──────
-  1.1 Draw Calls & Batching
+### Cross-Agent Ownership & Integration Matrix
 
-  • 75-mesh skier character (SkierRig.ts): buildSkierCharacter (src/player/character/SkierRig.ts:355-703) builds 75 separate THREE.Mesh objects (~74 visible
-  simultaneously due to twintip/flat tail visibility toggle in src/player/character/SkierGeometry.ts:219-228), every one marked castShadow = true and receiveShadow =    
-  true (src/player/character/SkierRig.ts:371-375):
-      • The beanie pom-pom alone is 9 draw calls (pomBase + 8 tuftOffsets meshes at src/player/character/SkierRig.ts:468-487).
-      • Each ski pole is 5 meshes (src/player/character/SkierRig.ts:567-586); each ski is 6 visible meshes (src/player/character/SkierGeometry.ts:206-238); each boot    
-      has 7 meshes including 4 separate strap-half boxes (src/player/character/SkierRig.ts:627-653).
-      • This single character consumes ~74 of the observed 92–124 draw calls (and casts shadows in the shadow pass). In multiplayer
-      (src/network/RemoteSkier.ts:113-121), 7 visible skiers alone exceed the 500-draw-call desktop budget (~518 character meshes before shadow pass, terrain, trees,    
-      and trails).
-  • Terrain & Vegetation (AlpineMassif.ts): Terrain uses a 6×6 chunk grid (36 meshes, shared terrainMaterial, matrixAutoUpdate = false at
-  src/world/AlpineMassif.ts:252-258). Pines use InstancedMesh partitioned into up to 36 chunk buckets (cz <= 0 cast shadows, src/world/AlpineMassif.ts:500-523), which   
-  is well-structured.
-  • Per-Trail Material Duplication (CarvedSnowTrail.ts:92): Every CarvedSnowTrail (local + every RemoteSkier) calls createSnowTrailMaterial(), instantiating a
-  separate MeshStandardMaterial and onBeforeCompile uniform closure instead of sharing one material.
+| Item | Primary Deepened Module | Files Owned / Deleted | Shared Files Touched (Respect Exact Seam!) |
+| :--- | :--- | :--- | :--- |
+| **Item 1** | `src/player/SkierPresentation.ts` | **Delete:** `src/player/SkierEffects.ts`, `src/player/SkierVisualHelpers.ts` | `src/player/SkierController.ts` (visual/effects sections), `src/network/RemoteSkier.ts` (rig/trail/spray/ragdoll-pose sections) |
+| **Item 2** | `src/network/MultiplayerProtocol.ts`, `src/network/SnapshotInterpolator.ts`, `src/network/Transport.ts` | **Edit:** `src/network/NetworkManager.ts`, `server/index.js` | `src/network/RemoteSkier.ts` (packet decode + ring buffer interpolation), `src/core/Game.ts` (trick/respawn event hookup) |
+| **Item 3** | `src/mechanics/SkierSimulation.ts` (or deepened `GmaPlayerPhysics`) | **Delete/Absorb:** `src/mechanics/ControlsProcessor.ts` into `SkierSimulation` | `src/core/InputController.ts`, `src/player/SkierController.ts` (input mapping & physics state fields), `tests/regression.mjs` (blur check if surface changes) |
+| **Item 4** | `src/mechanics/TrickScoring.ts`, `src/world/MountainZones.ts`, `src/ui/ContextLostBanner.ts` | **Edit:** `src/ui/HudOverlay.ts`, `src/camera/CameraDirector.ts` | `src/player/SkierController.ts` (`trickEngine` removal, snapshot getters), `src/core/Game.ts` (camera call, HUD/banner lifecycle) |
+| **Item 5** | `src/world/shaders/WorldLighting.ts` (or `Renderer`-owned uniform/texture controller) | **Edit:** `src/world/shaders/DetailTexture.ts`, `SnowTrailMaterial.ts`, `SnowMaterial.ts`, `src/world/AlpineMassif.ts`, `src/core/Renderer.ts` | `src/core/Game.ts` (remove global texture/trail calls & `_networkLightingParams`), `src/player/SkierController.ts` (`updateTrailLighting`), `src/network/NetworkManager.ts` (unused param) |
 
-  1.2 Game Loop & Frame Pacing
+> **Parallelism Note:** If running sequentially, merge in order **Item 1 → Item 3 → Item 4 → Item 2 → Item 5**. If running in parallel branches, follow the exact seam interfaces specified inside each Item below so merges only touch non-overlapping sections of `SkierController.ts`, `RemoteSkier.ts`, and `Game.ts`.
 
-  • Fixed Timestep Without Render Interpolation (PhysicsEngine.ts, Game.ts):
-      • Game.loop clamps delta to 0.1s, and PhysicsEngine.step accumulates at 1/60s (maxSubSteps = 5, discarding overflow). Inside each 60 Hz tick,
-      GmaPlayerPhysics.update runs its own 0.003s (333.3 Hz) sub-accumulator.
-      • However, PhysicsEngine.getInterpolationAlpha is never called. SkierController.renderUpdate snaps root.position directly to the latest discrete 60 Hz physics     
-      step. On 120 Hz/144 Hz displays or variable frame pacing (wallDeltaMs ranged up to 35.8 ms in trace), this produces beat-frequency micro-judder.
-  • Duplicate trickScoring.updateDisplay(dt) Call (SkierController.ts:789-790): this.gmaPhysics.trickScoring.updateDisplay(dt) is called on two consecutive lines,       
-  causing trick banner timers to expire at 2× speed.
-  • Independent Clock in Input (InputController.ts:162-164): getBoarderInputs() computes inputDt via its own performance.now() call instead of using the frame delta,    
-  decoupling keyboard steering ramp rates from game loop time.
-  • Redundant World-Matrix Traversals & DOM Writes in Render Loop:
-      • src/player/SkierController.ts:731 and src/network/RemoteSkier.ts:431 call updateMatrixWorld(true) across the entire character hierarchy every frame,
-      duplicating Three.js's render-pass matrix update.
-      • RemoteSkier.ts:493, 509-514 reads window.innerWidth/innerHeight, calls document.getElementById, and mutates style.left / style.top every frame per visible       
-      remote skier (triggering layout/paint invalidation instead of GPU-composited transform: translate3d(...)).
-      • src/ui/HudOverlay.ts:76, src/ui/LightingControls.ts:35, and CameraTunerOverlay.ts:37,72 use backdrop-filter: blur(...) over an active 60 FPS WebGL canvas        
-      (expensive compositor readback on mobile/integrated GPUs).
+---
 
+## Item 1: Collapse Skier Presentation into One Deep Module
 
-  1.3 CPU & Garbage Collection (GC) Pressure
+- **Target Depth:** Turn duplicated local/remote visual wiring plus two shallow helpers (`SkierEffects`, `SkierVisualHelpers`) into one deep **`SkierPresentation`** module.
+- **Dependency Category:** `in-process` (Three.js scene graph + terrain sampler callback) with optional `SnowAudio` adapter for the local player only.
+- **Files to Read (Targeted Ranges Only):**
+  - `src/player/SkierEffects.ts` (lines 1–167)
+  - `src/player/SkierVisualHelpers.ts` (lines 1–116)
+  - `src/player/SkierController.ts` (lines 143–171, 231–316, 480–499, 580–789)
+  - `src/network/RemoteSkier.ts` (lines 62–198, 391–534, 619–662)
 
-  Observed 90 minor GC drops > 1 MB over 30 seconds even during static Day lighting. Confirmed hot-path allocations:
+### Problem
+`SkierController` and `RemoteSkier` duplicate the entire visual presentation stack (`buildSkierCharacter`, `SkierAnimator`, `CarvedSnowTrail`, `SnowSpraySystem`, `updateSkierFootGrounding`, `applyRagdollPose`, crash/jump/respawn trail gaps, and LOD shadow toggling). Meanwhile, `SkierEffects` (167 lines, 19-field `SkierEffectsFrameInput`) and `SkierVisualHelpers` (`updateSkierFootGrounding` with 10 positional args, `emitSkierSnowSpray` with 15 positional args) are shallow pass-through modules used inconsistently (`SkierController.ts:312` sets rig Y to `-sphereRadius + 0.02` vs `RemoteSkier.ts:172` `-0.45 + 0.016`; `RemoteSkier.ts:639` hardcodes `34.0` slip angle).
 
-  • Renderer.applyLightingLerp (Renderer.ts:184,187,194,211,214,221): Allocates 4 new THREE.Color(...) instances per call every frame during Sunset (2 min) and
-  Sunrise (2 min) transitions or manual lighting lerps.
-  • CarvedSnowTrail.update (src/world/trails/CarvedSnowTrail.ts:418-493): Allocates a 19-element object-literal array (const nodes = [ { ... }, ... ]) every 0.20 m of   
-  travel (~2–3× per frame at high speed), shifts ~273 KB via copyWithin across basePositions/baseAlphas/normals/uvs, scans/rebuilds the entire index buffer
-  (rebuildIndexBuffer, lines 247–291) whenever hasActiveGaps is true, and calls notifyGeometryUpdate() (src/world/trails/CarvedSnowTrail.ts:577-584) uploading 0..       
-  activeVerts (up to 22,800 vertices) rather than just the newly written slice.
-  • SkierController.updateSnowSpray & trickEngine (SkierController.ts:81-96, 851-917): Line 888 allocates [outsideSkiSign, -outsideSkiSign] up to 10× per frame (~600    
-  arrays/sec) while running an O(emitRate × 420) linear scan per frame; get trickEngine() allocates a wrapper object with 9 getters/setters whenever accessed.
-  • Game.loop & Telemetry (src/core/Game.ts:296-324, src/core/Telemetry.ts:108-123): Allocates a parameter object every frame for networkManager.update(...), plus 3     
-  objects + samples.shift() (O(n) array shift) per frame when ?perf=1 is enabled.
-  • RemoteSkier (RemoteSkier.ts:211,229,245,406): Allocates new THREE.Quaternion, new THREE.Vector3, snapshot object + snapshots.shift() at 20 Hz per peer, plus a new   
-  SkierAnimParams object literal every frame per visible peer.
-  • Ragdoll Terrain Sampling (VerletRagdoll.ts:319-417): During crashes, satisfyConstraints runs 8 iterations, calling resolveGroundCollisions on every iteration (21    
-  particles × 1 terrainSampler on passes 0..6 + 5 terrainSampler finite-difference calls on pass 7 = 252 sampleHeightQuick simplex-noise calls per 50 Hz ragdoll step,   
-  plus initializeSkeleton allocating ~50 Vector3s on crash entry at src/mechanics/VerletRagdoll.ts:83-155).
+### Required Changes
+1. **Create `src/player/SkierPresentation.ts`:**
+   - Define `SkierPresentationOptions`:
+     ```ts
+     export interface SkierPresentationOptions {
+       scene: THREE.Scene;
+       paletteKey: string;
+       sphereRadius: number;
+       sprayParticleCount: number; // 900 local, 140 remote
+       enableAudio?: boolean;      // true for local player, false for remote
+       castShadow?: boolean;
+       terrainSampler?: ((x: number, z: number) => number) | null;
+     }
+     ```
+   - Define a single reusable, zero-allocation `SkierPresentationFrame` input object populated by callers (`dt`, `position`, `visualQuaternion` or `yaw`+`normal`+`airPitch`+`airRoll`, `speed`, `vLateral`, `leanAngle`, `steerX`, `slipAngleDeg`, `gripUtilization`, `isGrounded`, `isCrashing`, `isDrifting`, `isSlashing`, `isSlideTurn`, `isSharpTurn`, `isStaking`, `isTucking`, `isGliding`, `airTime`, `inputLeft`, `inputRight`, `jumpPressed`, `grabPressed`, `jumpVariation`, `isSpinning`, `spinProgress`, `spinDirection`, `spinRate`, `isFrontFlipping`, `isBackFlipping`, `flipProgress`, `flipRate`, `ragdollPoints`, `snowDepthPos`).
+   - Move **inside** `SkierPresentation` (private implementation details, never exposed):
+     - `rig: SkierCharacter` (`buildSkierCharacter`, normalized vertical offset `-sphereRadius + 0.016`, `setPalette`, `setSportVisuals`, `resetPose`).
+     - `animator: SkierAnimator` (including `pickRandomJumpVariation`, `setJumpVariation`, `activeJumpVariation`, `isFrontFlippingActive`, `isBackFlippingActive`, and wiring `animator.onPolePlantAudio` directly to `SnowAudio` when `enableAudio` is true).
+     - `trail: CarvedSnowTrail` and `snowSpray: SnowSpraySystem` (including `emitCrashBurst`, `setVisible` / `wasTrailCulled` LOD handling, and unified `sprayLean` math currently in `SkierEffects.ts:107-113`).
+     - `SnowAudio` (instantiated and listener-bound only when `enableAudio === true`; never created for remote peers).
+     - Internal helper functions absorbed from `SkierVisualHelpers.ts` (`syncLocalMatrixWorld`, foot grounding clearance damping, and populating internal `_sprayParams` directly without 15-arg forwarding).
+     - Internal state-edge handling for `isCrashing` (`onCrash` / `onRespawn` / `resetPose` / `applyRagdollPose`), `jumpTriggered` (`onJumpStart`), and `setShadowsEnabled(enabled: boolean)` (replacing `RemoteSkier.ts:428-436` traversal).
+   - Expose a small public interface on `SkierPresentation`:
+     - `readonly root: THREE.Group` (actor root in scene, or attached under `SkierController.root` / `RemoteSkier.root`)
+     - `readonly visualRoot: THREE.Group` (for `SkierController.visualQuaternion` / `visualMesh`)
+     - `setPalette(key: string)`, `setSportVisuals(isSnowboard: boolean, hasTwintips: boolean)`
+     - `setTerrainSampler(sampler)`, `setVisible(visible: boolean)`, `setShadowsEnabled(enabled: boolean)`
+     - `triggerJump(grabHeld: boolean)` / `triggerCrash()` / `triggerRespawn()` / `playLandThump(clean: boolean)` / `updateLighting(sunColor?: THREE.Color)`
+     - `update(frame: SkierPresentationFrame, renderAnim?: boolean)` — updates orientation/ragdoll pose, animator, foot grounding, snow spray, trail ribbon, and audio.
+     - `reset(position: THREE.Vector3, yaw: number)` and `dispose()`.
+2. **Refactor `src/player/SkierController.ts`:**
+   - Replace `skierCharacter`, `animator`, `effects`, `groundClearanceOffset`, `wasCrashing`, `wasCrashingPhysics`, and lines `580-725` + `769-778` with a single `private readonly presentation: SkierPresentation` (or `public readonly presentation`).
+   - Preserve `SkierController` public getters needed by other modules (`mesh`, `visualMesh`, `visualQuaternion`, `skierCharacter` / `animator` delegates only if needed until Item 4 lands, `setTerrainSampler`, `updateSportVisuals`, `updateTrailLighting`, `dispose`).
+3. **Refactor `src/network/RemoteSkier.ts`:**
+   - Replace `skierRig`, `animator`, `trail`, `snowSpray`, `_sprayParams`, `_animParams`, `groundClearanceOffset`, `wasCrashing`, `shadowsEnabled`, and lines `396-533` + `619-646` with `private readonly presentation: SkierPresentation` (`sprayParticleCount: 140`, `enableAudio: false`).
+   - Keep snapshot interpolation, LOD distance checks (`600m` / `280m` / `60m`), and name/trick DOM tag projection inside `RemoteSkier` (note: Item 2 will extract snapshot interpolation separately).
+4. **Delete Shallow Modules:**
+   - Delete `src/player/SkierEffects.ts` and `src/player/SkierVisualHelpers.ts` (verify zero remaining imports across `src/`).
 
-  1.4 GPU, Shaders & Lighting
+### Verification
+- Run `npx tsc --noEmit && npm run build` (must pass with 0 errors).
+- Run `node tests/regression.mjs` (or verify startup + teardown with 0 page errors).
+- Add a focused Node test (`tests/presentation.test.mjs` using `node:test`) verifying `SkierPresentation` with a mock/headless `THREE.Scene` handles `triggerCrash` -> `reset` -> `triggerJump` -> `dispose` without throwing or leaving trail/mesh orphans.
 
-  • Shadow Map (Renderer.ts:111-120): 2048×2048 PCFSoftShadowMap updated every frame across a 200m × 200m orthographic frustum (shadowD = 100), with no mobile quality   
-  downgrade (1024×1024 / PCFShadowMap).
-  • Dynamic Lights (Renderer.ts:108-131): 2 DirectionalLights (dirLight with shadows, fillLight unshadowed) + 1 HemisphereLight. Count is reasonable, though fillLight   
-  could be folded into hemisphere/ambient shading on low-end tiers.
-  • Expensive Terrain & Trail Shaders:
-      • src/world/shaders/SnowMaterial.ts:135-284 injects 3 texture2D(uDetailTex) lookups, procedural noise2D calls, SSS, Fresnel rim, and 2 octaves of hash33
-      microfacet sparkle into MeshStandardMaterial for every terrain pixel. Notice shadowFactor > 0.001 gates sparkle, and gDistToCam fades micro/meso/macro terms,      
-      but texture2D taps (gDMicro, gDMeso, dMacro) execute unconditionally for every fragment out to 3000m!
-      • SnowTrailMaterial.ts:28-33, 121-283 uses transparent: true, depthWrite: true, side: THREE.DoubleSide, dFdx/dFdy screen-space derivatives, and fragment discard,  
-      disabling GPU early-Z optimization over large screen-space ribbons.
-  • Depth Precision (Renderer.ts:90-91, CameraDirector.ts:63-64): Renderer sets near: 0.1, far: 3000 (30,000:1); CameraDirector overrides to near: 0.2
-  (GMACameraConfig.nearFar[0], despite comment // 5.0m) and far: 3000.0 (15,000:1), degrading depth precision at mid/far distances and forcing polygonOffsetFactor: -    
-  3.0 on snow trails.
-  • DPR & MSAA (Renderer.ts:97, 101): antialias: true combined with setPixelRatio(Math.min(window.devicePixelRatio, 2)) forces 4× fragment load + MSAA on
-  Retina/mobile devices with no resolution scaling or adaptive DPR.
+---
 
-  1.5 Memory & Asset Lifecycle
+## Item 2: Unify Binary Protocol and Snapshot Sync Behind a Transport Seam
 
-  • Leaked Character Geometries & Materials on Dispose:
-      • SkierController.dispose and RemoteSkier.dispose remove this.root from the scene but never dispose character geometries or materials. Specifically,
-      addInstepStrap (src/player/character/SkierRig.ts:637-653) creates 4 uncached new THREE.BoxGeometry(...) instances per skier that leak on every peer disconnect     
-      (RemoteSkier) or game teardown.
-      • AlpineMassif.dispose removes treeMeshes without calling treeMesh.dispose() (InstancedMesh GPU attribute cleanup), and terrainMaterial.dispose() does not
-      dispose the module-cached 1024×1024 cachedSnowDetailTexture (DetailTexture.ts:16, 185).
-  • Broken Spray Particle Bounds (SkierController.ts:265-285, RemoteSkier.ts:145-160): Both initialize all particle Y coordinates to -9999 without frustumCulled =       
-  false, DynamicDrawUsage, or updating computeBoundingSphere(). Three.js computes a bounding sphere around (0, -9999, 0) with radius 0, causing sprayParticles to be     
-  frustum-culled whenever (0, -9999, 0) is off-screen! Also SkierController.ts:934 marks position.needsUpdate = true every frame even when 0 particles are active.       
-  • Culled RemoteSkier Leaves Trail Mesh Visible (RemoteSkier.ts:384-390): When a remote skier is > 600 m away (isBeyondFar), root.visible and sprayParticles.visible    
-  are set to false, but this.trail remains visible and rendered.
-  • Uncompressed 1024×1024 Texture & Zero LODs: DetailTexture.ts uploads an uncompressed 1024×1024 RGBA8 DataTexture (~5.3 MB VRAM with mipmaps). Terrain (100×100       
-  segments × 36 = 748,800 triangles), pine trees (3 cones + trunk per instance), and local skier have zero LODs.
-  • Duplicate Unused Dependency (package.json:15-16): Both @dimforge/rapier3d (^0.14.0) and @dimforge/rapier3d-compat (^0.21.0) are declared in dependencies; only -     
-  compat is used in src/.
+- **Target Depth:** Consolidate the 28-byte binary protocol, enum tables, and 30-slot snapshot interpolation into deep **in-process** modules, and isolate WebSocket transport behind a two-adapter seam (`WebSocketTransport` in prod, `InMemoryTransport` in tests).
+- **Dependency Category:** `ports & adapters` (transport) + `in-process` (binary codec & snapshot ring buffer).
+- **Files to Read (Targeted Ranges Only):**
+  - `src/network/NetworkManager.ts` (lines 1–314, in <=100-line chunks)
+  - `src/network/RemoteSkier.ts` (lines 10–95, 228–390, 564–617)
+  - `server/index.js` (lines 14–16, 151–327)
 
-  1.6 Loading & Startup Cost
+### Problem
+The 28-byte packet layout and bitpacking leak across three files (`NetworkManager.ts`, `RemoteSkier.ts`, `server/index.js`), already exhibiting bitmask drift (`NetworkManager.ts:265` writes `paletteId & 0x03`, `NetworkManager.ts:172` reads `view.getUint8(26) & 0x0f`, `RemoteSkier.ts:255` reads `stylePacked & 0x03`). `PALETTE_KEYS`/`PALETTE_NAMES` and `JUMP_VARIATIONS`/`JUMP_VARIATION_MAP` are duplicated 3×. `NetworkManager.update()` (`lines 208-220`) polls `scoring.displayTimer > 2.0` to infer trick landings, and `server/index.js:288-299` relays `'respawn'` messages that the client ignores. Direct `new WebSocket(...)` usage makes multiplayer untestable without a live server and browser.
 
-  • Observed Timings: navDomInteractiveMs: 9.2 ms, navLoadMs: 139.5 ms, wasmInitMs: 16.3 ms, massifBuildMs: 567.9 ms, timeToFirstFrameMs: 1,081.6 ms.
-  • Main-Thread Synchronous Stalls:
-      1. massifBuildMs (567.9 ms) blocks the UI thread inside new AlpineMassif(...) (src/core/Game.ts:94-98):
-          • src/world/shaders/DetailTexture.ts:18-186 computes 2 octaves of 3×3 Voronoi + periodic noise over 1,048,576 pixels synchronously (~19M+ math ops).
-          • src/world/AlpineMassif.ts:79-279 evaluates sampleHeightQuick 36 × 103 × 103 = 381,924 times synchronously and builds 36 Rapier heightfields.
-          • src/world/AlpineMassif.ts:362-524 runs ~1,200+ sampleTerrain calls (5× sampleHeightQuick each) synchronously.
-      2. Remaining ~497 ms before first frame is spent synchronously building the 75-mesh skier, allocating CarvedSnowTrail buffers, and compiling 12 WebGL shader       
-      programs on the first renderer.render() call without renderer.compileAsync().
-  • Production Server (server/index.js:37-134): Good in-memory caching + async Brotli/Gzip + immutable cache headers for /assets/, though fs.existsSync/fs.statSync      
-  are synchronous on each request path check.
-  ──────
-  2. Production Quality Scorecard
+### Required Changes
+1. **Create `src/network/MultiplayerProtocol.ts` (shared pure codec + message schema):**
+   - Canonical constants: `PACKET_BYTE_LENGTH = 28`, `PALETTE_KEYS = ['coral', 'ochre', 'glacier', 'pine'] as const`, `JUMP_VARIATIONS = ['jump', 'grab', 'shifty', 'daffy', 'mutegrab', 'ironcross', 'nordic'] as const`, and `NET_MOVEMENT_STATE` / `NET_TURN_TYPE` mappings.
+   - Define `LocalPlayerPacketInput` (flat primitive/vector snapshot—no `SkierController` or `GmaPlayerPhysics` dependency) and `DecodedPlayerPacket`.
+   - Implement `encodePlayerPacket(input: LocalPlayerPacketInput, outView: DataView): void` and `decodePlayerPacket(view: DataView, out: DecodedPlayerPacket): boolean` (zero heap allocation; consistently mask `paletteId` with `0x03` everywhere, validate `byteLength >= 28` and finite numbers).
+   - Define typed discriminated union `ServerControlMessage` / `ClientControlMessage` (`init`, `peer_joined`, `peer_left`, `trick` / `peer_trick`, `respawn` / `peer_respawn`, `room_full`) and `parseControlMessage(raw: string): ServerControlMessage | null`.
+2. **Create `src/network/SnapshotInterpolator.ts` (pure in-process ring buffer):**
+   - Move the 30-slot `snapshotPool`, `pushSnapshot`, adaptive clock resync, teleport threshold (`> 225` m²), lerp/slerp interpolation, and `processSnapshotTransitions` (crash / jump / teleport edge events) out of `RemoteSkier.ts` into `SnapshotInterpolator`.
+   - Zero heap allocations on `push()` and `sample(dt)` (writes into caller-owned/internal reusable `InterpolatedState` + transition flags `{ teleported, crashed, jumped }`).
+   - Completely independent of Three.js DOM/Scene/WebGL (can import `THREE.Vector3` / `THREE.Quaternion` math or pure math structs so it runs directly in Node tests!).
+3. **Create `src/network/Transport.ts` (Ports & Adapters seam):**
+   - Define `MultiplayerTransport` interface:
+     - `connect(url: string): void`, `disconnect(): void`, `sendBinary(buf: ArrayBuffer): void`, `sendText(text: string): void`, `isOpen(): boolean`
+     - Callbacks: `onOpen`, `onClose`, `onBinary(data: ArrayBuffer)`, `onText(data: string)`.
+   - Implement `WebSocketTransport` (wraps browser `WebSocket`, `binaryType = 'arraybuffer'`).
+   - Implement `InMemoryTransport` (connects two or more peers or a test relay in-process for deterministic multi-peer testing).
+4. **Refactor `src/network/NetworkManager.ts` & `src/network/RemoteSkier.ts`:**
+   - `NetworkManager` accepts an optional `MultiplayerTransport` (defaulting to `new WebSocketTransport()`) and a narrow `LocalSkierNetSource` interface (providing position, visual quaternion, speed, leanAngle, turnType, movementState, jumpVariation, sport, hasTwintips, action flags, `setPalette`, plus a discrete trick-landed / respawn signal—**stop polling `displayTimer`**!).
+   - Wire `peer_respawn` handling (`NetworkManager` sends `'respawn'` on `player` respawn if desired and snaps remote peer on `peer_respawn`).
+   - `RemoteSkier` delegates binary decoding to `decodePlayerPacket` and ring-buffer math to `SnapshotInterpolator`, keeping only scene presentation + overhead nametag DOM.
+5. **Sync `server/index.js`:**
+   - Ensure `PALETTE_NAMES` / `MAX_SLOTS` / byte `0` client ID stamping match `MultiplayerProtocol.ts` (document shared 28B contract or import a shared JS/JSON constants module if compatible with `node server/index.js` without build step).
 
-   Metric           │ Score (/10) │ Key Evidence & Justification
-  ──────────────────┼─────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   
-   Optimization     │   9 / 10    │ Slot-aware rig merging (22–25 meshes), 3-tier terrain & 2-tier pine LODs, ring-buffered CarvedSnowTrail with shared FrontSide material,
-                    │             │ SnowMaterial LOD texture gating, workerized massif/DetailTexture synthesis, Low/Medium/High quality tiers, and translate3d nametags.
-   Performance      │   9 / 10    │ 59.94 avg FPS, 0.40 ms avg CPU frame time (0.80 ms p99, 5.20 ms max), 0.14 ms avg physics, 0.24 ms avg render dispatch, 45.9 avg draw
-                    │             │ calls, 122,572 avg tris, 0 GC drops > 1 MB, and 14.9 ms main-thread massifBuildMs (15.3 ms in prod dist/). Awaits real mobile GPU validation.
-   Code Quality     │   8 / 10    │ tsconfig.json strict: true, shared SkierVisualHelpers & massifBuilder, clean ring buffers, SkierEffects/SkierController split, and
-                    │             │ consolidated UI overlay CSS/markup.
-   Refactoring Need │   8 / 10    │ Eliminated duplicated terrain/pine builder, foot-clamping, snow-spray, and #hud markup; extracted SkierEffects and BootOverlay; CameraDirector
-                    │             │ remains modular within its camera-mode boundary.
-   Maintainability  │   8 / 10    │ Logical folder taxonomy, shared SkierVisualHelpers, slot-modular SkierRig, worker-safe massifBuilder & detailTextureData, centralized
-                    │             │ QualitySettings, and automated Playwright regression checks (tests/regression.mjs).
-   Robustness       │   9 / 10    │ Zero leaked geometries/programs across 10-peer churn, full Game.dispose() DOM & WebGL teardown, window.blur/visibilitychange guards,
-                    │             │ webglcontextlost/webglcontextrestored recovery, and Low/Medium/High quality tiers verified in headless Chromium.
-  ──────
-  3. Critical Bottlenecks & Code Smells
+### Verification
+- Write `tests/multiplayer.test.mjs` (`node:test`) testing:
+  1. `encodePlayerPacket` <-> `decodePlayerPacket` roundtrip across all 4 palettes, 7 jump variations, snowboard toggle, and all 8 action bitflags.
+  2. `SnapshotInterpolator` interpolation, teleport discontinuity (`> 15m`), and crash/jump edge detection across skipped snapshots.
+  3. Two `NetworkManager` / session instances communicating over `InMemoryTransport` (join, binary broadcast, trick event, peer leave) with zero browser/WebGL dependencies.
+- Run `npx tsc --noEmit && npm run build` and `node --test tests/multiplayer.test.mjs`.
 
-  1. [Severity: P0] [FIXED IN PHASE 2] 75-Mesh Skier Rig Draw Call Explosion
-      • Location: src/player/character/SkierRig.ts, src/player/character/SkierGeometry.ts, src/network/RemoteSkier.ts
-      • Status: Fixed via slot-aware per-bone merging (75 → 22–25 meshes per skier, keeping headwear/goggles/jacket/pants/poles/skis independently swappable), cached merged ski/headwear geometries, disabled receiveShadow on character meshes, and 60 m castShadow culling on RemoteSkier. Single-player draw calls dropped to 60.1 avg (min 35, max 73); 11 visible skiers in scene rendered at 285–301 draw calls.
-  2. [Severity: P0] [FIXED IN PHASE 2] Unbounded Terrain Triangles & Missing LODs (530k Avg / 709k Max Tris/Frame)
-      • Location: src/world/AlpineMassif.ts, src/core/Game.ts
-      • Status: Fixed via 3-tier THREE.LOD terrain chunks (100×100 @ 0m, 50×50 @ 480m, 25×25 @ 950m with 45m perimeter skirts and unchanged 101×101 Rapier heightfields) and 2-tier InstancedMesh pine LODs switching at 450m while sharing instanceMatrix buffers. Average triangles dropped from 411,831 (Ph1) to 156,227 (-62.1%).
-  3. [Severity: P0] [FIXED IN PHASE 3] Missing webglcontextlost Recovery & Input Stickiness on Window Blur
-      • Location: src/core/Renderer.ts, src/core/InputController.ts, src/core/Game.ts
-      • Status: window.blur input reset, e.repeat hotkey guards, and gamepad D-pad edge-detection fixed in Phase 1. Phase 3 added webglcontextlost/webglcontextrestored handling (loop pause, accumulator/input reset, recovery banner, detail-texture refresh, and compileAsync re-warm) verified via WEBGL_lose_context Playwright simulation.
-  4. [Severity: P1] [FIXED IN PHASE 2] CarvedSnowTrail Shifts 273 KB & Uploads Full Buffer Instead of Ring Buffer
-      • Location: src/world/trails/CarvedSnowTrail.ts, src/world/shaders/SnowTrailMaterial.ts, src/core/Game.ts
-      • Status: Fixed via true circular ring buffer (headSlot / segCount, pre-allocated 19-node typed arrays, O(1) index slot seam/gap updates, slice-scoped addUpdateRange uploads) and singleton SnowTrailMaterial updated once per frame.
-  5. [Severity: P1] [FIXED IN PHASE 3] Synchronous 543–568 ms Startup Stall (DetailTexture + AlpineMassif)
-      • Location: src/world/shaders/detailTextureData.ts, src/world/massifBuilder.ts, src/world/massifWorker.ts, src/world/AlpineMassif.ts, src/core/Game.ts
-      • Status: Fixed by moving DetailTexture synthesis and 36-chunk heightfield/LOD/skirt/pine generation into massifWorker.ts (zero-copy ArrayBuffer transfer), mounting the spawn chunk first with batched collider uploads, and pre-warming shaders via renderer.compileAsync() behind BootOverlay. Main-thread massifBuildMs dropped from 543.4 ms to 14.9 ms (15.3 ms in prod dist/).
-  6. [Severity: P1] [FIXED IN PHASE 2] Hot-Path GC Pressure (90 Heap Drops > 1 MB in 30s)
-      • Location: src/core/Renderer.ts, src/player/SkierController.ts, src/core/Game.ts, src/network/RemoteSkier.ts
-      • Status: Phase 1 eliminated local hot-path drops (0 drops > 1 MB); Phase 2 completed the remaining RemoteSkier 30-slot ring snapshot pool and pre-allocated _animParams.
-  7. [Severity: P1] [FIXED IN PHASE 2] Double trickScoring.updateDisplay(dt) & Missing Physics Interpolation
-      • Location: src/player/SkierController.ts, src/core/PhysicsEngine.ts, src/core/Game.ts
-      • Status: Duplicate updateDisplay(dt) removed in Phase 1; PhysicsEngine.getInterpolationAlpha() wired into Game.loop and SkierController.renderUpdate with snapInterpolationState() on reset/spawn in Phase 2.
-  8. [Severity: P1] [FIXED IN PHASE 1] Broken sprayParticles Frustum Culling & O(N²) Particle Scan
-      • Location: src/world/trails/SnowSpraySystem.ts, src/player/SkierVisualHelpers.ts, src/player/SkierController.ts, src/network/RemoteSkier.ts
-      • Status: Fixed via shared SnowSpraySystem (Phase 1) and shared emitSkierSnowSpray helper (Phase 2).
-  9. [Severity: P2] [FIXED IN PHASE 2] Incomplete dispose() Cleanup & Culled RemoteSkier Trail
-      • Location: src/player/character/SkierRig.ts, src/player/SkierController.ts, src/network/RemoteSkier.ts, src/world/AlpineMassif.ts
-      • Status: RemoteSkier.trail culling fixed in Phase 1; Phase 2 eliminated strap BoxGeometry leaks, added disposeCharacter(), and added full LOD/InstancedMesh cleanup in AlpineMassif.dispose() (0 leaked geometries/programs across 10-peer churn).
-  10. [Severity: P2] [FIXED IN PHASE 2] Unconditional Multi-Tap Snow Fragment Shader, DoubleSide Alpha-Discard Trails, & 15,000:1 Depth Ratio
-      • Location: src/world/shaders/SnowMaterial.ts, src/world/shaders/SnowTrailMaterial.ts, src/camera/CameraDirector.ts, src/world/environment/SkyDome.ts
-      • Status: Camera frustum tightened to 3,600:1 in Phase 1; Phase 2 gated SnowMaterial texture2D(uDetailTex) taps & pGroomed by LOD fade weights and switched SnowTrailMaterial to THREE.FrontSide, depthWrite: false, and removed fragment discard.
+---
 
-  ──────
-  4. Runtime Telemetry Spec [IMPLEMENTED in src/core/Telemetry.ts]
+## Item 3: Consolidate Controls, Gestures, and Physics into One Simulation Module
 
-  Replaced the original FrameMetrics[] / .shift() implementation in src/core/Telemetry.ts with zero-allocation Float32Array circular ring buffers (1,800 slots),
-  recordFramePrimitives(...), wall-clock avgFps / onePctLowFps, and gcDropsOver1MB / maxGcDropMB / gcSpikeFrames while preserving PerfReport compatibility for vision/capture.mjs.
+- **Target Depth:** Collapse the 4-stop input-to-physics pipeline (`UnifiedInputController` -> `SkierController` translation -> `ControlsProcessor` -> `GmaPlayerPhysics`) into a thin hardware `InputAdapter` + one deep **`SkierSimulation`** module.
+- **Dependency Category:** `in-process` (pure simulation math & state machine).
+- **Files to Read (Targeted Ranges Only):**
+  - `src/core/InputController.ts` (lines 1–384, in <=100-line chunks)
+  - `src/mechanics/ControlsProcessor.ts` (lines 1–129)
+  - `src/mechanics/GmaPlayerPhysics.ts` (lines 17–241, 370–510, 720–934)
+  - `src/player/SkierController.ts` (lines 11–75, 108–194, 448–565, 645–699)
+  - `tests/regression.mjs` (lines 89–117)
 
-    // Zero-allocation circular buffer Telemetry spec (dev-only: ?perf=1)
-    export class RingTelemetry {
-      private readonly cap = 1800; // 30s at 60Hz
-      private idx = 0;
-      private count = 0;
+### Problem
+Understanding a single steering or jump input requires bouncing across 4 modules with 3 competing edge trackers (`prevStakeKey`/`prevLeftKey`/`prevRightKey` in `InputController.ts`, `wasLeftPressed`/`wasRightPressed`/`wasStakePressed` in `ControlsProcessor.ts`, `prevJumpPressed`/`prevStakePressed` in `GmaPlayerPhysics.ts`, plus `prevJumpInput` in `SkierController.ts`). `InputController.getBoarderInputs()` uses an independent `performance.now()` clock (`lines 185-187`) and pre-converts `A+D` into `brake`, silently defeating `ControlsProcessor`'s simultaneous `A+D` emergent jump (`lines 89-92`). `SkierController` translates `BoarderInput` into a second 13-field `InputState`, carries **19 dead fields** in `BoarderConfig`/`DEFAULT_CONFIG` (`lines 28-74`, only `mass` and `sphereRadius` are used) and 5 dead fields (`stumbleTimer`, `preWindCoil`, `prevSlopeGrade`, `wiggleTimer`, `lastWiggleSign`), and `renderUpdate()` re-interprets raw input flags for spin/flip/tuck (`lines 646-673`).
 
-      private readonly wallDeltaMs = new Float32Array(this.cap);
-      private readonly cpuFrameMs = new Float32Array(this.cap);
-      private readonly physicsMs = new Float32Array(this.cap);
-      private readonly renderMs = new Float32Array(this.cap);
-      private readonly scratchSort = new Float32Array(this.cap); // Reused only in getReport()
+### Required Changes
+1. **Simplify `src/core/InputController.ts` into a pure hardware adapter:**
+   - Replace `getBoarderInputs()`'s gesture synthesis and `performance.now()` steering ramp with `getRawControls(): RawControlInput` returning pure device intent:
+     - `rawLeft: boolean`, `rawRight: boolean`, `rawForward: boolean`, `rawBrake: boolean`
+     - `jump: boolean`, `grab: boolean`, `sharpTurn: boolean`, `slideTurn: boolean`, `tackle: boolean`
+     - `analogSteerX?: number`, `analogSpinX?: number`, `analogFlipY?: number`, `analogRoll?: number`
+     - Keep `getCameraLookInputs(dt)` and `getFlyCamInputs()`.
+   - **Regression Note:** `tests/regression.mjs:93-116` checks `window.game.inputController` after `KeyA`+`KeyW` and after `window.blur` (`keyState` cleared and steering reset). Either keep a lightweight `keyboardSteer` mirror / `getBoarderInputs()` alias or update `tests/regression.mjs:93-116` cleanly alongside `InputController` (prefer updating `tests/regression.mjs` if `keyboardSteer` moves into `SkierSimulation`, OR expose `player.simulation.steer` and check `ic.keyState` + `ic.getRawControls()`—be explicit and verify `node tests/regression.mjs` passes!).
+2. **Create `src/mechanics/SkierSimulation.ts` (absorbing `ControlsProcessor` + `GmaPlayerPhysics` + physics-derived motion state):**
+   - Move `ControlsProcessor` logic (deadzones, quadratic curve, keyboard digital-to-analog steering ramp driven by the loop's `dt` instead of `performance.now()`, single authoritative edge-detection for `A+D` brake vs emergent jump vs staking double-tap, reverse turn) directly into `SkierSimulation` (deleting `src/mechanics/ControlsProcessor.ts`).
+   - Move physics-derived state computation currently in `SkierController.fixedUpdate` (`lines 490-528`) and `SkierController.renderUpdate` (`lines 646-673`)—`leanAngle`, `carveCharge`, `pumpChain`, `pumpFlow`, `pumpKick`, `isDrifting`, `isSlashing`, `vForward`, `vLateral`, `slipAngleDeg`, `gripUtilization`, `isTucking`, `isSpinning`, `spinDir`, `isFrontFlipping`, `isBackFlipping`, `isGrabActive`—into `SkierSimulation`.
+   - Keep `GmaPlayerPhysics` either merged into `SkierSimulation` or kept strictly as a private internal sub-module behind `SkierSimulation`'s interface (do not expose `GmaPlayerPhysics` internals through `SkierController`).
+   - Expose a clean, zero-allocation `step(dt, rawInput, groundHeight, groundNormal, surfaceType)` and `getMotionSnapshot(): Readonly<SkierMotionSnapshot>` (plus `reset`, `toggleSport`, `toggleTwintips`, `toggleReverseTurn`, `handleObstacleCollision`, `applyRocketJump`).
+3. **Clean up `src/player/SkierController.ts`:**
+   - Replace `BoarderConfig` / `DEFAULT_CONFIG` with `SkierColliderConfig { mass: number; sphereRadius: number }` (delete the 19 unused physics fields).
+   - Delete dead fields: `stumbleTimer`, `preWindCoil`, `prevSlopeGrade`, `wiggleTimer`, `lastWiggleSign`, `prevJumpInput`, `_inputState`, and the `BoarderInput` <-> `InputState` translation block (`lines 449-466`).
+   - `SkierController` owns only: Rapier kinematic body + 3-ray terrain probe -> feeds `SkierSimulation.step(...)` -> interpolates previous/current `SkierMotionSnapshot` -> drives `SkierPresentation` (or `SkierEffects`/animator until merged with Item 1).
 
-      private lastRafNow = 0;
-      private lastHeapBytes = 0;
-      private initialHeapBytes = 0;
-      private gcDropCount = 0;
-      private maxGcDropMB = 0;
-      private gcSpikeFrames = 0; // Wall delta > 25ms coinciding with heap drop or >2x median
+### Verification
+- Write `tests/simulation.test.mjs` (`node:test`) testing `SkierSimulation` headlessly (zero Rapier/WebGL):
+  1. Digital `rawLeft` steering ramp is deterministic with fixed `dt` (no wall-clock dependency).
+  2. Simultaneous `rawLeft && rawRight` behavior vs `rawBrake`.
+  3. Standing -> flat-ground pole staking -> uphill damped staking -> airborne spin/flip accumulation -> clean landing vs crash state transitions.
+- Run `npx tsc --noEmit && npm run build` and `node --test tests/simulation.test.mjs`.
 
-      // Snapshot latest GPU counters as primitives (zero object allocation)
-      private lastCalls = 0;
-      private lastTris = 0;
-      private lastGeoms = 0;
-      private lastTextures = 0;
-      private lastPrograms = 0;
+---
 
-      constructor() {
-        this.initialHeapBytes = (performance as any).memory?.usedJSHeapSize || 0;
-        this.lastHeapBytes = this.initialHeapBytes;
-      }
+## Item 4: Shrink Cross-Seam Reads Between Skier, Trick Scoring, Camera, and HUD
 
-      public recordFramePrimitives(
-        rafNow: number,
-        cpuMs: number,
-        physMs: number,
-        rendMs: number,
-        calls: number,
-        tris: number,
-        geoms: number,
-        textures: number,
-        programs: number
-      ): void {
-        const wallDt = this.lastRafNow > 0 ? rafNow - this.lastRafNow : 16.67;
-        this.lastRafNow = rafNow;
+- **Target Depth:** Give `TrickScoringSystem` full ownership of jump-style titles and landing events, eliminate `SkierController`'s `trickEngine` compatibility proxy and 14-arg camera push, and replace deep `gmaPhysics` reads with narrow read-only snapshots.
+- **Dependency Category:** `in-process` (scoring, snapshots, shared zones) + `local-substitutable` (DOM overlays).
+- **Files to Read (Targeted Ranges Only):**
+  - `src/mechanics/TrickScoring.ts` (lines 1–287, in <=100-line chunks)
+  - `src/player/SkierController.ts` (lines 76–98, 529–561)
+  - `src/ui/HudOverlay.ts` (lines 1–100, 194–391)
+  - `src/camera/CameraDirector.ts` (lines 233–260)
+  - `src/core/Game.ts` (lines 73–84, 262–389)
 
-        this.wallDeltaMs[this.idx] = wallDt;
-        this.cpuFrameMs[this.idx] = cpuMs;
-        this.physicsMs[this.idx] = physMs;
-        this.renderMs[this.idx] = rendMs;
+### Problem
+`TrickScoringSystem` lacks jump-variation awareness, so `SkierController.fixedUpdate` (`lines 535-557`) patches `lastFinalizedTrickName`, `lastFinalizedPoints`, `totalGameScore`, and `displayTimer` from outside, with a hardcoded `+150` fallback. `SkierController` exposes a shallow 9-getter `trickEngine` proxy (`lines 81-96`) alongside `public readonly gmaPhysics`. `HudOverlay` reaches 3 modules deep (`player.gmaPhysics.*`, `player.animator.activeJumpVariation`), duplicates a partial `varMap` (`lines 363-370`, missing `ironcross`/`nordic`), and hardcodes mountain zone bounds (`lines 284-289`) disconnected from `Game.locations` (`Game.ts:74-81`). `Game.loop` calls `cameraDirector.updateSnowboard` with 14 positional arguments (`3` completely ignored in `CameraDirector.ts:240, 244, 245`) and manually mutates `this.player.pumpKick = 0` (`Game.ts:380`). `Game.ts` also builds `#webgl-context-lost-banner` inline (`lines 262-290`).
 
-        this.idx = (this.idx + 1) % this.cap;
-        if (this.count < this.cap) this.count++;
+### Required Changes
+1. **Deepen `src/mechanics/TrickScoring.ts`:**
+   - Move active jump variation state (`'jump' | 'grab' | 'shifty' | 'daffy' | 'mutegrab' | 'ironcross' | 'nordic'`) and canonical display-name lookup (`JUMP_VARIATION_LABELS`) into `TrickScoringSystem`.
+   - Move the landing fallback (`+150` air-pop score when `title` is empty after air time > `0.25s`, plus frontflip/backflip variation titles) inside `TrickScoringSystem.finalizeScore(...)` so `SkierController` never mutates `totalGameScore` or `lastFinalizedTrickName` externally.
+   - Add an explicit finalized-trick event counter/monotone ID (`finalizedSeq: number`) or `consumeFinalizedTrick()` so callers (`NetworkManager` in Item 2) never infer landings from `displayTimer` heuristics.
+   - Delete `SkierController.trickEngine` (`lines 81-96`) and the post-landing patch block (`lines 535-557`).
+2. **Create `src/world/MountainZones.ts` (Single source of truth):**
+   - Export `MOUNTAIN_LOCATIONS` (`summit`, `west`, `east`, `canyon`, `mid`, `halfpipe` from `Game.ts:74-81`) and `getMountainZoneName(x: number, y: number, z: number): string` (migrated from `HudOverlay.ts:284-289`).
+   - Use it in both `Game.ts` and `HudOverlay.ts`.
+3. **Define Narrow Read-Only Snapshot Interfaces (`HudSnapshot`, `CameraTarget`):**
+   - Add `getHudSnapshot(out?: HudSnapshot): HudSnapshot` and `getCameraTarget(out?: CameraTarget): CameraTarget` on `SkierController` (pre-allocated zero-allocation scratch objects returned by reference or filled into `out`), **and** consume/reset `pumpKick` inside `SkierController` after `getCameraTarget()` rather than letting `Game.ts:380` write `this.player.pumpKick = 0`.
+   - Refactor `DynamicCameraDirector.updateSnowboard(dt, target: CameraTarget, yawDelta, pitchDelta)` in `src/camera/CameraDirector.ts`: drop the 3 unused parameters (`_lateralSlip`, `_groundDistance`, `_pumpKick`) and accept the compact `CameraTarget` struct (`position`, `heading`, `speedKmh`, `isAirborne`, `leanAngle`, `airTime`, `slopeNormal`, `velocity`).
+   - Refactor `HudOverlay` constructor and `update()` to read only `HudSnapshot` + `cameraDirector.mode` / `isFlyCam` / `camera.position`, removing all imports/access to `TurnType`, `gmaPhysics`, `animator`, and the duplicate `varMap`.
+4. **Extract `src/ui/ContextLostBanner.ts` out of `Game.ts`:**
+   - Move `#webgl-context-lost-banner` creation, `setVisible(visible: boolean)`, and `dispose()` out of `Game.ts:262-290, 478-481` into `ContextLostBanner` (preserving exact ID `webgl-context-lost-banner` and `display` style contract checked by `tests/regression.mjs:160-164, 187, 196`).
 
-        this.lastCalls = calls;
-        this.lastTris = tris;
-        this.lastGeoms = geoms;
-        this.lastTextures = textures;
-        this.lastPrograms = programs;
+### Verification
+- Write `tests/trickScoring.test.mjs` (`node:test`) covering jump variation titles, fallback air-pop scoring, landing quality thresholds (`Perfect`, `Good`, `Sketchy`, `Crash`), `finalizedSeq` increment on every landing, and `MountainZones` lookup.
+- Run `npx tsc --noEmit && npm run build`.
+- Run `node tests/regression.mjs` to confirm `#hud`, `#webgl-context-lost-banner`, and `Game.dispose()` pass with 0 page errors.
 
-        const heap = (performance as any).memory?.usedJSHeapSize || 0;
-        if (heap > 0) {
-          const drop = this.lastHeapBytes - heap;
-          if (drop > 1048576) { // >1 MB minor/major GC drop
-            this.gcDropCount++;
-            const dropMB = drop / 1048576;
-            if (dropMB > this.maxGcDropMB) this.maxGcDropMB = dropMB;
-            if (wallDt > 25.0) this.gcSpikeFrames++;
-          }
-          this.lastHeapBytes = heap;
-        }
-      }
+---
 
-      public getBaselineSummary() {
-        const n = this.count;
-        if (n === 0) return null;
+## Item 5: Consolidate Snow Shader Uniforms and Detail-Texture Lifecycle
 
-        let wallSum = 0, cpuSum = 0, physSum = 0, rendSum = 0;
-        for (let i = 0; i < n; i++) {
-          wallSum += this.wallDeltaMs[i];
-          cpuSum += this.cpuFrameMs[i];
-          physSum += this.physicsMs[i];
-          rendSum += this.renderMs[i];
-          this.scratchSort[i] = this.wallDeltaMs[i];
-        }
-        const view = this.scratchSort.subarray(0, n).sort(); // In-place TypedArray sort
-        const onePctStart = Math.max(0, Math.floor(n * 0.99));
-        let worst1PctSum = 0;
-        for (let i = onePctStart; i < n; i++) worst1PctSum += view[i];
-        const onePctAvgMs = worst1PctSum / (n - onePctStart);
+- **Target Depth:** Eliminate module-level shader/texture singletons, untyped `material.userData` callbacks, and 7-argument per-frame lighting fan-out across `Game`, `AlpineMassif`, `DetailTexture`, `SnowMaterial`, `SnowTrailMaterial`, and `SkierController`.
+- **Dependency Category:** `in-process` (uniform state & texture ownership; WebGL mocks or headless verification).
+- **Important Seam Rule:** **Do NOT collapse** `src/world/massifBuilder.ts`, `src/world/massifWorker.ts`, or `src/world/shaders/detailTextureData.ts` — the Web Worker seam is real and preserves `massifBuildMs < 100ms`.
+- **Files to Read (Targeted Ranges Only):**
+  - `src/world/shaders/DetailTexture.ts` (lines 1–69)
+  - `src/world/shaders/SnowTrailMaterial.ts` (lines 1–45, 285–332)
+  - `src/world/shaders/SnowMaterial.ts` (lines 1–55, 295–322)
+  - `src/world/AlpineMassif.ts` (lines 46–145, 420–508)
+  - `src/core/Renderer.ts` (lines 18–76, 263–305)
+  - `src/core/Game.ts` (lines 37–45, 247–260, 391–437)
+  - `src/player/SkierController.ts` (lines 751–761)
+  - `src/network/NetworkManager.ts` (lines 182–198)
 
-        return {
-          avgFps: Number((1000 / (wallSum / n)).toFixed(2)),
-          onePctLowFps: Number((1000 / onePctAvgMs).toFixed(2)),
-          avgFrameTimeMs: Number((wallSum / n).toFixed(2)),
-          avgCpuMs: Number((cpuSum / n).toFixed(2)),
-          avgPhysicsMs: Number((physSum / n).toFixed(2)),
-          avgRenderMs: Number((rendSum / n).toFixed(2)),
-          drawCalls: this.lastCalls,
-          triangles: this.lastTris,
-          geometries: this.lastGeoms,
-          textures: this.lastTextures,
-          programs: this.lastPrograms,
-          heapMB: Number((this.lastHeapBytes / 1048576).toFixed(2)),
-          gcDropsOver1MB: this.gcDropCount,
-          maxGcDropMB: Number(this.maxGcDropMB.toFixed(2)),
-          gcSpikeFrames: this.gcSpikeFrames
-        };
-      }
-    }
-  ──────
-  5. Phased Production Roadmap
+### Problem
+`DetailTexture.ts` and `SnowTrailMaterial.ts` store module-global singletons (`cachedSnowDetailTexture`, `_sharedSnowTrailMaterial`), forcing `Game.handleContextRestored` (`lines 249-252`) to import `getCachedSnowDetailTexture` directly. `SnowMaterial.ts` and `SnowTrailMaterial.ts` attach untyped `material.userData = { uniforms, update(...) }` closures called by `AlpineMassif` and `SnowTrailMaterial`. `Game.loop` (`lines 392-437`) fans the same 7 lighting values out across 4 separate calls, allocates `_networkLightingParams` for `NetworkManager.update` (which ignores `_lightingParams` at `line 185`), and calls `player.updateTrailLighting` with 7 parameters where 6 are ignored (`SkierController.ts:751-761`).
 
-  Phase 1 — Quick Wins (High Impact, Low Risk) [COMPLETED]
+### Required Changes
+1. **Create `src/world/shaders/WorldLighting.ts` (shared typed uniform + texture owner):**
+   - Define `SnowLightingUniforms` holding the shared Three.js uniform `{ value: ... }` objects (`uTime`, `uSunDir`, `uSunColor`, `uShadowColor`, `uCameraPos`, `uPlayerPos`, `uGoldenFactor`, `uNightFactor`).
+   - Implement a `WorldLightingController` class (instantiated once per `Renderer` / `Game` session—no module-level globals!) with:
+     - `readonly uniforms: SnowLightingUniforms`
+     - `update(time, sunDir, cameraPos, playerPos, nightFactor, sunColor, shadowColor, goldenFactor)`
+     - `getOrCreateTrailMaterial(): THREE.MeshStandardMaterial` and `getOrCreateDetailTexture(dataOrSize, anisotropy)` + `onContextRestored()` (marks active `DataTexture.needsUpdate = true`) + `dispose()`.
+2. **Remove untyped `userData` callbacks & module globals:**
+   - Update `SnowMaterial.ts` (`createSnowMaterial`) and `SnowTrailMaterial.ts` (`createSnowTrailMaterial`) to accept `sharedUniforms?: SnowLightingUniforms` directly so `onBeforeCompile` binds to the shared uniform references cleanly—no `material.userData.update(...)` or `(material as any).customUniforms` hacks!
+   - Remove `_sharedSnowTrailMaterial` and `updateSharedSnowTrailUniforms` from `SnowTrailMaterial.ts` (trail meshes receive the `WorldLightingController`-owned material or `SnowTrailMaterial` factory accepts `WorldLightingController`).
+   - Remove module-level `cachedSnowDetailTexture` singleton from `DetailTexture.ts` (keep `DetailTexture.ts` as a pure stateless `THREE.DataTexture` builder/updater helper, or fold into `WorldLightingController`).
+3. **Wire through `Renderer` & `AlpineMassif`:**
+   - `Renderer` owns `public readonly worldLighting = new WorldLightingController()` and updates it inside `Renderer.updateLighting(...)`, plus calls `this.worldLighting.onContextRestored()` inside `boundContextRestored` (or `compileAsync`) and `this.worldLighting.dispose()` in `Renderer.dispose()`.
+   - `AlpineMassif` receives `worldLighting` (or `terrainMaterial` bound to `worldLighting.uniforms`), removing `AlpineMassif.update(...)` entirely and simplifying `setDetailQuality(size, anisotropy)` to use typed `uDetailTex` uniform assignment instead of `material.userData.setDetailTexture`.
+4. **Clean up `Game.ts`, `SkierController.ts`, and `NetworkManager.ts`:**
+   - In `Game.ts`: delete `_networkLightingParams`, remove `getCachedSnowDetailTexture` import and lines `249-252`, remove `this.massif.update(...)` and `updateSharedSnowTrailUniforms(...)` from `Game.loop` (since `Renderer.updateLighting` updates the shared uniforms once!).
+   - Simplify `SkierController.updateTrailLighting(sunColor?: THREE.Color)` (and `SkierEffects` / `SkierPresentation.updateLighting(sunColor)`) to accept only `sunColor?: THREE.Color`—delete the 6 unused parameters.
+   - Remove the unused `_lightingParams` parameter from `NetworkManager.update(dt: number, camera: THREE.Camera)`.
 
-  1. [DONE] Fix correctness & leak bugs:
-      • Removed duplicate trickScoring.updateDisplay(dt) (src/player/SkierController.ts).
-      • Replaced blocky additive PointsMaterial spray with shared SnowSpraySystem (src/world/trails/SnowSpraySystem.ts) using frustumCulled = false, DynamicDrawUsage,
-        O(1) ring cursor, soft Gaussian snow-cloud + micro-grain ShaderMaterial, and non-linear speed + carve/slip-angle emission scaling (900 local / 140 remote).
-      • Added CarvedSnowTrail.setVisible() and hid RemoteSkier.trail when isBeyondFar (src/network/RemoteSkier.ts).
-      • Removed unused @dimforge/rapier3d dependency from package.json.
-  2. [DONE] Zero-allocation hot-path fixes:
-      • Pre-allocated scratch/tint THREE.Color instances in Renderer.applyLightingLerp (src/core/Renderer.ts).
-      • Eliminated per-emit sides array literal and O(N²) spray scans via SnowSpraySystem ring buffer and reusable _sprayParams.
-      • Replaced Telemetry array .shift() and per-frame Game.loop objects with Float32Array circular buffers (recordFramePrimitives, fps, gcDropsOver1MB) in
-        src/core/Telemetry.ts while preserving PerfReport compatibility for vision/capture.mjs, and reused _networkLightingParams in src/core/Game.ts.
-      • Note: updateMatrixWorld(true) in SkierController.ts and RemoteSkier.ts was intentionally retained for Phase 1 because footContacts[i].getWorldPosition(...)
-        immediately depends on updated character bone matrices (to be removed alongside Phase 2 rig merging).
-  3. [DONE] Input & camera quick fixes:
-      • Added window.blur input/pointer state reset, e.repeat hotkey guards, and gamepad D-pad edge-detection in src/core/InputController.ts and src/core/Game.ts.
-      • Tightened camera frustum to near = 0.5, far = 1800 in src/core/Renderer.ts and src/camera/CameraDirector.ts (with SkyDome radius adjusted to 1600 in
-        src/world/environment/SkyDome.ts to avoid far-plane clipping), reducing depth ratio from 15,000:1 to 3,600:1.
-      • Deleted dead commented blocks in src/camera/CameraDirector.ts.
-
-  • Verification / Acceptance Check (Observed):
-      • npx tsc --noEmit and npm run build passed with 0 errors (dist/ built in 1.25s).
-      • vision/capture.mjs visual cross-checks passed with 0 page errors across acceptance_criteria_1_latest.png, snow_spray_slide_latest.png (483 active particles
-        at 13.31 m/s slide), snow_spray_carve_latest.png (21 active at 12.57 m/s), and snow_spray_low_latest.png (11 active at 7.20 m/s).
-      • 30.15s headless Playwright ?perf=1 trace (1280×720) measured avg 59.97 FPS (47.51 FPS 1% low), avg triangles reduced from 529,569 to 411,831 (-22.2%),
-        avg draw calls reduced from 112.9 to 104.9, physics max spike reduced from 6.20 ms to 1.50 ms, TTFF reduced from 1,081.6 ms to 997.9 ms, and gcDropsOver1MB = 0.
-
-  Phase 2 — Structural Refactors (High Impact, Medium Effort) [COMPLETED]
-
-  1. [DONE] Merge Skier Rig Meshes (75 → 22–25 slot-aware draw calls):
-      • Merged static rigid sub-parts per bone/cosmetic slot via bakePartGeometry / mergeBakedParts in src/player/character/SkierGeometry.ts and src/player/character/SkierRig.ts (headBase, headwearSlot, gogglesFrame, goggleLens, shoulderLeft/Right, elbowLeft/Right, wristLeft/Right, pole, kneeShin, boot, and merged twintip/flat skis), preserving independent shop-ready cosmetic slots.
-      • Eliminated per-skier strap BoxGeometry allocations, disabled receiveShadow on character meshes, gated RemoteSkier castShadow at 60 m, and implemented disposeCharacter().
-  2. [DONE] Terrain & Tree LODs + Shader Gating:
-      • Added 3-tier THREE.LOD terrain chunks (100×100 @ 0m, 50×50 @ 480m, 25×25 @ 950m with 45m skirts and unchanged 101×101 Rapier heightfields) and 450m low-poly pine InstancedMesh LOD sharing instanceMatrix buffers in src/world/AlpineMassif.ts, driven by massif.updateLOD(camera) in src/core/Game.ts, plus full LOD/InstancedMesh disposal.
-      • Gated SnowMaterial texture2D(uDetailTex) taps and pGroomed procedural noise by LOD fade weights in src/world/shaders/SnowMaterial.ts.
-  3. [DONE] Ring-Buffer CarvedSnowTrail + Shared Material:
-      • Rewrote src/world/trails/CarvedSnowTrail.ts as a circular ring buffer (headSlot, segCount, pre-allocated 19-node typed arrays, O(1) seam/jump index slot updates, and slice-scoped addUpdateRange uploads).
-      • Shared singleton SnowTrailMaterial (THREE.FrontSide, depthWrite: false, fragment discard removed) updated once per frame via updateSharedSnowTrailUniforms() in src/world/shaders/SnowTrailMaterial.ts and src/core/Game.ts.
-  4. [DONE] Render Interpolation, Shared Helpers & RemoteSkier GC Cleanup:
-      • Wired PhysicsEngine.getInterpolationAlpha() into src/core/Game.ts and src/player/SkierController.ts with snapInterpolationState() on spawn/reset.
-      • Extracted updateSkierFootGrounding (leg-chain-only matrix sync) and emitSkierSnowSpray into src/player/SkierVisualHelpers.ts used by both SkierController and RemoteSkier, and replaced RemoteSkier.snapshots.shift() and per-frame SkierAnimParams literals with a 30-slot ring pool.
-
-  • Verification / Acceptance Check (Observed):
-      • npx tsc --noEmit and npm run build passed with 0 errors (dist/ built in 1.29s).
-      • vision/capture.mjs visual cross-checks passed with 0 page errors across acceptance_criteria_1_latest.png (60 calls, 163,640 tris), snow_spray_slide_latest.png (54 calls, 119,848 tris, 483 active particles), snow_spray_carve_latest.png (50 calls, 112,928 tris), and snow_spray_low_latest.png (73 calls, 147,562 tris).
-      • 30s headless Playwright ?perf=1 trace (1280×720, ANGLE/D3D11) measured avg 59.97 FPS (49.09 FPS 1% low due to headless D3D11 VSync jitter while JS CPU p99 dropped to 0.80 ms / max 7.40 ms), avg drawCalls reduced from 104.9 to 60.1 (min 35, max 73; < 65 target), avg triangles reduced from 411,831 to 156,227 (min 112,392, max 186,528; < 250k target), avg CPU frame time reduced from 0.76 ms to 0.43 ms, avg physics reduced from 0.25 ms to 0.14 ms, TTFF 953.2 ms, and gcDropsOver1MB = 0.
-      • 10-peer RemoteSkier churn check verified 0 leaked geometries or shader programs (wave1: 53 → 59 after caching 3 additional palette geometries; wave2: 59 → 79 → 59 geometries, 11 → 11 shader programs, 285–301 draw calls with 11 visible skiers).
-
-  Phase 3 — Production Hardening (Robustness & Polish) [COMPLETED]
-
-  1. [DONE] Workerized Startup & Async Shader Pre-Warming: Moved DetailTexture synthesis (src/world/shaders/detailTextureData.ts) and 36-chunk heightfield/LOD/pine generation (src/world/massifBuilder.ts) into src/world/massifWorker.ts with zero-copy ArrayBuffer transfers, spawn-first batched Rapier collider assembly in src/world/AlpineMassif.ts, non-blocking src/ui/BootOverlay.ts, and renderer.compileAsync() pre-warming in src/core/Renderer.ts and src/core/Game.ts.
-  2. [DONE] WebGL Context Loss & Adaptive Quality Tiers: Added webglcontextlost/webglcontextrestored recovery in src/core/Renderer.ts and src/core/Game.ts; added Low/Medium/High presets in src/core/QualitySettings.ts and src/camera/CameraTunerOverlay.ts scaling shadow resolution (1024 vs 2048), PCFShadowMap vs PCFSoftShadowMap, DPR cap (1.0–1.5 vs 2.0), startup antialias, fillLight, DetailTexture size (512 vs 1024), and UI backdrop-filter toggle; switched RemoteSkier nametags to cached elements/viewport and GPU-composited transform: translate3d in src/network/RemoteSkier.ts.
-  3. [DONE] UI & Lifecycle Decoupling: Consolidated duplicate #hud markup out of index.html into src/ui/overlays.css and src/ui/HudOverlay.ts, extracted audio/trail/spray presentation from src/player/SkierController.ts into src/player/SkierEffects.ts, and added automated Playwright regression checks in tests/regression.mjs (npm run test:regression).
-
-  • Verification / Acceptance Check (Observed):
-      • npx tsc --noEmit and npm run build passed with 0 errors.
-      • npm run test:regression against production server/index.js (dist/) passed all 5 checks with 0 page errors: startup massifBuildMs=15.3 ms (< 100 ms target, TTFF=1,058.1 ms), window.blur cleared active keyState/steering, Low <-> High quality switching updated shadow map/DPR/fillLight/backdrop-blur, WEBGL_lose_context loseContext()/restoreContext() recovered rendering (51 -> 71 frames), and Game.dispose() cleanly removed all DOM overlays and loops.
-      • vision/capture.mjs visual cross-check passed with 0 page errors on acceptance_criteria_1_latest.png (Massif: 16.7 ms, 60 calls, 163,640 tris, 12 shader programs, 10.68 MB heap).
-      • 31.48s headless Playwright ?perf=1 trace (1280×720, ANGLE/D3D11, 1,888 frames / 1,800 sampled, 0 page errors) measured avg 59.94 FPS (48.14 FPS 1% low), avg CPU frame time 0.40 ms (p99 0.80 ms, max 5.20 ms), avg physics 0.14 ms, avg render dispatch 0.24 ms (max 5.00 ms), avg drawCalls 45.9 (min 34, max 69), avg triangles 122,572 (min 72,766, max 170,626), 12 shader programs, 10.68 MB flat heap (gcDropsOver1MB = 0), and main-thread massifBuildMs = 14.9 ms.
+### Verification
+- Run `npx tsc --noEmit && npm run build` (verify `noUnusedLocals` / `noUnusedParameters` strict pass).
+- Run `node tests/regression.mjs` to verify `WEBGL_lose_context` recovery (`DetailTexture` refresh), quality tier switching (`setDetailQuality`), and `Game.dispose()` teardown with 0 page errors.

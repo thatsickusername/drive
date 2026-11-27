@@ -767,8 +767,7 @@ export class SkierController {
   }
 
   private triggerCrashSpray(): void {
-    const pos = this._rbTranslation;
-    this.effects.emitCrashBurst(pos.x, pos.y, pos.z, this.cfg.sphereRadius);
+    // snow crash spray removed
   }
 
   public dispose(): void {

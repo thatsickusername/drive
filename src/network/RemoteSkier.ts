@@ -617,8 +617,7 @@ export class RemoteSkier {
   }
 
   private triggerCrashSpray(): void {
-    if (!this.snowSpray) return;
-    this.snowSpray.emitCrashBurst(this.currentPos.x, this.currentPos.y, this.currentPos.z, REMOTE_SPHERE_RADIUS);
+    // snow crash spray removed
   }
 
   private updateSnowSpray(dt: number, isCrashing: boolean): void {
