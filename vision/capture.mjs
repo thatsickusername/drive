@@ -166,6 +166,68 @@ async function run() {
       await page.waitForTimeout(1800);
       await page.keyboard.up('KeyA');
       await page.waitForTimeout(300);
+    } else if (scenario === 'spray_slide' || scenario === 'spray_carve' || scenario === 'spray_low') {
+      console.log(`[vision] Executing scenario: ${scenario}...`);
+      if (scenario === 'spray_low') {
+        // Low-speed gentle carve test on upper summit
+        await page.keyboard.press('Digit1');
+        await page.waitForTimeout(1400);
+        await page.keyboard.down('KeyA');
+        await page.waitForTimeout(160);
+      } else {
+        // High-speed steep chute run (West Peak) before carving/sliding
+        await page.keyboard.press('Digit2');
+        await page.waitForTimeout(300);
+        await page.keyboard.down('KeyW');
+        await page.waitForTimeout(3600);
+        await page.keyboard.up('KeyW');
+        if (scenario === 'spray_slide') {
+          await page.keyboard.down('ShiftLeft');
+        }
+        await page.keyboard.down('KeyA');
+        await page.waitForTimeout(750);
+      }
+      const riderStats = await page.evaluate(() => {
+        const p = window.game?.player;
+        const sp = p?.snowSpray;
+        let active = 0;
+        let samplePos = null;
+        let sampleAlpha = 0;
+        let sampleSize = 0;
+        if (sp) {
+          let maxA = 0;
+          let maxS = 0;
+          for (let i = 0; i < sp.count; i++) {
+            if (sp.lifetimes[i] > 0) {
+              active++;
+              if (sp.alphas[i] > maxA) maxA = sp.alphas[i];
+              if (sp.sizes[i] > maxS) maxS = sp.sizes[i];
+            }
+          }
+          const newestIdx = (sp.cursor - 1 + sp.count) % sp.count;
+          samplePos = [
+            Number(sp.positions[newestIdx * 3].toFixed(2)),
+            Number(sp.positions[newestIdx * 3 + 1].toFixed(2)),
+            Number(sp.positions[newestIdx * 3 + 2].toFixed(2))
+          ];
+          sampleAlpha = Number(maxA.toFixed(3));
+          sampleSize = Number(maxS.toFixed(3));
+        }
+        return p ? {
+          speed: Number(p.speed.toFixed(2)),
+          leanAngle: Number(p.leanAngle.toFixed(2)),
+          slipAngleDeg: Number(p.slipAngleDeg.toFixed(2)),
+          isDrifting: p.isDrifting,
+          isGrounded: p.isGrounded,
+          rootPos: [Number(p.root.position.x.toFixed(2)), Number(p.root.position.y.toFixed(2)), Number(p.root.position.z.toFixed(2))],
+          activeSpray: active,
+          samplePos,
+          sampleAlpha,
+          sampleSize,
+          inScene: !!sp?.points?.parent
+        } : null;
+      });
+      console.log('[vision] Rider spray telemetry:', JSON.stringify(riderStats));
     } else if (scenario.includes('carve') || scenario.includes('steer')) {
       console.log('[vision] Executing scenario: Teleport to spawn 1 and hold carve steering...');
       await page.keyboard.press('Digit1');

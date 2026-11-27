@@ -5,7 +5,7 @@ export class SkyDome {
   private material: THREE.ShaderMaterial;
 
   constructor() {
-    const geometry = new THREE.SphereGeometry(1800, 32, 24);
+    const geometry = new THREE.SphereGeometry(1600, 32, 24);
 
     const uniforms = {
       // Day Palette

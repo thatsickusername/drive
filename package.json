@@ -12,7 +12,6 @@
     "vision:capture": "node vision/capture.mjs"
   },
   "dependencies": {
-    "@dimforge/rapier3d": "^0.14.0",
     "@dimforge/rapier3d-compat": "^0.21.0",
     "simplex-noise": "^4.0.3",
     "three": "^0.170.0",

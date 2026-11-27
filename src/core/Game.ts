@@ -27,8 +27,18 @@ export class Game {
   private lastTime: number = 0;
   private lastHudUpdateTime: number = 0;
   private animFrameId: number | null = null;
+  private _networkLightingParams: {
+    time: number;
+    sunDir: THREE.Vector3;
+    cameraPos: THREE.Vector3;
+    nightFactor: number;
+    sunColor: THREE.Color;
+    shadowColor: THREE.Color;
+    goldenFactor: number;
+  } | null = null;
   private readonly boundLoop = (time: number) => this.loop(time);
   private readonly boundKeyDown = (e: KeyboardEvent) => {
+    if (e.repeat) return;
     if (e.code === 'Digit1') this.teleportTo(this.locations.summit);
     else if (e.code === 'Digit2') this.teleportTo(this.locations.west);
     else if (e.code === 'Digit3') this.teleportTo(this.locations.east);
@@ -293,15 +303,22 @@ export class Game {
     );
 
     // 4. Update Multiplayer Networking (Remote Skiers & 20Hz Binary Synchronization)
-    this.networkManager.update(delta, this.renderer.camera, {
-      time: timeSec,
-      sunDir: this.renderer.sunDir,
-      cameraPos: this.renderer.camera.position,
-      nightFactor: this.renderer.nightFactor,
-      sunColor: this.renderer.currentSunColor,
-      shadowColor: this.renderer.currentShadowColor,
-      goldenFactor: this.renderer.goldenFactor
-    });
+    if (!this._networkLightingParams) {
+      this._networkLightingParams = {
+        time: timeSec,
+        sunDir: this.renderer.sunDir,
+        cameraPos: this.renderer.camera.position,
+        nightFactor: this.renderer.nightFactor,
+        sunColor: this.renderer.currentSunColor,
+        shadowColor: this.renderer.currentShadowColor,
+        goldenFactor: this.renderer.goldenFactor
+      };
+    } else {
+      this._networkLightingParams.time = timeSec;
+      this._networkLightingParams.nightFactor = this.renderer.nightFactor;
+      this._networkLightingParams.goldenFactor = this.renderer.goldenFactor;
+    }
+    this.networkManager.update(delta, this.renderer.camera, this._networkLightingParams);
 
     // 5. Render Scene
     const renderStart = performance.now();
@@ -310,18 +327,22 @@ export class Game {
 
     if (this.telemetry) {
       const frameDuration = performance.now() - frameStart;
-      this.telemetry.recordFrame({
-        frameTimeMs: frameDuration,
-        physicsTimeMs: physicsDuration,
-        renderTimeMs: renderDuration,
-        renderInfo: { ...this.renderer.renderer.info.render },
-        memoryInfo: {
-          geometries: this.renderer.renderer.info.memory.geometries,
-          textures: this.renderer.renderer.info.memory.textures,
-          programs: (this.renderer.renderer.info as any).programs?.length ?? 0
-        },
-        heapUsedBytes: (typeof performance !== 'undefined' && (performance as any).memory?.usedJSHeapSize) || 0
-      });
+      const rInfo = this.renderer.renderer.info.render;
+      const mInfo = this.renderer.renderer.info.memory;
+      const programsCount = (this.renderer.renderer.info as any).programs?.length ?? 0;
+      this.telemetry.recordFramePrimitives(
+        frameStart,
+        frameDuration,
+        physicsDuration,
+        renderDuration,
+        rInfo.calls,
+        rInfo.triangles,
+        rInfo.lines,
+        rInfo.points,
+        mInfo.geometries,
+        mInfo.textures,
+        programsCount
+      );
     }
 
     this.animFrameId = requestAnimationFrame(this.boundLoop);

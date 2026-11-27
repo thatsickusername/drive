@@ -11,6 +11,8 @@ export class UnifiedInputController {
   private prevStakeKey: boolean = false;
   private prevLeftKey: boolean = false;
   private prevRightKey: boolean = false;
+  private prevDpadUp: boolean = false;
+  private prevDpadDown: boolean = false;
   private mouseDeltaX: number = 0;
   private mouseDeltaY: number = 0;
   private isPointerActive: boolean = false;
@@ -58,6 +60,7 @@ export class UnifiedInputController {
   };
   private readonly boundKeyDown = (e: KeyboardEvent) => this.onKeyDown(e);
   private readonly boundKeyUp = (e: KeyboardEvent) => this.onKeyUp(e);
+  private readonly boundBlur = () => this.onWindowBlur();
   private readonly boundMouseDown = (e: MouseEvent) => {
     if ((e.target as HTMLElement)?.closest('#camera-tuner-panel') || (e.target as HTMLElement)?.closest('#camera-tuner-toggle-btn')) {
       return;
@@ -80,9 +83,23 @@ export class UnifiedInputController {
     window.addEventListener('gamepaddisconnected', this.boundGamepadDisconnected);
     window.addEventListener('keydown', this.boundKeyDown);
     window.addEventListener('keyup', this.boundKeyUp);
+    window.addEventListener('blur', this.boundBlur);
     window.addEventListener('mousedown', this.boundMouseDown);
     window.addEventListener('mouseup', this.boundMouseUp);
     window.addEventListener('mousemove', this.boundMouseMove);
+  }
+
+  private onWindowBlur(): void {
+    this.keyState = {};
+    this.isPointerActive = false;
+    this.mouseDeltaX = 0;
+    this.mouseDeltaY = 0;
+    this.keyboardSteer = 0;
+    this.prevStakeKey = false;
+    this.prevLeftKey = false;
+    this.prevRightKey = false;
+    this.prevDpadUp = false;
+    this.prevDpadDown = false;
   }
 
   private onKeyDown(e: KeyboardEvent): void {
@@ -91,6 +108,8 @@ export class UnifiedInputController {
     if ((e.code === 'KeyA' || e.code === 'KeyD') && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
     }
+
+    if (e.repeat) return;
 
     if (e.code === 'KeyR') {
       if (this.onResetRequested) this.onResetRequested();
@@ -222,15 +241,20 @@ export class UnifiedInputController {
         if (Math.abs(rStickX) > 0.1) trickSpinX = rStickX;
         if (Math.abs(rStickY) > 0.1) trickFlipY = -rStickY;
 
-        // Quick hotkeys on D-pad:
+        // Quick hotkeys on D-pad (edge-triggered):
         // D-Pad Up: Toggle Sport (Skis <-> Snowboard)
-        if (gp.buttons[12]?.pressed && this.onToggleSportRequested) {
+        const dpadUp = !!(gp.buttons[12]?.pressed);
+        if (dpadUp && !this.prevDpadUp && this.onToggleSportRequested) {
           this.onToggleSportRequested();
         }
+        this.prevDpadUp = dpadUp;
+
         // D-Pad Down: Reset/Respawn
-        if (gp.buttons[13]?.pressed && this.onResetRequested) {
+        const dpadDown = !!(gp.buttons[13]?.pressed);
+        if (dpadDown && !this.prevDpadDown && this.onResetRequested) {
           this.onResetRequested();
         }
+        this.prevDpadDown = dpadDown;
         break;
       }
     }
@@ -347,6 +371,7 @@ export class UnifiedInputController {
     window.removeEventListener('gamepaddisconnected', this.boundGamepadDisconnected);
     window.removeEventListener('keydown', this.boundKeyDown);
     window.removeEventListener('keyup', this.boundKeyUp);
+    window.removeEventListener('blur', this.boundBlur);
     window.removeEventListener('mousedown', this.boundMouseDown);
     window.removeEventListener('mouseup', this.boundMouseUp);
     window.removeEventListener('mousemove', this.boundMouseMove);

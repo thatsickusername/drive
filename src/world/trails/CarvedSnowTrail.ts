@@ -103,6 +103,10 @@ export class CarvedSnowTrail {
     this.terrainSampler = sampler;
   }
 
+  public setVisible(visible: boolean): void {
+    this.mesh.visible = visible;
+  }
+
   public updateUniforms(
     time: number,
     sunDir: THREE.Vector3,

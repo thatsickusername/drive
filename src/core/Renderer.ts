@@ -64,6 +64,14 @@ export class Renderer {
   public readonly currentSunColor = new THREE.Color();
   public readonly currentShadowColor = new THREE.Color();
 
+  private readonly _fillDayColor = new THREE.Color(0xdedbe0);
+  private readonly _fillGoldenColor = new THREE.Color(0x94657b);
+  private readonly _fillNightColor = new THREE.Color(0x52668c);
+  private readonly _sparkleDayColor = new THREE.Color(0xffeedd);
+  private readonly _sparkleGoldenColor = new THREE.Color(0xffdfb8);
+  private readonly _sparkleNightColor = new THREE.Color(0xcbe0ff);
+  private readonly _scratchSparkleColor = new THREE.Color();
+
   private lastAppliedLightingFactor: number = -1.0;
 
   // Pre-allocated scratch vectors for shadow camera texel-snapping without per-frame allocations
@@ -87,8 +95,8 @@ export class Renderer {
     this.camera = new THREE.PerspectiveCamera(
       60,
       window.innerWidth / window.innerHeight,
-      0.1,
-      3000
+      0.5,
+      1800
     );
     this.camera.position.set(0, 10, -20);
 
@@ -181,17 +189,18 @@ export class Renderer {
       this.hemiLight.groundColor.lerpColors(this.dayHemiGround, this.goldenHemiGround, u);
       this.hemiLight.intensity = THREE.MathUtils.lerp(0.88, 0.96, u);
 
-      this.fillLight.color.lerpColors(new THREE.Color(0xdedbe0), new THREE.Color(0x94657b), u);
+      this.fillLight.color.lerpColors(this._fillDayColor, this._fillGoldenColor, u);
       this.fillLight.intensity = THREE.MathUtils.lerp(0.12, 0.16, u);
 
-      this.scene.background = (new THREE.Color().copy(this.dayBg)).lerp(this.goldenBg, u);
+      (this.scene.background as THREE.Color).lerpColors(this.dayBg, this.goldenBg, u);
       if (this.scene.fog instanceof THREE.Fog) {
         this.scene.fog.color.lerpColors(this.dayFog, this.goldenFog, u);
         this.scene.fog.near = THREE.MathUtils.lerp(180, 140, u);
         this.scene.fog.far = THREE.MathUtils.lerp(1500, 1350, u);
       }
       this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.08, 1.08, u);
-      this.sparkles.setColor(new THREE.Color(0xffeedd).lerp(new THREE.Color(0xffdfb8), u));
+      this._scratchSparkleColor.lerpColors(this._sparkleDayColor, this._sparkleGoldenColor, u);
+      this.sparkles.setColor(this._scratchSparkleColor);
     } else {
       // Blend between Golden Hour (1.0) and Night (2.0)
       const u = THREE.MathUtils.clamp(t - 1.0, 0.0, 1.0);
@@ -208,17 +217,18 @@ export class Renderer {
       this.hemiLight.groundColor.lerpColors(this.goldenHemiGround, this.nightHemiGround, u);
       this.hemiLight.intensity = THREE.MathUtils.lerp(0.96, 1.02, u);
 
-      this.fillLight.color.lerpColors(new THREE.Color(0x94657b), new THREE.Color(0x52668c), u);
+      this.fillLight.color.lerpColors(this._fillGoldenColor, this._fillNightColor, u);
       this.fillLight.intensity = THREE.MathUtils.lerp(0.16, 0.16, u);
 
-      this.scene.background = (new THREE.Color().copy(this.goldenBg)).lerp(this.nightBg, u);
+      (this.scene.background as THREE.Color).lerpColors(this.goldenBg, this.nightBg, u);
       if (this.scene.fog instanceof THREE.Fog) {
         this.scene.fog.color.lerpColors(this.goldenFog, this.nightFog, u);
         this.scene.fog.near = THREE.MathUtils.lerp(140, 95, u);
         this.scene.fog.far = THREE.MathUtils.lerp(1350, 1220, u);
       }
       this.renderer.toneMappingExposure = THREE.MathUtils.lerp(1.08, 1.06, u);
-      this.sparkles.setColor(new THREE.Color(0xffdfb8).lerp(new THREE.Color(0xcbe0ff), u));
+      this._scratchSparkleColor.lerpColors(this._sparkleGoldenColor, this._sparkleNightColor, u);
+      this.sparkles.setColor(this._scratchSparkleColor);
     }
 
     this.skyDome.setLightingFactors(this.goldenFactor, this.nightFactor);

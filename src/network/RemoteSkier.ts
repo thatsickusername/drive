@@ -3,6 +3,7 @@ import { buildSkierCharacter, SkierCharacter, applyRagdollPose } from '../player
 import { SkierAnimator } from '../player/character/SkierAnimator';
 import { PALETTES } from '../player/character/SkierPalette';
 import { CarvedSnowTrail } from '../world/trails/CarvedSnowTrail';
+import { SnowSpraySystem, SnowSprayParams } from '../world/trails/SnowSpraySystem';
 import { VerletRagdollSolver } from '../mechanics/VerletRagdoll';
 
 export type RemoteJumpVariation = 'jump' | 'grab' | 'shifty' | 'daffy' | 'mutegrab' | 'ironcross' | 'nordic';
@@ -88,11 +89,29 @@ export class RemoteSkier {
   private terrainSampler: ((x: number, z: number) => number) | null = null;
 
   // Snow Spray Particle System (glistening plumes during carving, drifting, and braking)
-  private sprayParticles: THREE.Points | null = null;
-  private readonly sprayCount = 90;
-  private sprayPositions = new Float32Array(90 * 3);
-  private sprayVelocities = new Float32Array(90 * 3);
-  private sprayLifetimes = new Float32Array(90);
+  private snowSpray: SnowSpraySystem | null = null;
+  private readonly _sprayParams: SnowSprayParams = {
+    posX: 0,
+    posY: 0,
+    posZ: 0,
+    fwdX: 0,
+    fwdY: 0,
+    fwdZ: 0,
+    rightX: 1,
+    rightY: 0,
+    rightZ: 0,
+    normalX: 0,
+    normalY: 1,
+    normalZ: 0,
+    speed: 0,
+    leanAngle: 0,
+    slipAngleDeg: 0,
+    vLateral: 0,
+    isGrounded: false,
+    isDrifting: false,
+    isSharpTurn: false,
+    sphereRadius: REMOTE_SPHERE_RADIUS
+  };
 
   // Overhead Nametag / Trick popup UI element
   private tagElement: HTMLElement | null = null;
@@ -142,22 +161,7 @@ export class RemoteSkier {
   }
 
   private initSnowSpray(scene: THREE.Scene): void {
-    for (let i = 0; i < this.sprayCount; i++) {
-      this.sprayPositions[i * 3 + 1] = -9999;
-      this.sprayLifetimes[i] = 0;
-    }
-    const sprayGeo = new THREE.BufferGeometry();
-    sprayGeo.setAttribute('position', new THREE.BufferAttribute(this.sprayPositions, 3));
-    const sprayMat = new THREE.PointsMaterial({
-      color: 0xf5f8fc,
-      size: 0.35,
-      transparent: true,
-      opacity: 0.65,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending
-    });
-    this.sprayParticles = new THREE.Points(sprayGeo, sprayMat);
-    scene.add(this.sprayParticles);
+    this.snowSpray = new SnowSpraySystem(scene, 140);
   }
 
   private createNameTag(paletteName: string): void {
@@ -383,13 +387,15 @@ export class RemoteSkier {
 
     if (isBeyondFar) {
       this.root.visible = false;
-      if (this.sprayParticles) this.sprayParticles.visible = false;
+      if (this.snowSpray) this.snowSpray.setVisible(false);
+      if (this.trail) this.trail.setVisible(false);
       this.wasTrailCulled = true;
       if (this.tagElement) this.tagElement.style.display = 'none';
       return;
     }
     this.root.visible = true;
-    if (this.sprayParticles) this.sprayParticles.visible = true;
+    if (this.snowSpray) this.snowSpray.setVisible(true);
+    if (this.trail) this.trail.setVisible(true);
 
     if (isCrashing) {
       if (this.ragdoll.points.length >= 21) {
@@ -572,74 +578,40 @@ export class RemoteSkier {
   }
 
   private triggerCrashSpray(): void {
-    if (!this.sprayParticles) return;
-    let emitted = 0;
-    for (let i = 0; i < this.sprayCount && emitted < 45; i++) {
-      if (this.sprayLifetimes[i] <= 0) {
-        this.sprayLifetimes[i] = 0.4 + Math.random() * 0.25;
-        const idx = i * 3;
-        this.sprayPositions[idx] = this.currentPos.x + (Math.random() - 0.5) * 0.8;
-        this.sprayPositions[idx + 1] = this.currentPos.y - REMOTE_SPHERE_RADIUS + 0.1;
-        this.sprayPositions[idx + 2] = this.currentPos.z + (Math.random() - 0.5) * 0.8;
-        this.sprayVelocities[idx] = (Math.random() - 0.5) * 6.5;
-        this.sprayVelocities[idx + 1] = 2.5 + Math.random() * 3.5;
-        this.sprayVelocities[idx + 2] = (Math.random() - 0.5) * 6.5;
-        emitted++;
-      }
-    }
+    if (!this.snowSpray) return;
+    this.snowSpray.emitCrashBurst(this.currentPos.x, this.currentPos.y, this.currentPos.z, REMOTE_SPHERE_RADIUS);
   }
 
   private updateSnowSpray(dt: number, isCrashing: boolean): void {
-    if (!this.sprayParticles) return;
+    if (!this.snowSpray) return;
 
-    const isEmitting =
-      (this.isGrounded &&
-        this.currentSpeed > 1.5 &&
-        (Math.abs(this.currentLeanAngle) > 0.15 || this.isDrifting)) ||
-      (isCrashing && this.currentSpeed > 1.0);
+    _scratchFwd.set(0, 0, 1).applyQuaternion(this.currentQuat);
+    _scratchRight.set(1, 0, 0).applyQuaternion(this.currentQuat);
 
-    if (isEmitting) {
-      const emitCount = isCrashing ? 4 : (this.isDrifting ? 3 : 1);
-      _scratchRight.set(1, 0, 0).applyQuaternion(this.currentQuat);
-      const leanSign = this.currentLeanAngle >= 0 ? 1 : -1;
-      let emitted = 0;
+    const sp = this._sprayParams;
+    sp.posX = this.currentPos.x;
+    sp.posY = this.currentPos.y;
+    sp.posZ = this.currentPos.z;
+    sp.fwdX = _scratchFwd.x;
+    sp.fwdY = _scratchFwd.y;
+    sp.fwdZ = _scratchFwd.z;
+    _scratchNormal.set(0, 1, 0).applyQuaternion(this.currentQuat);
+    sp.rightX = _scratchRight.x;
+    sp.rightY = _scratchRight.y;
+    sp.rightZ = _scratchRight.z;
+    sp.normalX = _scratchNormal.x;
+    sp.normalY = _scratchNormal.y;
+    sp.normalZ = _scratchNormal.z;
+    sp.speed = this.currentSpeed;
+    sp.leanAngle = this.currentLeanAngle;
+    sp.slipAngleDeg = this.isDrifting ? 34.0 : 0.0;
+    sp.vLateral = this.currentLeanAngle * this.currentSpeed * 0.25;
+    sp.isGrounded = this.isGrounded && !isCrashing;
+    sp.isDrifting = this.isDrifting;
+    sp.isSharpTurn = this.isSharpTurn;
+    sp.sphereRadius = REMOTE_SPHERE_RADIUS;
 
-      for (let i = 0; i < this.sprayCount && emitted < emitCount; i++) {
-        if (this.sprayLifetimes[i] <= 0) {
-          this.sprayLifetimes[i] = 0.35 + Math.random() * 0.2;
-          const idx = i * 3;
-          this.sprayPositions[idx] = this.currentPos.x + (Math.random() - 0.5) * 0.3;
-          this.sprayPositions[idx + 1] = this.currentPos.y - REMOTE_SPHERE_RADIUS + 0.05;
-          this.sprayPositions[idx + 2] = this.currentPos.z + (Math.random() - 0.5) * 0.3;
-
-          const sprayDirX = _scratchRight.x * leanSign * 2.5 + (Math.random() - 0.5) * 1.5;
-          const sprayDirZ = _scratchRight.z * leanSign * 2.5 + (Math.random() - 0.5) * 1.5;
-          this.sprayVelocities[idx] = sprayDirX;
-          this.sprayVelocities[idx + 1] = 1.8 + Math.random() * 1.8;
-          this.sprayVelocities[idx + 2] = sprayDirZ;
-          emitted++;
-        }
-      }
-    }
-
-    let active = false;
-    for (let i = 0; i < this.sprayCount; i++) {
-      if (this.sprayLifetimes[i] > 0) {
-        this.sprayLifetimes[i] -= dt;
-        const idx = i * 3;
-        this.sprayPositions[idx] += this.sprayVelocities[idx] * dt;
-        this.sprayPositions[idx + 1] += this.sprayVelocities[idx + 1] * dt;
-        this.sprayPositions[idx + 2] += this.sprayVelocities[idx + 2] * dt;
-        this.sprayVelocities[idx + 1] -= 9.81 * dt;
-        active = true;
-      } else {
-        this.sprayPositions[i * 3 + 1] = -9999;
-      }
-    }
-
-    if (active) {
-      (this.sprayParticles.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
-    }
+    this.snowSpray.update(dt, sp);
   }
 
   public dispose(scene: THREE.Scene): void {
@@ -647,11 +619,9 @@ export class RemoteSkier {
     if (this.trail) {
       this.trail.dispose(scene);
     }
-    if (this.sprayParticles) {
-      scene.remove(this.sprayParticles);
-      this.sprayParticles.geometry.dispose();
-      (this.sprayParticles.material as THREE.Material).dispose();
-      this.sprayParticles = null;
+    if (this.snowSpray) {
+      this.snowSpray.dispose(scene);
+      this.snowSpray = null;
     }
     if (this.tagElement && this.tagElement.parentNode) {
       this.tagElement.parentNode.removeChild(this.tagElement);

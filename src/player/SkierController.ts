@@ -7,6 +7,7 @@ import { TrickScoringSystem } from '../mechanics/TrickScoring';
 import { SportType, TurnType, MovementState } from '../mechanics/GmaConfig';
 import { InputState } from '../mechanics/ControlsProcessor';
 import { CarvedSnowTrail } from '../world/trails/CarvedSnowTrail';
+import { SnowSpraySystem, SnowSprayParams } from '../world/trails/SnowSpraySystem';
 import { SnowAudio } from '../audio/SnowAudio';
 export interface SkierInput {
   forward: boolean; // W / Up: pole staking push on flats/uphills + aero tuck
@@ -143,12 +144,29 @@ export class SkierController {
   // Audio, Trail Ribbon and Particles
   private readonly audio = new SnowAudio();
   private trailRibbon!: CarvedSnowTrail;
-  private sprayParticles!: THREE.Points;
-  private sprayGeo!: THREE.BufferGeometry;
-  private sprayPositions!: Float32Array;
-  private sprayVelocities!: Float32Array;
-  private sprayLifetimes!: Float32Array;
-  private readonly sprayCount = 420;
+  private snowSpray!: SnowSpraySystem;
+  private readonly _sprayParams: SnowSprayParams = {
+    posX: 0,
+    posY: 0,
+    posZ: 0,
+    fwdX: 0,
+    fwdY: 0,
+    fwdZ: 0,
+    rightX: 1,
+    rightY: 0,
+    rightZ: 0,
+    normalX: 0,
+    normalY: 1,
+    normalZ: 0,
+    speed: 0,
+    leanAngle: 0,
+    slipAngleDeg: 0,
+    vLateral: 0,
+    isGrounded: false,
+    isDrifting: false,
+    isSharpTurn: false,
+    sphereRadius: 0.45
+  };
 
   // Scratch objects (zero allocations in hot path)
   private readonly _up = new THREE.Vector3(0, 1, 0);
@@ -258,31 +276,7 @@ export class SkierController {
   }
 
   private initSnowSpray(scene: THREE.Scene): void {
-    this.sprayPositions = new Float32Array(this.sprayCount * 3);
-    this.sprayVelocities = new Float32Array(this.sprayCount * 3);
-    this.sprayLifetimes = new Float32Array(this.sprayCount);
-
-    for (let i = 0; i < this.sprayCount; i++) {
-      this.sprayPositions[i * 3] = 0;
-      this.sprayPositions[i * 3 + 1] = -9999;
-      this.sprayPositions[i * 3 + 2] = 0;
-      this.sprayLifetimes[i] = 0;
-    }
-
-    this.sprayGeo = new THREE.BufferGeometry();
-    this.sprayGeo.setAttribute('position', new THREE.BufferAttribute(this.sprayPositions, 3));
-
-    const sprayMat = new THREE.PointsMaterial({
-      color: 0xf5f8fc,
-      size: 0.38,
-      transparent: true,
-      opacity: 0.70,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-    });
-
-    this.sprayParticles = new THREE.Points(this.sprayGeo, sprayMat);
-    scene.add(this.sprayParticles);
+    this.snowSpray = new SnowSpraySystem(scene, 900);
   }
 
   public get mesh(): THREE.Group {
@@ -787,7 +781,6 @@ export class SkierController {
     this.audio.update(this.speed, this.vLateral, this.isGrounded, this.isDrifting, this.gripUtilization);
 
     this.gmaPhysics.trickScoring.updateDisplay(dt);
-    this.gmaPhysics.trickScoring.updateDisplay(dt);
   }
 
   public updateTrailLighting(
@@ -802,6 +795,9 @@ export class SkierController {
     if (this.trailRibbon) {
       this.trailRibbon.updateUniforms(time, sunDir, cameraPos, nightFactor, sunColor, shadowColor, goldenFactor);
     }
+    if (this.snowSpray) {
+      this.snowSpray.setLightingColor(sunColor);
+    }
   }
 
   public setTerrainSampler(sampler: (x: number, z: number) => number): void {
@@ -813,125 +809,42 @@ export class SkierController {
   }
 
   private triggerCrashSpray(): void {
-    if (!this.sprayPositions) return;
+    if (!this.snowSpray) return;
     const pos = this._rbTranslation;
-    let emitted = 0;
-    for (let i = 0; i < this.sprayCount && emitted < 55; i++) {
-      if (this.sprayLifetimes[i] <= 0) {
-        this.sprayLifetimes[i] = 0.40 + Math.random() * 0.25;
-        const idx = i * 3;
-        this.sprayPositions[idx] = pos.x + (Math.random() - 0.5) * 0.8;
-        this.sprayPositions[idx + 1] = pos.y - this.cfg.sphereRadius + 0.1;
-        this.sprayPositions[idx + 2] = pos.z + (Math.random() - 0.5) * 0.8;
-        this.sprayVelocities[idx] = (Math.random() - 0.5) * 6.5;
-        this.sprayVelocities[idx + 1] = 2.5 + Math.random() * 3.5;
-        this.sprayVelocities[idx + 2] = (Math.random() - 0.5) * 6.5;
-        emitted++;
-      }
-    }
+    this.snowSpray.emitCrashBurst(pos.x, pos.y, pos.z, this.cfg.sphereRadius);
   }
 
   private updateSnowSpray(dt: number): void {
-    const pos = this._rbTranslation;
-    const isEmitting = this.isGrounded && this.speed > 1.2;
-    const absLat = Math.abs(this.vLateral);
-
-    if (isEmitting) {
-      if (this.isDrifting || this.gmaPhysics.currentTurnType === TurnType.SlideTurn || Math.abs(this.slipAngleDeg) > 28) {
-        // Slide Turn / Hockey Stop: massive fan plume spraying in the direction of lateral velocity scrub
-        const scrubSign = Math.sign(this.vLateral) || (this.leanAngle > 0 ? 1 : -1);
-        const lateralScrubMag = Math.max(0.4, absLat);
-        const scrubX = this._right.x * scrubSign * 0.85 + this._forward.x * 0.25;
-        const scrubZ = this._right.z * scrubSign * 0.85 + this._forward.z * 0.25;
-        const scrubLen = Math.hypot(scrubX, scrubZ) || 1;
-        const normScrubX = scrubX / scrubLen;
-        const normScrubZ = scrubZ / scrubLen;
-
-        const emitRate = Math.min(26, Math.floor(7 + this.speed * 0.40 + lateralScrubMag * 1.5));
-        for (let e = 0; e < emitRate; e++) {
-          for (let i = 0; i < this.sprayCount; i++) {
-            if (this.sprayLifetimes[i] <= 0) {
-              // Particle lifetime: 0.35s - 0.60s
-              this.sprayLifetimes[i] = 0.35 + Math.random() * 0.25;
-              const idx = i * 3;
-
-              // Spread along ski length and scrubbing edge
-              const skiDist = (Math.random() - 0.5) * 1.5;
-              const edgeOffset = scrubSign * (0.15 + Math.random() * 0.25);
-              this.sprayPositions[idx] = pos.x + this._forward.x * skiDist + this._right.x * edgeOffset;
-              this.sprayPositions[idx + 1] = pos.y - this.cfg.sphereRadius + 0.05;
-              this.sprayPositions[idx + 2] = pos.z + this._forward.z * skiDist + this._right.z * edgeOffset;
-
-              // Wide fan plume spreading in scrub direction
-              const fanAngle = (Math.random() - 0.5) * 1.15; // ~66 deg fan spread
-              const cosA = Math.cos(fanAngle);
-              const sinA = Math.sin(fanAngle);
-              const fanDirX = normScrubX * cosA - normScrubZ * sinA;
-              const fanDirZ = normScrubX * sinA + normScrubZ * cosA;
-
-              const plumeSpeed = 3.8 + Math.random() * 5.2 + (this.speed / 30.0) * 3.0;
-              this.sprayVelocities[idx] = fanDirX * plumeSpeed;
-              this.sprayVelocities[idx + 1] = 1.6 + Math.random() * 3.2; // Massive vertical fan lift
-              this.sprayVelocities[idx + 2] = fanDirZ * plumeSpeed;
-              break;
-            }
-          }
-        }
-      } else {
-        // Carving: twin thin rooster tails peeling outward from the outside ski edge
-        // Outside ski edge relative to turn direction
-        const outsideSkiSign = this.leanAngle > 0 ? -1 : (this.leanAngle < 0 ? 1 : 0);
-        const emitRate = Math.min(10, Math.floor(2 + (this.speed / 35.0) * 6));
-
-        for (let e = 0; e < emitRate; e++) {
-          // Emit for both skis (twin tails)
-          const sides = outsideSkiSign !== 0 ? [outsideSkiSign, -outsideSkiSign] : [-1, 1];
-          for (const side of sides) {
-            for (let i = 0; i < this.sprayCount; i++) {
-              if (this.sprayLifetimes[i] <= 0) {
-                // Particle lifetime: 0.35s - 0.60s
-                this.sprayLifetimes[i] = 0.35 + Math.random() * 0.25;
-                const idx = i * 3;
-
-                const isOutside = side === outsideSkiSign;
-                const skiPosOffset = side * 0.114 + (side > 0 ? 0.02 : -0.02);
-                const tailPosOffset = -0.63 + (Math.random() - 0.5) * 0.16;
-
-                this.sprayPositions[idx] = pos.x + this._right.x * skiPosOffset + this._forward.x * tailPosOffset;
-                this.sprayPositions[idx + 1] = pos.y - this.cfg.sphereRadius + 0.04;
-                this.sprayPositions[idx + 2] = pos.z + this._right.z * skiPosOffset + this._forward.z * tailPosOffset;
-
-                // Rooster tail peeling outward laterally from ski edge
-                const peelFactor = isOutside ? 1.6 : 1.0;
-                const latSpeed = side * (1.6 + Math.random() * 1.6) * peelFactor;
-                const backSpeed = -(0.8 + Math.random() * 0.7);
-                const liftSpeed = 1.5 + Math.random() * 2.2 + (this.speed / 35.0) * 1.5;
-
-                this.sprayVelocities[idx] = this._right.x * latSpeed + this._forward.x * backSpeed;
-                this.sprayVelocities[idx + 1] = liftSpeed;
-                this.sprayVelocities[idx + 2] = this._right.z * latSpeed + this._forward.z * backSpeed;
-                break;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // Gravity (9.81 m/s^2) and trajectory integration
-    for (let i = 0; i < this.sprayCount; i++) {
-      if (this.sprayLifetimes[i] > 0) {
-        this.sprayLifetimes[i] -= dt;
-        const idx = i * 3;
-        this.sprayPositions[idx] += this.sprayVelocities[idx] * dt;
-        this.sprayPositions[idx + 1] += this.sprayVelocities[idx + 1] * dt;
-        this.sprayPositions[idx + 2] += this.sprayVelocities[idx + 2] * dt;
-        this.sprayVelocities[idx + 1] -= 9.81 * dt; // Gravity: 9.81 m/s^2
-      } else {
-        this.sprayPositions[i * 3 + 1] = -9999;
-      }
-    }
-    this.sprayGeo.attributes.position.needsUpdate = true;
+    if (!this.snowSpray) return;
+    const pos = this.root.position;
+    const sp = this._sprayParams;
+    sp.posX = pos.x;
+    sp.posY = pos.y;
+    sp.posZ = pos.z;
+    sp.fwdX = this._forward.x;
+    sp.fwdY = this._forward.y;
+    sp.fwdZ = this._forward.z;
+    sp.rightX = this._right.x;
+    sp.rightY = this._right.y;
+    sp.rightZ = this._right.z;
+    sp.normalX = this.smoothNormal.x;
+    sp.normalY = this.smoothNormal.y;
+    sp.normalZ = this.smoothNormal.z;
+    sp.speed = this.speed;
+    sp.leanAngle = Math.sign(this.leanAngle || this._inputState.steerX) * Math.min(
+      1.0,
+      Math.max(
+        Math.abs(this._inputState.steerX),
+        Math.abs(this.leanAngle) * (this.isDrifting || this.isSlashing ? 1.0 : 0.65)
+      )
+    );
+    sp.slipAngleDeg = this.slipAngleDeg;
+    sp.vLateral = this.vLateral;
+    sp.isGrounded = this.isGrounded;
+    sp.isDrifting = this.isDrifting || this.gmaPhysics.currentTurnType === TurnType.SlideTurn;
+    sp.isSharpTurn = this.isSlashing || this.gmaPhysics.currentTurnType === TurnType.SharpTurn;
+    sp.sphereRadius = this.cfg.sphereRadius;
+    this.snowSpray.update(dt, sp);
   }
 
   public dispose(): void {
@@ -942,10 +855,8 @@ export class SkierController {
     }
     this.audio.dispose();
     this.trailRibbon.dispose(this.scene);
-    if (this.sprayParticles) {
-      this.scene.remove(this.sprayParticles);
-      this.sprayGeo.dispose();
-      (this.sprayParticles.material as THREE.Material).dispose();
+    if (this.snowSpray) {
+      this.snowSpray.dispose(this.scene);
     }
     if (this.root) {
       this.scene.remove(this.root);

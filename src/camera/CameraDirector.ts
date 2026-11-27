@@ -60,8 +60,8 @@ export class DynamicCameraDirector {
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
     this.camera.fov = this.settings.fov;
-    this.camera.near = GMACameraConfig.nearFar[0]; // 5.0m
-    this.camera.far = 3000.0; // Ensure entire mountain massif and sky dome remain visible
+    this.camera.near = 0.5;
+    this.camera.far = 1800.0;
     this.camera.updateProjectionMatrix();
   }
 
@@ -504,143 +504,6 @@ export class DynamicCameraDirector {
     const fwdX = -Math.sin(this.camYaw);
     const fwdZ = -Math.cos(this.camYaw);
 
-    /* [NEW - commented out for testing]
-    // 2. Dynamic slope inclination tracking along travel direction
-    let slopePitchRad = 0.0;
-    if (!isAirborne && slopeNormal && slopeNormal.y > 0.05) {
-      // Projected normal along forward motion vector
-      const normalDotFwd = slopeNormal.x * fwdX + slopeNormal.z * fwdZ;
-      // When skiing downhill, normalDotFwd > 0, atan2 gives negative pitch angle
-      slopePitchRad = Math.atan2(-normalDotFwd, slopeNormal.y);
-    }
-    // Dynamic slope adjustment: when going downhill (slopePitchRad < 0), lower pitch so camera looks forward-down along the descent,
-    // framing the rider from behind and opening up the view of the terrain ahead.
-    const dynamicSlopePitch = THREE.MathUtils.clamp(
-      slopePitchRad * 0.25,
-      -THREE.MathUtils.degToRad(8.0),
-      THREE.MathUtils.degToRad(2.0)
-    );
-    this.smoothedBehindSlopePitch = THREE.MathUtils.damp(
-      this.smoothedBehindSlopePitch,
-      dynamicSlopePitch,
-      1.2,
-      dt
-    );
-
-    // Speed-dependent pitch lowering: as rider speeds up down the mountain, lower pitch slightly to look further ahead
-    const speedRatio = THREE.MathUtils.clamp((speedKmh - 15.0) / 65.0, 0.0, 1.0);
-    const speedPitchDelta = -speedRatio * THREE.MathUtils.degToRad(4.0);
-
-    // 3. Pitch bounds: resting angle is settings.behindPitch + dynamic slope offset + speed offset, clamped between min and max
-    const minPitchRad = THREE.MathUtils.degToRad(this.settings.behindMinPitch);
-    const maxPitchRad = THREE.MathUtils.degToRad(this.settings.behindMaxPitch);
-    const basePitchRad = THREE.MathUtils.degToRad(this.settings.behindPitch);
-    const targetPitch = THREE.MathUtils.clamp(
-      basePitchRad + this.smoothedBehindSlopePitch + speedPitchDelta + this.manualPitchOffset,
-      minPitchRad,
-      maxPitchRad
-    );
-    this.camPitch = THREE.MathUtils.damp(this.camPitch, targetPitch, 1.5, dt);
-
-    // 4. Line-of-sight Terrain Clearance & Collision Solver
-    const minSafeDist = 3.2; // Absolute minimum radius before player mesh
-    // const comfortDist = 6.5; // Threshold below which roof-glide engages
-    const focusY = riderPos.y + 1.2; // Rider torso/chest focus anchor
-    let safeIdealDist = idealDist;
-
-    if (this.terrainSampler) {
-      // Calculate where the camera eye naturally rests (including terrain clearance at eye)
-      const testDistH = idealDist * Math.cos(this.camPitch);
-      const testEyeX = riderPos.x - fwdX * testDistH;
-      const testEyeZ = riderPos.z - fwdZ * testDistH;
-      const groundAtTestEye = this.terrainSampler(testEyeX, testEyeZ);
-      const testEyeY = Math.max(focusY + idealDist * Math.sin(this.camPitch), groundAtTestEye + 1.4);
-
-      // Probe along the actual line of sight between rider's chest and camera eye
-      const numSamples = 10;
-      for (let i = 1; i <= numSamples; i++) {
-        const t = i / (numSamples + 1); // Sample strictly between rider and eye (0.09 to 0.91)
-        const px = THREE.MathUtils.lerp(riderPos.x, testEyeX, t);
-        const pz = THREE.MathUtils.lerp(riderPos.z, testEyeZ, t);
-        const py = THREE.MathUtils.lerp(focusY, testEyeY, t);
-
-        const groundY = this.terrainSampler(px, pz);
-        const clearance = THREE.MathUtils.lerp(0.3, 0.7, t);
-        if (py < groundY + clearance) {
-          // Convex obstacle or ridge blocks line of sight
-          const hitDist = Math.max(minSafeDist, t * idealDist - 0.3);
-          if (hitDist < safeIdealDist) {
-            safeIdealDist = hitDist;
-            break;
-          }
-        }
-      }
-    }
-
-    // 5. Roof-Glide Fallback for Tight Spaces
-    // When boxed in horizontally by terrain/obstacles behind, smoothly glide upward over the rider's roof
-    let roofDemand = 0.0;
-    if (safeIdealDist < comfortDist) {
-      roofDemand = THREE.MathUtils.clamp((comfortDist - safeIdealDist) / (comfortDist - minSafeDist), 0.0, 1.0);
-    }
-
-    if (roofDemand > this.roofGlideProgress) {
-      // Gentle responsive roof-glide ascent
-      this.roofGlideProgress = THREE.MathUtils.damp(this.roofGlideProgress, roofDemand, 1.8, dt);
-    } else {
-      // Damped roof-glide descent after obstacle clears
-      if (this.easeOutDelayTimer <= 0) {
-        this.roofGlideProgress = THREE.MathUtils.damp(this.roofGlideProgress, roofDemand, 1.2, dt);
-      }
-    }
-
-    // Effective pitch & vertical lift combining standard chase with roof-glide
-    const roofPitchRad = THREE.MathUtils.degToRad(this.settings.behindMaxPitch); // Capped to max behind pitch
-    const effectivePitch = THREE.MathUtils.lerp(this.camPitch, roofPitchRad, this.roofGlideProgress);
-    const roofVerticalLift = this.roofGlideProgress * 2.2;
-    const roofAnchorY = focusY + this.roofGlideProgress * 0.8;
-
-    const desiredDist = Math.max(minSafeDist, safeIdealDist);
-
-    // 6. Smooth Damped Distance Follow (no abrupt snaps)
-    if (desiredDist < this.settledBehindDistance) {
-      // Smooth damped inward pull-in so camera never snaps or jumps abruptly
-      this.settledBehindDistance = THREE.MathUtils.damp(
-        this.settledBehindDistance,
-        desiredDist,
-        6.0,
-        dt
-      );
-      this.easeOutDelayTimer = 0.40; // 400ms hold beat
-    } else {
-      // If user is actively steering or rotating camera, hold beat to eliminate in-out wobble
-      if (hasManualLook || Math.abs(angleDiff) > 0.35) {
-        this.easeOutDelayTimer = Math.max(this.easeOutDelayTimer, 0.30);
-      }
-
-      if (this.easeOutDelayTimer > 0) {
-        this.easeOutDelayTimer -= dt;
-      } else {
-        // Smooth damped ease-out back to optimal distance
-        this.settledBehindDistance = THREE.MathUtils.damp(
-          this.settledBehindDistance,
-          desiredDist,
-          2.8,
-          dt
-        );
-      }
-    }
-
-    // 8. Forward look-ahead with dynamic speed lead
-    const dynamicLookAheadDist = this.settings.behindLookAheadDist + speedRatio * 3.0;
-    this.targetLookAt.set(
-      riderPos.x + fwdX * dynamicLookAheadDist,
-      riderPos.y + this.settings.behindLookAheadHeight + this.roofGlideProgress * 0.4,
-      riderPos.z + fwdZ * dynamicLookAheadDist
-    );
-    */
-
-    // [OLD - reverted for testing]
     // 2. Multi-Stage Slope Inclination Tracking & Bump Rejection
     const rawSlopeAngle = slopeNormal ? Math.acos(THREE.MathUtils.clamp(slopeNormal.y, 0.0, 1.0)) : 0.0;
 
@@ -732,27 +595,6 @@ export class DynamicCameraDirector {
 
     // 5. Roof-Glide Fallback for Tight Spaces & Steep Downhill Slopes (DISABLED FOR TESTING)
     this.roofGlideProgress = 0.0;
-    /*
-    let roofDemand = 0.0;
-    if (safeIdealDist < comfortDist) {
-      roofDemand = THREE.MathUtils.clamp((comfortDist - safeIdealDist) / (comfortDist - minSafeDist), 0.0, 1.0);
-    }
-    // Skiing down a steep slope (>15 deg) pushes uphill terrain directly behind the camera
-    if (slopePitchRad < -0.22) {
-      const slopeDemand = THREE.MathUtils.clamp((-slopePitchRad - 0.22) / 0.38, 0.0, 1.0);
-      roofDemand = Math.max(roofDemand, slopeDemand);
-    }
-
-    if (roofDemand > this.roofGlideProgress) {
-      // Fast responsive roof-glide ascent
-      this.roofGlideProgress = THREE.MathUtils.damp(this.roofGlideProgress, roofDemand, 8.0, dt);
-    } else {
-      // Damped roof-glide descent after obstacle clears
-      if (this.easeOutDelayTimer <= 0) {
-        this.roofGlideProgress = THREE.MathUtils.damp(this.roofGlideProgress, roofDemand, 2.2, dt);
-      }
-    }
-    */
 
     // Effective pitch & vertical lift combining standard chase with roof-glide
     const roofPitchRad = THREE.MathUtils.degToRad(68.0); // High near-top-down angle
