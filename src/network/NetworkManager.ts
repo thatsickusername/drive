@@ -182,7 +182,7 @@ export class NetworkManager {
   public update(
     dt: number,
     camera: THREE.Camera,
-    lightingParams?: {
+    _lightingParams?: {
       time: number;
       sunDir: THREE.Vector3;
       cameraPos: THREE.Vector3;
@@ -192,20 +192,9 @@ export class NetworkManager {
       goldenFactor: number;
     }
   ): void {
-    // 1. Update Remote Skiers
+    // 1. Update Remote Skiers (shared SnowTrailMaterial uniforms are updated once per frame in Game.ts)
     for (const remote of this.remoteSkiers.values()) {
       remote.update(dt, this.scene, camera, this.terrainSampler);
-      if (lightingParams && remote.trail) {
-        remote.trail.updateUniforms(
-          lightingParams.time,
-          lightingParams.sunDir,
-          lightingParams.cameraPos,
-          lightingParams.nightFactor,
-          lightingParams.sunColor,
-          lightingParams.shadowColor,
-          lightingParams.goldenFactor
-        );
-      }
     }
 
     // 2. Transmit Local State @ 20Hz (every 50ms)

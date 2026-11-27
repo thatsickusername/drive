@@ -5,6 +5,9 @@ import {
   LoftRing,
   createLoftedGeometry,
   createFlaredCollarGeometry,
+  bakePartGeometry,
+  mergeBakedParts,
+  getMergedSkiGeometry,
   createAlpineSki
 } from './SkierGeometry';
 
@@ -40,11 +43,15 @@ export interface SkierCharacter {
   materials: Record<string, THREE.Material>;
   footContacts: THREE.Object3D[];
   skis: THREE.Group[];
-  twintipTails?: THREE.Mesh[];
-  flatTails?: THREE.Mesh[];
+  slots?: {
+    headwear?: THREE.Mesh;
+    gogglesFrame?: THREE.Mesh;
+    goggleLens?: THREE.Mesh;
+  };
   setPalette: (key: string) => void;
   resetPose: () => void;
   setSportVisuals?: (isSnowboard: boolean, hasTwintips: boolean) => void;
+  dispose?: () => void;
 }
 
 let _sharedCommonMaterials: Record<string, THREE.Material> | null = null;
@@ -53,21 +60,31 @@ function getSharedCommonMaterials(): Record<string, THREE.Material> {
     _sharedCommonMaterials = {
       skin: createMatteMaterial(0xdcc3ae, 0.88, 0.0),
       innerShirt: createMatteMaterial(0x353b44, 0.92, 0.0),
-      goggleFrame: createMatteMaterial(0x1f242c, 0.65, 0.05),
-      goggleStrap: createMatteMaterial(0x222730, 0.88, 0.0),
       glove: createMatteMaterial(0x23272e, 0.85, 0.03),
-      boot: createMatteMaterial(0x2b3038, 0.78, 0.04),
-      bootSole: createMatteMaterial(0x4c5460, 0.84, 0.03),
-      bootAccent: createMatteMaterial(0x8c95a3, 0.80, 0.03),
-      skiBase: createMatteMaterial(0x262c36, 0.62, 0.12),
-      poleShaft: new THREE.MeshStandardMaterial({
-        color: 0x69727e,
-        roughness: 0.52,
-        metalness: 0.32,
+      headwearMerged: new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.94,
+        metalness: 0.0,
         flatShading: true
       }),
-      poleGrip: createMatteMaterial(0x2d333c, 0.86, 0.04),
-      poleBasket: createMatteMaterial(0x4a525e, 0.80, 0.04)
+      gogglesFrameMerged: new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.72,
+        metalness: 0.04,
+        flatShading: true
+      }),
+      poleMerged: new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.65,
+        metalness: 0.22,
+        flatShading: true
+      }),
+      bootMerged: new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.80,
+        metalness: 0.04,
+        flatShading: true
+      })
     };
   }
   return _sharedCommonMaterials;
@@ -75,9 +92,12 @@ function getSharedCommonMaterials(): Record<string, THREE.Material> {
 
 const _paletteMaterialsCache = new Map<string, Record<string, THREE.Material>>();
 function getCachedPaletteMaterials(paletteKey: string, customPal?: SkierPalette): Record<string, THREE.Material> {
-  let mats = _paletteMaterialsCache.get(paletteKey);
+  const pal = customPal || PALETTES[paletteKey] || PALETTES.coral;
+  const cacheKey = PALETTES[paletteKey] === pal
+    ? paletteKey
+    : `custom_${pal.jacket}_${pal.jacketInner}_${pal.pants}_${pal.goggleLens}_${pal.skiAccent}`;
+  let mats = _paletteMaterialsCache.get(cacheKey);
   if (!mats) {
-    const pal = customPal || PALETTES[paletteKey] || PALETTES.coral;
     const jacket = createMatteMaterial(pal.jacket, 0.86, 0.01);
     const collarMat = jacket.clone();
     collarMat.side = THREE.DoubleSide;
@@ -86,18 +106,14 @@ function getCachedPaletteMaterials(paletteKey: string, customPal?: SkierPalette)
       collarMat,
       jacketInner: createMatteMaterial(pal.jacketInner, 0.90, 0.01),
       pants: createMatteMaterial(pal.pants, 0.88, 0.01),
-      beanie: createMatteMaterial(pal.beanie, 0.94, 0.0),
-      beanieCuff: createMatteMaterial(pal.beanieCuff, 0.94, 0.0),
-      pomPom: createMatteMaterial(pal.pomPom, 0.96, 0.0),
       goggleLens: new THREE.MeshStandardMaterial({
         color: pal.goggleLens,
         roughness: 0.42,
         metalness: 0.16,
         flatShading: true
-      }),
-      skiAccent: createMatteMaterial(pal.skiAccent, 0.55, 0.08)
+      })
     };
-    _paletteMaterialsCache.set(paletteKey, mats);
+    _paletteMaterialsCache.set(cacheKey, mats);
   }
   return mats;
 }
@@ -349,6 +365,149 @@ function getSharedSkierGeometries() {
   return _sharedGeos;
 }
 
+let _mergedStaticRigGeos: {
+  headBase: THREE.BufferGeometry;
+  gogglesFrame: THREE.BufferGeometry;
+  shoulderLeft: THREE.BufferGeometry;
+  shoulderRight: THREE.BufferGeometry;
+  elbowLeft: THREE.BufferGeometry;
+  elbowRight: THREE.BufferGeometry;
+  wristLeft: THREE.BufferGeometry;
+  wristRight: THREE.BufferGeometry;
+  pole: THREE.BufferGeometry;
+  kneeShin: THREE.BufferGeometry;
+  boot: THREE.BufferGeometry;
+} | null = null;
+
+function bakeInstepStrapHalf(
+  halfGeo: THREE.BufferGeometry,
+  yPos: number,
+  zPos: number,
+  width: number,
+  sideSign: number,
+  colorHex: number
+): THREE.BufferGeometry {
+  const baked = bakePartGeometry(halfGeo, undefined, undefined, colorHex);
+  const groupMat = new THREE.Matrix4().makeRotationX(0.52).setPosition(0, yPos, zPos);
+  const halfMat = new THREE.Matrix4()
+    .makeRotationZ(sideSign * -0.18)
+    .setPosition(sideSign * width * 0.23, -0.004, 0);
+  baked.applyMatrix4(groupMat.multiply(halfMat));
+  return baked;
+}
+
+function getSharedMergedStaticRigGeometries() {
+  if (!_mergedStaticRigGeos) {
+    const geos = getSharedSkierGeometries();
+    const shaftLength = 1.03;
+
+    const strapUpperGeo = new THREE.BoxGeometry(0.094 * 0.54, 0.016, 0.018);
+    const strapLowerGeo = new THREE.BoxGeometry(0.106 * 0.54, 0.016, 0.018);
+    const bootGeo = mergeBakedParts([
+      bakePartGeometry(geos.bootUpper, [0, -0.025, -0.004], undefined, 0x2b3038),
+      bakePartGeometry(geos.bootBody, undefined, undefined, 0x2b3038),
+      bakePartGeometry(geos.sole, undefined, undefined, 0x4c5460),
+      bakeInstepStrapHalf(strapUpperGeo, -0.022, 0.106, 0.094, -1, 0x8c95a3),
+      bakeInstepStrapHalf(strapUpperGeo, -0.022, 0.106, 0.094, 1, 0x8c95a3),
+      bakeInstepStrapHalf(strapLowerGeo, -0.048, 0.136, 0.106, -1, 0x8c95a3),
+      bakeInstepStrapHalf(strapLowerGeo, -0.048, 0.136, 0.106, 1, 0x8c95a3)
+    ]);
+    strapUpperGeo.dispose();
+    strapLowerGeo.dispose();
+
+    _mergedStaticRigGeos = {
+      headBase: mergeBakedParts([
+        bakePartGeometry(geos.head),
+        bakePartGeometry(geos.nose, [0, 0.114, 0.139])
+      ]),
+      gogglesFrame: mergeBakedParts([
+        bakePartGeometry(geos.goggleStrap, [0, 0.0, -0.008], undefined, 0x222730),
+        bakePartGeometry(geos.goggleFrame, [0, -0.004, 0.130], undefined, 0x1f242c)
+      ]),
+      shoulderLeft: mergeBakedParts([
+        bakePartGeometry(geos.deltoid, [0.015, -0.010, 0]),
+        bakePartGeometry(geos.upperArmLeft)
+      ]),
+      shoulderRight: mergeBakedParts([
+        bakePartGeometry(geos.deltoid, [-0.015, -0.010, 0]),
+        bakePartGeometry(geos.upperArmRight)
+      ]),
+      elbowLeft: mergeBakedParts([
+        bakePartGeometry(geos.elbow),
+        bakePartGeometry(geos.foreArmLeft)
+      ]),
+      elbowRight: mergeBakedParts([
+        bakePartGeometry(geos.elbow),
+        bakePartGeometry(geos.foreArmRight)
+      ]),
+      wristLeft: mergeBakedParts([
+        bakePartGeometry(geos.glove, [0.042, -0.004, 0.004]),
+        bakePartGeometry(geos.thumb, [0.034, -0.020, 0.034])
+      ]),
+      wristRight: mergeBakedParts([
+        bakePartGeometry(geos.glove, [-0.042, -0.004, 0.004]),
+        bakePartGeometry(geos.thumb, [-0.034, -0.020, 0.034])
+      ]),
+      pole: mergeBakedParts([
+        bakePartGeometry(geos.poleGrip, [0, -0.008, 0], undefined, 0x2d333c),
+        bakePartGeometry(geos.poleCap, [0, 0.064, 0], undefined, 0x2d333c),
+        bakePartGeometry(geos.poleShaft, [0, -0.072 - shaftLength / 2, 0], undefined, 0x69727e),
+        bakePartGeometry(geos.poleBasket, [0, -0.072 - shaftLength + 0.045, 0], undefined, 0x4a525e),
+        bakePartGeometry(geos.poleTip, [0, -0.072 - shaftLength - 0.012, 0], undefined, 0x69727e)
+      ]),
+      kneeShin: mergeBakedParts([
+        bakePartGeometry(geos.knee, [0, 0, 0.006]),
+        bakePartGeometry(geos.shin)
+      ]),
+      boot: bootGeo
+    };
+  }
+  return _mergedStaticRigGeos;
+}
+
+const _pomTuftOffsets: readonly [number, number, number][] = [
+  [0.022, 0.010, 0.010],
+  [-0.022, 0.010, 0.010],
+  [0.010, 0.022, -0.012],
+  [-0.014, 0.020, -0.012],
+  [0, 0.010, 0.022],
+  [0, -0.006, -0.022],
+  [0.016, -0.008, 0.014],
+  [-0.016, -0.008, 0.014]
+];
+
+const _headwearGeoCache = new Map<string, THREE.BufferGeometry>();
+function getCachedHeadwearGeometry(pal: SkierPalette): THREE.BufferGeometry {
+  const key = `${pal.beanie}_${pal.beanieCuff}_${pal.pomPom}`;
+  let cached = _headwearGeoCache.get(key);
+  if (!cached) {
+    const geos = getSharedSkierGeometries();
+    const parts: THREE.BufferGeometry[] = [
+      bakePartGeometry(geos.beanieCuff, undefined, undefined, pal.beanieCuff),
+      bakePartGeometry(geos.beanieDome, undefined, undefined, pal.beanie),
+      bakePartGeometry(geos.pomPomBase, [0, 0.376, -0.008], undefined, pal.pomPom)
+    ];
+    for (let i = 0; i < _pomTuftOffsets.length; i++) {
+      const [x, y, z] = _pomTuftOffsets[i];
+      parts.push(bakePartGeometry(geos.pomPomTuft, [x, 0.376 + y, -0.008 + z], undefined, pal.pomPom));
+    }
+    cached = mergeBakedParts(parts);
+    _headwearGeoCache.set(key, cached);
+  }
+  return cached;
+}
+
+/**
+ * Detaches a character rig from the scene without disposing shared module-level caches.
+ */
+export function disposeCharacter(character: SkierCharacter): void {
+  if (character.root.parent) {
+    character.root.parent.remove(character.root);
+  }
+  character.footContacts.length = 0;
+  character.skis.length = 0;
+}
+
 /**
  * Builds the articulated low-poly skier character rig
  */
@@ -360,7 +519,10 @@ export function buildSkierCharacter(
   root.name = 'skierRoot';
 
   const geos = getSharedSkierGeometries();
+  const mergedStatic = getSharedMergedStaticRigGeometries();
   const commonMats = getSharedCommonMaterials();
+  let currentPalette = initialPalette;
+  let currentHasTwintips = true;
   const palMats = getCachedPaletteMaterials(initialPaletteKey, initialPalette);
 
   const materials: Record<string, THREE.Material> = {
@@ -370,35 +532,26 @@ export function buildSkierCharacter(
 
   const enableShadows = (mesh: THREE.Mesh): THREE.Mesh => {
     mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    mesh.receiveShadow = false;
     return mesh;
   };
 
   const joints: SkierJoints = {} as SkierJoints;
   const skis: THREE.Group[] = [];
+  const skiMeshes: THREE.Mesh[] = [];
   const footContacts: THREE.Object3D[] = [];
-  const twintipTails: THREE.Mesh[] = [];
-  const flatTails: THREE.Mesh[] = [];
 
   // Track meshes whose materials belong to the palette
   const paletteMeshes: {
     jacket: THREE.Mesh[];
     collar: THREE.Mesh[];
     pants: THREE.Mesh[];
-    beanie: THREE.Mesh[];
-    beanieCuff: THREE.Mesh[];
-    pomPom: THREE.Mesh[];
     goggleLens: THREE.Mesh[];
-    skiAccent: THREE.Mesh[];
   } = {
     jacket: [],
     collar: [],
     pants: [],
-    beanie: [],
-    beanieCuff: [],
-    pomPom: [],
-    goggleLens: [],
-    skiAccent: []
+    goggleLens: []
   };
 
   // 1. Hips (Pelvis pivot at y = 0.82)
@@ -432,7 +585,7 @@ export function buildSkierCharacter(
   innerNeckMesh.position.set(0, 0.542, 0.004);
   spine.add(innerNeckMesh);
 
-  // 3. Neck & Head
+  // 3. Neck & Head (merged headBase + swappable headwear & goggles slots)
   const neck = new THREE.Group();
   neck.name = 'neck';
   neck.position.set(0, 0.535, 0);
@@ -449,66 +602,35 @@ export function buildSkierCharacter(
   neck.add(head);
   joints.head = head;
 
-  head.add(enableShadows(new THREE.Mesh(geos.head, materials.skin)));
+  const headBaseMesh = enableShadows(new THREE.Mesh(mergedStatic.headBase, materials.skin));
+  head.add(headBaseMesh);
 
-  const noseMesh = enableShadows(new THREE.Mesh(geos.nose, materials.skin));
-  noseMesh.position.set(0, 0.114, 0.139);
-  head.add(noseMesh);
+  const headwearMesh = enableShadows(
+    new THREE.Mesh(getCachedHeadwearGeometry(currentPalette), materials.headwearMerged)
+  );
+  headwearMesh.name = 'headwearSlot';
+  head.add(headwearMesh);
 
-  const beanieCuffMesh = enableShadows(new THREE.Mesh(geos.beanieCuff, materials.beanieCuff));
-  head.add(beanieCuffMesh);
-  paletteMeshes.beanieCuff.push(beanieCuffMesh);
-
-  const beanieDomeMesh = enableShadows(new THREE.Mesh(geos.beanieDome, materials.beanie));
-  head.add(beanieDomeMesh);
-  paletteMeshes.beanie.push(beanieDomeMesh);
-
-  const pomGroup = new THREE.Group();
-  pomGroup.position.set(0, 0.376, -0.008);
-  const pomBase = enableShadows(new THREE.Mesh(geos.pomPomBase, materials.pomPom));
-  pomGroup.add(pomBase);
-  paletteMeshes.pomPom.push(pomBase);
-
-  const tuftOffsets = [
-    [0.022, 0.010, 0.010],
-    [-0.022, 0.010, 0.010],
-    [0.010, 0.022, -0.012],
-    [-0.014, 0.020, -0.012],
-    [0, 0.010, 0.022],
-    [0, -0.006, -0.022],
-    [0.016, -0.008, 0.014],
-    [-0.016, -0.008, 0.014]
-  ];
-  tuftOffsets.forEach(([x, y, z]) => {
-    const tuft = enableShadows(new THREE.Mesh(geos.pomPomTuft, materials.pomPom));
-    tuft.position.set(x, y, z);
-    pomGroup.add(tuft);
-    paletteMeshes.pomPom.push(tuft);
-  });
-  head.add(pomGroup);
-
-  // Ski Goggles
+  // Ski Goggles Slot
   const gogglesGroup = new THREE.Group();
   gogglesGroup.name = 'skiGoggles';
   gogglesGroup.position.set(0, 0.168, 0.004);
   head.add(gogglesGroup);
 
-  const strapMesh = enableShadows(new THREE.Mesh(geos.goggleStrap, materials.goggleStrap));
-  strapMesh.position.set(0, 0.0, -0.008);
-  gogglesGroup.add(strapMesh);
-
-  const frameMesh = enableShadows(new THREE.Mesh(geos.goggleFrame, materials.goggleFrame));
-  frameMesh.position.set(0, -0.004, 0.130);
-  gogglesGroup.add(frameMesh);
+  const gogglesFrameMesh = enableShadows(
+    new THREE.Mesh(mergedStatic.gogglesFrame, materials.gogglesFrameMerged)
+  );
+  gogglesGroup.add(gogglesFrameMesh);
 
   const lensMesh = enableShadows(new THREE.Mesh(geos.goggleLens, materials.goggleLens));
   lensMesh.position.set(0, -0.004, 0.153);
   gogglesGroup.add(lensMesh);
   paletteMeshes.goggleLens.push(lensMesh);
 
-  // 4. Arms, Gloves & Ski Poles
+  // 4. Arms, Gloves & Merged Ski Poles
   function buildArm(side: number) {
-    const prefix = side > 0 ? 'left' : 'right';
+    const isLeft = side > 0;
+    const prefix = isLeft ? 'left' : 'right';
 
     const shoulder = new THREE.Group();
     shoulder.name = `${prefix}Shoulder`;
@@ -516,13 +638,9 @@ export function buildSkierCharacter(
     spine.add(shoulder);
     joints[`${prefix}Shoulder`] = shoulder;
 
-    const deltoidMesh = enableShadows(new THREE.Mesh(geos.deltoid, materials.jacket));
-    deltoidMesh.position.set(side * 0.015, -0.010, 0);
-    shoulder.add(deltoidMesh);
-    paletteMeshes.jacket.push(deltoidMesh);
-
-    const upperArmGeo = side > 0 ? geos.upperArmLeft : geos.upperArmRight;
-    const upperArmMesh = enableShadows(new THREE.Mesh(upperArmGeo, materials.jacket));
+    const upperArmMesh = enableShadows(
+      new THREE.Mesh(isLeft ? mergedStatic.shoulderLeft : mergedStatic.shoulderRight, materials.jacket)
+    );
     shoulder.add(upperArmMesh);
     paletteMeshes.jacket.push(upperArmMesh);
 
@@ -532,13 +650,9 @@ export function buildSkierCharacter(
     shoulder.add(elbow);
     joints[`${prefix}Elbow`] = elbow;
 
-    const elbowMesh = enableShadows(new THREE.Mesh(geos.elbow, materials.jacket));
-    elbowMesh.position.set(0, 0, 0);
-    elbow.add(elbowMesh);
-    paletteMeshes.jacket.push(elbowMesh);
-
-    const foreArmGeo = side > 0 ? geos.foreArmLeft : geos.foreArmRight;
-    const foreArmMesh = enableShadows(new THREE.Mesh(foreArmGeo, materials.jacket));
+    const foreArmMesh = enableShadows(
+      new THREE.Mesh(isLeft ? mergedStatic.elbowLeft : mergedStatic.elbowRight, materials.jacket)
+    );
     elbow.add(foreArmMesh);
     paletteMeshes.jacket.push(foreArmMesh);
 
@@ -548,15 +662,12 @@ export function buildSkierCharacter(
     elbow.add(wrist);
     joints[`${prefix}Wrist`] = wrist;
 
-    const gloveMesh = enableShadows(new THREE.Mesh(geos.glove, materials.glove));
-    gloveMesh.position.set(side * 0.042, -0.004, 0.004);
+    const gloveMesh = enableShadows(
+      new THREE.Mesh(isLeft ? mergedStatic.wristLeft : mergedStatic.wristRight, materials.glove)
+    );
     wrist.add(gloveMesh);
 
-    const thumbMesh = enableShadows(new THREE.Mesh(geos.thumb, materials.glove));
-    thumbMesh.position.set(side * 0.034, -0.020, 0.034);
-    wrist.add(thumbMesh);
-
-    // Ski Pole Attached to Hand
+    // Merged Ski Pole Attached to Hand
     const poleGroup = new THREE.Group();
     poleGroup.name = `${prefix}Pole`;
     poleGroup.position.set(side * 0.046, -0.005, 0.010);
@@ -564,32 +675,14 @@ export function buildSkierCharacter(
     wrist.add(poleGroup);
     joints[`${prefix}Pole`] = poleGroup;
 
-    const gripMesh = enableShadows(new THREE.Mesh(geos.poleGrip, materials.poleGrip));
-    gripMesh.position.set(0, -0.008, 0);
-    poleGroup.add(gripMesh);
-
-    const capMesh = enableShadows(new THREE.Mesh(geos.poleCap, materials.poleGrip));
-    capMesh.position.set(0, 0.064, 0);
-    poleGroup.add(capMesh);
-
-    const shaftLength = 1.03;
-    const shaftMesh = enableShadows(new THREE.Mesh(geos.poleShaft, materials.poleShaft));
-    shaftMesh.position.set(0, -0.072 - shaftLength / 2, 0);
-    poleGroup.add(shaftMesh);
-
-    const basketMesh = enableShadows(new THREE.Mesh(geos.poleBasket, materials.poleBasket));
-    basketMesh.position.set(0, -0.072 - shaftLength + 0.045, 0);
-    poleGroup.add(basketMesh);
-
-    const tipMesh = enableShadows(new THREE.Mesh(geos.poleTip, materials.poleShaft));
-    tipMesh.position.set(0, -0.072 - shaftLength - 0.012, 0);
-    poleGroup.add(tipMesh);
+    const poleMesh = enableShadows(new THREE.Mesh(mergedStatic.pole, materials.poleMerged));
+    poleGroup.add(poleMesh);
   }
 
   buildArm(1);
   buildArm(-1);
 
-  // 5. Legs, Ski Pants, Boots & Dual Alpine Skis
+  // 5. Legs, Ski Pants, Merged Boots & Merged Alpine Skis
   function buildLeg(side: number) {
     const prefix = side > 0 ? 'left' : 'right';
 
@@ -609,12 +702,7 @@ export function buildSkierCharacter(
     hip.add(knee);
     joints[`${prefix}Knee`] = knee;
 
-    const kneeMesh = enableShadows(new THREE.Mesh(geos.knee, materials.pants));
-    kneeMesh.position.set(0, 0, 0.006);
-    knee.add(kneeMesh);
-    paletteMeshes.pants.push(kneeMesh);
-
-    const shinMesh = enableShadows(new THREE.Mesh(geos.shin, materials.pants));
+    const shinMesh = enableShadows(new THREE.Mesh(mergedStatic.kneeShin, materials.pants));
     knee.add(shinMesh);
     paletteMeshes.pants.push(shinMesh);
 
@@ -624,38 +712,12 @@ export function buildSkierCharacter(
     knee.add(ankle);
     joints[`${prefix}Ankle`] = ankle;
 
-    const bootUpper = enableShadows(new THREE.Mesh(geos.bootUpper, materials.boot));
-    bootUpper.position.set(0, -0.025, -0.004);
-    ankle.add(bootUpper);
+    const bootMesh = enableShadows(new THREE.Mesh(mergedStatic.boot, materials.bootMerged));
+    ankle.add(bootMesh);
 
-    const bootBody = enableShadows(new THREE.Mesh(geos.bootBody, materials.boot));
-    ankle.add(bootBody);
-
-    const sole = enableShadows(new THREE.Mesh(geos.sole, materials.bootSole));
-    ankle.add(sole);
-
-    function addInstepStrap(yPos: number, zPos: number, width: number) {
-      const strapGroup = new THREE.Group();
-      strapGroup.position.set(0, yPos, zPos);
-      strapGroup.rotation.x = 0.52;
-      const halfGeo = new THREE.BoxGeometry(width * 0.54, 0.016, 0.018);
-      const leftHalf = enableShadows(new THREE.Mesh(halfGeo, materials.bootAccent));
-      leftHalf.position.set(-width * 0.23, -0.004, 0);
-      leftHalf.rotation.z = 0.18;
-      const rightHalf = enableShadows(new THREE.Mesh(halfGeo, materials.bootAccent));
-      rightHalf.position.set(width * 0.23, -0.004, 0);
-      rightHalf.rotation.z = -0.18;
-      strapGroup.add(leftHalf, rightHalf);
-      ankle.add(strapGroup);
-    }
-
-    addInstepStrap(-0.022, 0.106, 0.094);
-    addInstepStrap(-0.048, 0.136, 0.106);
-
-    // Alpine Carving Ski Attached to Boot
-    const ski = createAlpineSki(materials.skiBase, materials.skiAccent, materials.bootAccent, enableShadows);
-    if (ski.userData.tailTwintip) twintipTails.push(ski.userData.tailTwintip);
-    if (ski.userData.tailFlat) flatTails.push(ski.userData.tailFlat);
+    // Merged Alpine Carving Ski Attached to Boot
+    const ski = createAlpineSki(currentPalette.skiAccent, enableShadows, currentHasTwintips);
+    if (ski.userData.skiMesh) skiMeshes.push(ski.userData.skiMesh);
     ankle.add(ski);
     skis.push(ski);
 
@@ -703,24 +765,30 @@ export function buildSkierCharacter(
   buildLeg(-1);
 
   function setPalette(paletteKey: string) {
-    const newMats = getCachedPaletteMaterials(paletteKey);
+    currentPalette = PALETTES[paletteKey] || PALETTES.coral;
+    const newMats = getCachedPaletteMaterials(paletteKey, currentPalette);
     Object.assign(materials, newMats);
 
     paletteMeshes.jacket.forEach((m) => (m.material = newMats.jacket));
     paletteMeshes.collar.forEach((m) => (m.material = newMats.collarMat));
     paletteMeshes.pants.forEach((m) => (m.material = newMats.pants));
-    paletteMeshes.beanie.forEach((m) => (m.material = newMats.beanie));
-    paletteMeshes.beanieCuff.forEach((m) => (m.material = newMats.beanieCuff));
-    paletteMeshes.pomPom.forEach((m) => (m.material = newMats.pomPom));
     paletteMeshes.goggleLens.forEach((m) => (m.material = newMats.goggleLens));
-    paletteMeshes.skiAccent.forEach((m) => (m.material = newMats.skiAccent));
+
+    headwearMesh.geometry = getCachedHeadwearGeometry(currentPalette);
+    const skiGeo = getMergedSkiGeometry(currentPalette.skiAccent, currentHasTwintips);
+    for (let i = 0; i < skiMeshes.length; i++) {
+      skiMeshes[i].geometry = skiGeo;
+    }
   }
 
   function setSportVisuals(isSnowboard: boolean, hasTwintips: boolean) {
+    currentHasTwintips = hasTwintips;
     if (joints.leftPole) joints.leftPole.visible = !isSnowboard;
     if (joints.rightPole) joints.rightPole.visible = !isSnowboard;
-    twintipTails.forEach((t) => (t.visible = hasTwintips));
-    flatTails.forEach((f) => (f.visible = !hasTwintips));
+    const skiGeo = getMergedSkiGeometry(currentPalette.skiAccent, hasTwintips);
+    for (let i = 0; i < skiMeshes.length; i++) {
+      skiMeshes[i].geometry = skiGeo;
+    }
   }
 
   function resetPose() {
@@ -745,7 +813,23 @@ export function buildSkierCharacter(
   // Rotate root 180 deg around Y so character faces -Z in the game coordinate system
   root.rotation.y = Math.PI;
 
-  return { root, joints, materials, footContacts, skis, twintipTails, flatTails, setPalette, resetPose, setSportVisuals };
+  const character: SkierCharacter = {
+    root,
+    joints,
+    materials,
+    footContacts,
+    skis,
+    slots: {
+      headwear: headwearMesh,
+      gogglesFrame: gogglesFrameMesh,
+      goggleLens: lensMesh
+    },
+    setPalette,
+    resetPose,
+    setSportVisuals
+  };
+  character.dispose = () => disposeCharacter(character);
+  return character;
 }
 
 // Persistent pre-allocated scratch objects for zero-allocation ragdoll posing

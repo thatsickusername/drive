@@ -1,38 +1,38 @@
 {
   "startup": {
-    "wasmInitMs": 13.8,
-    "massifBuildMs": 556.8,
-    "timeToFirstFrameMs": 1076.6
+    "wasmInitMs": 13.7,
+    "massifBuildMs": 548.3,
+    "timeToFirstFrameMs": 985.5
   },
   "framesSampled": 378,
   "fps": {
-    "avg": 54.83,
-    "onePctLow": 5.9
+    "avg": 55.9,
+    "onePctLow": 7.08
   },
   "frameTime": {
-    "avg": 2.23,
-    "p50": 0.6,
-    "p95": 1,
-    "p99": 1.9,
-    "max": 426.4,
-    "min": 0.3
+    "avg": 1.77,
+    "p50": 0.4,
+    "p95": 0.9,
+    "p99": 1.7,
+    "max": 305.2,
+    "min": 0.2
   },
   "physicsStepTime": {
-    "avg": 0.4,
+    "avg": 0.31,
     "p95": 0.4,
-    "max": 73.7
+    "max": 51.6
   },
   "renderTime": {
-    "avg": 1.8,
-    "p95": 0.6,
-    "max": 423.6
+    "avg": 1.42,
+    "p95": 0.5,
+    "max": 303.1
   },
   "gpuInfo": {
-    "drawCalls": 101,
-    "triangles": 327306,
+    "drawCalls": 50,
+    "triangles": 112928,
     "lines": 0,
     "points": 1220,
-    "geometries": 84,
+    "geometries": 69,
     "textures": 2,
     "shaderPrograms": 11
   },

@@ -1,4 +1,62 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+
+const _bakePos = new THREE.Vector3();
+const _bakeEuler = new THREE.Euler();
+const _bakeQuat = new THREE.Quaternion();
+const _bakeScale = new THREE.Vector3(1, 1, 1);
+const _bakeMat = new THREE.Matrix4();
+const _bakeColor = new THREE.Color();
+
+/**
+ * Clones a geometry into normalized non-indexed form with optional transform and vertex color.
+ */
+export function bakePartGeometry(
+  sourceGeo: THREE.BufferGeometry,
+  pos?: readonly [number, number, number],
+  rot?: readonly [number, number, number],
+  colorHex?: number
+): THREE.BufferGeometry {
+  const geo = sourceGeo.index ? sourceGeo.toNonIndexed() : sourceGeo.clone();
+  if (geo.attributes.uv) geo.deleteAttribute('uv');
+  if (!geo.attributes.normal) geo.computeVertexNormals();
+
+  if (pos || rot) {
+    _bakePos.set(pos ? pos[0] : 0, pos ? pos[1] : 0, pos ? pos[2] : 0);
+    _bakeEuler.set(rot ? rot[0] : 0, rot ? rot[1] : 0, rot ? rot[2] : 0);
+    _bakeQuat.setFromEuler(_bakeEuler);
+    _bakeMat.compose(_bakePos, _bakeQuat, _bakeScale);
+    geo.applyMatrix4(_bakeMat);
+  }
+
+  if (colorHex !== undefined) {
+    _bakeColor.setHex(colorHex);
+    const count = geo.attributes.position.count;
+    const colors = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) {
+      colors[i * 3 + 0] = _bakeColor.r;
+      colors[i * 3 + 1] = _bakeColor.g;
+      colors[i * 3 + 2] = _bakeColor.b;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  }
+
+  return geo;
+}
+
+/**
+ * Merges temporary baked BufferGeometries into a single draw-call geometry and disposes inputs.
+ */
+export function mergeBakedParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const merged = mergeGeometries(parts, false);
+  for (const p of parts) p.dispose();
+  if (!merged) {
+    return new THREE.BufferGeometry();
+  }
+  merged.computeBoundingBox();
+  merged.computeBoundingSphere();
+  return merged;
+}
 
 export function createMatteMaterial(color: number, roughness = 0.88, metalness = 0.02): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
@@ -194,48 +252,60 @@ export function getSharedSkiGeometries() {
   return _sharedSkiGeos;
 }
 
+const _mergedSkiGeos = new Map<string, THREE.BufferGeometry>();
+let _sharedSkiMergedMaterial: THREE.MeshStandardMaterial | null = null;
+
+export function getSharedSkiMergedMaterial(): THREE.MeshStandardMaterial {
+  if (!_sharedSkiMergedMaterial) {
+    _sharedSkiMergedMaterial = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.60,
+      metalness: 0.10,
+      flatShading: true
+    });
+  }
+  return _sharedSkiMergedMaterial;
+}
+
+export function getMergedSkiGeometry(
+  skiAccentHex: number,
+  hasTwintips: boolean,
+  skiBaseHex = 0x262c36,
+  bindingHex = 0x8c95a3
+): THREE.BufferGeometry {
+  const key = `${skiAccentHex}_${hasTwintips ? 'twin' : 'flat'}_${skiBaseHex}_${bindingHex}`;
+  let cached = _mergedSkiGeos.get(key);
+  if (!cached) {
+    const geos = getSharedSkiGeometries();
+    const parts: THREE.BufferGeometry[] = [
+      bakePartGeometry(geos.main, [0, -0.130, 0.06], undefined, skiBaseHex),
+      bakePartGeometry(geos.stripe, [0, -0.111, 0.06], undefined, skiAccentHex),
+      bakePartGeometry(geos.tip, [0, -0.092, 0.88], [-0.32, 0, 0], skiAccentHex),
+      bakePartGeometry(
+        hasTwintips ? geos.tailTwintip : geos.tailFlat,
+        [0, hasTwintips ? -0.112 : -0.126, -0.73],
+        [hasTwintips ? 0.22 : 0.0, 0, 0],
+        skiBaseHex
+      ),
+      bakePartGeometry(geos.toeBind, [0, -0.097, 0.22], undefined, bindingHex),
+      bakePartGeometry(geos.heelBind, [0, -0.097, -0.14], undefined, bindingHex)
+    ];
+    cached = mergeBakedParts(parts);
+    _mergedSkiGeos.set(key, cached);
+  }
+  return cached;
+}
+
 export function createAlpineSki(
-  skiBaseMat: THREE.Material,
-  skiAccentMat: THREE.Material,
-  bindingMat: THREE.Material,
-  enableShadows: (m: THREE.Mesh) => THREE.Mesh
+  skiAccentHex: number,
+  enableShadows: (m: THREE.Mesh) => THREE.Mesh,
+  hasTwintips = true
 ): THREE.Group {
   const skiGroup = new THREE.Group();
-  const geos = getSharedSkiGeometries();
-
-  const mainMesh = enableShadows(new THREE.Mesh(geos.main, skiBaseMat));
-  mainMesh.position.set(0, -0.130, 0.06);
-  skiGroup.add(mainMesh);
-
-  const stripeMesh = enableShadows(new THREE.Mesh(geos.stripe, skiAccentMat));
-  stripeMesh.position.set(0, -0.111, 0.06);
-  skiGroup.add(stripeMesh);
-
-  const tipMesh = enableShadows(new THREE.Mesh(geos.tip, skiAccentMat));
-  tipMesh.position.set(0, -0.092, 0.88);
-  tipMesh.rotation.x = -0.32;
-  skiGroup.add(tipMesh);
-
-  const tailTwintipMesh = enableShadows(new THREE.Mesh(geos.tailTwintip, skiBaseMat));
-  tailTwintipMesh.position.set(0, -0.112, -0.73);
-  tailTwintipMesh.rotation.x = 0.22;
-  skiGroup.add(tailTwintipMesh);
-
-  const tailFlatMesh = enableShadows(new THREE.Mesh(geos.tailFlat, skiBaseMat));
-  tailFlatMesh.position.set(0, -0.126, -0.73);
-  tailFlatMesh.rotation.x = 0.0;
-  tailFlatMesh.visible = false;
-  skiGroup.add(tailFlatMesh);
-
-  skiGroup.userData.tailTwintip = tailTwintipMesh;
-  skiGroup.userData.tailFlat = tailFlatMesh;
-
-  const toeBind = enableShadows(new THREE.Mesh(geos.toeBind, bindingMat));
-  toeBind.position.set(0, -0.097, 0.22);
-
-  const heelBind = enableShadows(new THREE.Mesh(geos.heelBind, bindingMat));
-  heelBind.position.set(0, -0.097, -0.14);
-  skiGroup.add(toeBind, heelBind);
-
+  const skiMesh = enableShadows(
+    new THREE.Mesh(getMergedSkiGeometry(skiAccentHex, hasTwintips), getSharedSkiMergedMaterial())
+  );
+  skiGroup.add(skiMesh);
+  skiGroup.userData.skiMesh = skiMesh;
   return skiGroup;
 }

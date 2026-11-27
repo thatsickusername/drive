@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { Renderer } from './Renderer';
 import { PhysicsEngine } from './PhysicsEngine';
 import { Telemetry } from './Telemetry';
+import { updateSharedSnowTrailUniforms } from '../world/shaders/SnowTrailMaterial';
 import { DynamicCameraDirector } from '../camera/CameraDirector';
 import { CameraTunerOverlay } from '../camera/CameraTunerOverlay';
 import { UnifiedInputController } from './InputController';
@@ -249,7 +250,7 @@ export class Game {
         );
         this.player.fixedUpdate(dt, boarderInputs, sample);
       });
-      this.player.renderUpdate(delta, boarderInputs);
+      this.player.renderUpdate(delta, boarderInputs, this.physics.getInterpolationAlpha());
       physicsDuration = performance.now() - physStart;
 
       // Update Follow Camera
@@ -292,6 +293,15 @@ export class Game {
       this.renderer.currentShadowColor,
       this.renderer.goldenFactor
     );
+    updateSharedSnowTrailUniforms(
+      timeSec,
+      this.renderer.sunDir,
+      this.renderer.camera.position,
+      this.renderer.nightFactor,
+      this.renderer.currentSunColor,
+      this.renderer.currentShadowColor,
+      this.renderer.goldenFactor
+    );
     this.player.updateTrailLighting(
       timeSec,
       this.renderer.sunDir,
@@ -320,7 +330,8 @@ export class Game {
     }
     this.networkManager.update(delta, this.renderer.camera, this._networkLightingParams);
 
-    // 5. Render Scene
+    // 5. Update Terrain/Pine LODs & Render Scene
+    this.massif.updateLOD(this.renderer.camera);
     const renderStart = performance.now();
     this.renderer.render();
     const renderDuration = performance.now() - renderStart;

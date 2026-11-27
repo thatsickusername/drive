@@ -132,8 +132,8 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       gLodMeso  = 1.0 - smoothstep(5.0, 280.0, gDistToCam);
       gLodMacro = 1.0 - smoothstep(20.0, 650.0, gDistToCam);
 
-      gDMicro = texture2D(uDetailTex, vWorldPosition.xz * 8.0);
-      gDMeso  = texture2D(uDetailTex, vWorldPosition.xz * 2.0);
+      gDMicro = gLodMicro > 0.001 ? texture2D(uDetailTex, vWorldPosition.xz * 8.0) : vec4(0.5, 0.5, 1.0, 1.0);
+      gDMeso  = gLodMeso  > 0.001 ? texture2D(uDetailTex, vWorldPosition.xz * 2.0) : vec4(0.5, 0.5, 1.0, 1.0);
 
       // 18m broad geological wander for natural non-speckle rock stripping
       float rNoise1 = noise2D(vWorldPosition.xz / 18.0);
@@ -183,19 +183,22 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       /* glsl */ `
       #include <normal_fragment_begin>
 
-      // Multi-scale procedural sampling of uDetailTex
-      vec4 dMacro = texture2D(uDetailTex, vWorldPosition.xz * 0.35);
+      // Multi-scale procedural sampling of uDetailTex (gated by distance LOD)
+      vec4 dMacro = gLodMacro > 0.001 ? texture2D(uDetailTex, vWorldPosition.xz * 0.35) : vec4(0.5, 0.5, 1.0, 1.0);
 
       vec2 pMicro = (gDMicro.rg * 2.0 - 1.0) * (0.65 * gLodMicro);
       vec2 pMeso  = (gDMeso.rg * 2.0 - 1.0) * (0.42 * gLodMeso);
       vec2 pMacro = (dMacro.rg * 2.0 - 1.0) * (0.18 * gLodMacro);
 
       // Realistic groomed corduroy and subtle alpine powder drift (Section 2.1)
-      float corduroy = sin(vWorldPosition.x * 24.0) * 0.010;
-      float drift1 = (noise2D(vWorldPosition.xz * 0.06) - 0.5) * 0.015;
-      float drift2 = (noise2D(vWorldPosition.xz * 0.18 + vec2(1.2, 3.4)) - 0.5) * 0.008;
       float terrainDetailFade = smoothstep(1.5, 6.0, gDistToCam) * (1.0 - smoothstep(40.0, 180.0, gDistToCam));
-      vec2 pGroomed = vec2(corduroy + drift1, drift2) * terrainDetailFade;
+      vec2 pGroomed = vec2(0.0);
+      if (terrainDetailFade > 0.001) {
+        float corduroy = sin(vWorldPosition.x * 24.0) * 0.010;
+        float drift1 = (noise2D(vWorldPosition.xz * 0.06) - 0.5) * 0.015;
+        float drift2 = (noise2D(vWorldPosition.xz * 0.18 + vec2(1.2, 3.4)) - 0.5) * 0.008;
+        pGroomed = vec2(corduroy + drift1, drift2) * terrainDetailFade;
+      }
 
       vec2 totalPerturb = pMicro + pMeso + pMacro + pGroomed;
       gWorldNPerturbed = normalize(vWorldNormal + vec3(totalPerturb.x, 0.0, totalPerturb.y));

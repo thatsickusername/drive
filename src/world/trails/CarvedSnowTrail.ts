@@ -1,9 +1,11 @@
 import * as THREE from 'three';
-import { createSnowTrailMaterial } from '../shaders/SnowTrailMaterial';
+import { getSharedSnowTrailMaterial, updateSharedSnowTrailUniforms } from '../shaders/SnowTrailMaterial';
 
 export class CarvedSnowTrail {
   private readonly maxSegments = 1200;
   private readonly VERTS_PER_SEG = 19;
+  private readonly QUADS_PER_SEG = 18;
+  private readonly INDICES_PER_SEG = 18 * 6;
   private readonly basePositions: Float32Array;
   private readonly baseAlphas: Float32Array;
   private readonly positions: Float32Array;
@@ -16,14 +18,25 @@ export class CarvedSnowTrail {
   private readonly geometry: THREE.BufferGeometry;
   private readonly material: THREE.MeshStandardMaterial;
 
-  private count = 0;
+  // Circular ring buffer cursors
+  private headSlot = -1;
+  private segCount = 0;
+  private currentRunLen = 0;
   private lastEmitPos = new THREE.Vector3(9999, 9999, 9999);
   private readonly emitDist = 0.20; // Distance interval between segment slices
   private cumulativeDistance = 0.0;
   private terrainSampler: ((x: number, z: number) => number) | null = null;
   private pendingJumpGap = false;
   private readonly segmentGaps: Uint8Array;
-  private hasActiveGaps = false;
+
+  // Pre-allocated 19-node cross-section scratch arrays (zero per-emit allocation)
+  private readonly _nodeCx = new Float64Array(19);
+  private readonly _nodeCz = new Float64Array(19);
+  private readonly _nodeLat = new Float32Array(19);
+  private readonly _nodeH = new Float32Array(19);
+  private readonly _nodeU = new Float32Array(19);
+  private readonly _nodeAlpha = new Float32Array(19);
+  private readonly _nodeWallTilt = new Float32Array(19);
 
   constructor(scene: THREE.Scene) {
     this.segmentGaps = new Uint8Array(this.maxSegments);
@@ -58,38 +71,16 @@ export class CarvedSnowTrail {
     alphaAttr.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setAttribute('aAlpha', alphaAttr);
 
-    // Build quad strip index buffer across 19-point slices
-    // Each pair of adjacent slices has (19 - 1) = 18 quads = 36 triangles
-    const numQuadsPerSegment = this.VERTS_PER_SEG - 1;
-    const indices = new Uint32Array((this.maxSegments - 1) * numQuadsPerSegment * 6);
-    let idx = 0;
-
-    for (let s = 0; s < this.maxSegments - 1; s++) {
-      const sliceA = s * this.VERTS_PER_SEG;
-      const sliceB = (s + 1) * this.VERTS_PER_SEG;
-
-      for (let q = 0; q < numQuadsPerSegment; q++) {
-        const a = sliceA + q;
-        const b = sliceA + q + 1;
-        const c = sliceB + q;
-        const d = sliceB + q + 1;
-
-        // Triangle 1: a, c, b
-        indices[idx++] = a;
-        indices[idx++] = c;
-        indices[idx++] = b;
-
-        // Triangle 2: b, c, d
-        indices[idx++] = b;
-        indices[idx++] = c;
-        indices[idx++] = d;
-      }
-    }
+    const indices = new Uint32Array(this.maxSegments * this.INDICES_PER_SEG);
     const indexAttr = new THREE.BufferAttribute(indices, 1);
     indexAttr.setUsage(THREE.DynamicDrawUsage);
     this.geometry.setIndex(indexAttr);
+    for (let s = 0; s < this.maxSegments; s++) {
+      this.setSegmentIndices(s, true);
+    }
+    this.geometry.setDrawRange(0, 0);
 
-    this.material = createSnowTrailMaterial();
+    this.material = getSharedSnowTrailMaterial();
 
     this.mesh = new THREE.Mesh(this.geometry, this.material);
     this.mesh.frustumCulled = false;
@@ -116,21 +107,25 @@ export class CarvedSnowTrail {
     shadowColor?: THREE.Color,
     goldenFactor: number = 0.0
   ): void {
-    if (this.material.userData && this.material.userData.update) {
-      this.material.userData.update(time, sunDir, cameraPos, nightFactor, sunColor, shadowColor, goldenFactor);
-    }
+    updateSharedSnowTrailUniforms(time, sunDir, cameraPos, nightFactor, sunColor, shadowColor, goldenFactor);
   }
 
   public reset(): void {
-    this.count = 0;
+    this.headSlot = -1;
+    this.segCount = 0;
+    this.currentRunLen = 0;
     this.cumulativeDistance = 0.0;
     this.lastEmitPos.set(9999, 9999, 9999);
     this.pendingJumpGap = false;
     this.segmentGaps.fill(0);
-    if (this.hasActiveGaps) {
-      this.hasActiveGaps = false;
-      this.restoreAllIndices();
+
+    const indexAttr = this.geometry.getIndex() as THREE.BufferAttribute;
+    for (let s = 0; s < this.maxSegments; s++) {
+      this.setSegmentIndices(s, true);
     }
+    indexAttr.clearUpdateRanges();
+    indexAttr.needsUpdate = true;
+
     this.basePositions.fill(0);
     this.baseAlphas.fill(0);
     this.positions.fill(0);
@@ -139,95 +134,102 @@ export class CarvedSnowTrail {
     this.uvs.fill(0);
     this.alphas.fill(0);
     this.geometry.setDrawRange(0, 0);
-    const totalVerts = this.maxSegments * this.VERTS_PER_SEG;
-    this.setAttributeUpdateRange(this.geometry.attributes.position as THREE.BufferAttribute, 0, totalVerts * 3);
-    this.setAttributeUpdateRange(this.geometry.attributes.normal as THREE.BufferAttribute, 0, totalVerts * 3);
-    this.setAttributeUpdateRange(this.geometry.attributes.color as THREE.BufferAttribute, 0, totalVerts * 3);
-    this.setAttributeUpdateRange(this.geometry.attributes.uv as THREE.BufferAttribute, 0, totalVerts * 2);
-    this.setAttributeUpdateRange(this.geometry.attributes.aAlpha as THREE.BufferAttribute, 0, totalVerts);
+
+    const posAttr = this.geometry.attributes.position as THREE.BufferAttribute;
+    const normAttr = this.geometry.attributes.normal as THREE.BufferAttribute;
+    const colAttr = this.geometry.attributes.color as THREE.BufferAttribute;
+    const uvAttr = this.geometry.attributes.uv as THREE.BufferAttribute;
+    const alphaAttr = this.geometry.attributes.aAlpha as THREE.BufferAttribute;
+    posAttr.clearUpdateRanges();
+    normAttr.clearUpdateRanges();
+    colAttr.clearUpdateRanges();
+    uvAttr.clearUpdateRanges();
+    alphaAttr.clearUpdateRanges();
+    posAttr.needsUpdate = true;
+    normAttr.needsUpdate = true;
+    colAttr.needsUpdate = true;
+    uvAttr.needsUpdate = true;
+    alphaAttr.needsUpdate = true;
   }
 
   public onJumpStart(): void {
     this.pendingJumpGap = true;
-    if (this.count > 0) {
-      this.applyTrailCaps();
-      this.notifyGeometryUpdate();
-    }
   }
 
   public onCrash(): void {
     this.pendingJumpGap = true;
-    if (this.count > 0) {
-      this.applyTrailCaps();
-      this.notifyGeometryUpdate();
-    }
   }
 
   public onRespawn(): void {
     this.pendingJumpGap = true;
-    if (this.count > 0) {
-      this.applyTrailCaps();
-      this.notifyGeometryUpdate();
-    }
   }
 
-  private applyTrailCaps(): void {
-    if (this.count <= 0) return;
+  private setSegmentIndices(slot: number, enabled: boolean): void {
+    const indicesAttr = this.geometry.getIndex();
+    if (!indicesAttr) return;
+    const indices = indicesAttr.array as Uint32Array;
+    const base = slot * this.INDICES_PER_SEG;
 
-    // 1. Reset active range from pristine un-tapered base arrays
-    const stride = this.VERTS_PER_SEG * 3;
-    const alphaStride = this.VERTS_PER_SEG;
-    this.positions.set(this.basePositions.subarray(0, this.count * stride));
-    this.alphas.set(this.baseAlphas.subarray(0, this.count * alphaStride));
-
-    const taperSteps = 4;
-
-    // 2. Identify all continuous trail segments separated by segmentGaps
-    let segStart = 0;
-    for (let s = 0; s < this.count - 1; s++) {
-      if (this.segmentGaps[s] === 1) {
-        this.taperSegment(segStart, s, taperSteps);
-        segStart = s + 1;
-      }
-    }
-    if (segStart < this.count) {
-      this.taperSegment(segStart, this.count - 1, taperSteps);
-    }
-  }
-
-  private taperSegment(segStart: number, segEnd: number, taperSteps: number): void {
-    const segLen = segEnd - segStart + 1;
-    if (segLen <= 1) {
-      this.applySliceScale(segStart, 0.0, 0.0, 0.0);
+    if (!enabled) {
+      indices.fill(0, base, base + this.INDICES_PER_SEG);
       return;
     }
 
-    const maxTaper = Math.min(taperSteps, Math.ceil(segLen / 2));
-    for (let d = 0; d < maxTaper; d++) {
-      const u = d / taperSteps;
-      const w = Math.sqrt(Math.max(0.0, u * (2.0 - u)));
-      const hScale = w * w;
-      const aScale = u;
+    const sliceNew = ((slot + 1) % this.maxSegments) * this.VERTS_PER_SEG;
+    const sliceOld = slot * this.VERTS_PER_SEG;
+    let curIdx = base;
+    for (let q = 0; q < this.QUADS_PER_SEG; q++) {
+      const a = sliceNew + q;
+      const b = sliceNew + q + 1;
+      const c = sliceOld + q;
+      const d = sliceOld + q + 1;
 
-      const idxStart = segStart + d;
-      const idxEnd = segEnd - d;
+      indices[curIdx++] = a;
+      indices[curIdx++] = c;
+      indices[curIdx++] = b;
 
-      this.applySliceScale(idxStart, w, hScale, aScale);
-      if (idxEnd !== idxStart) {
-        this.applySliceScale(idxEnd, w, hScale, aScale);
-      }
+      indices[curIdx++] = b;
+      indices[curIdx++] = c;
+      indices[curIdx++] = d;
     }
   }
 
-  private applySliceScale(s: number, w: number, hScale: number, aScale: number): void {
-    const centerOffset = (s * this.VERTS_PER_SEG + 9) * 3;
+  private setNode(
+    i: number,
+    cx: number,
+    cz: number,
+    lat: number,
+    h: number,
+    u: number,
+    alpha: number,
+    wallTilt: number
+  ): void {
+    this._nodeCx[i] = cx;
+    this._nodeCz[i] = cz;
+    this._nodeLat[i] = lat;
+    this._nodeH[i] = h;
+    this._nodeU[i] = u;
+    this._nodeAlpha[i] = alpha;
+    this._nodeWallTilt[i] = wallTilt;
+  }
+
+  private restoreSlice(slot: number): void {
+    const vStart = slot * this.VERTS_PER_SEG * 3;
+    const vLen = this.VERTS_PER_SEG * 3;
+    this.positions.set(this.basePositions.subarray(vStart, vStart + vLen), vStart);
+    const aStart = slot * this.VERTS_PER_SEG;
+    this.alphas.set(this.baseAlphas.subarray(aStart, aStart + this.VERTS_PER_SEG), aStart);
+  }
+
+  private applySliceScale(slot: number, w: number, hScale: number, aScale: number): void {
+    const centerOffset = (slot * this.VERTS_PER_SEG + 9) * 3;
     const centerX = this.basePositions[centerOffset + 0];
     const centerY = this.basePositions[centerOffset + 1];
     const centerZ = this.basePositions[centerOffset + 2];
     const groundY = this.terrainSampler ? this.terrainSampler(centerX, centerZ) : centerY;
 
     for (let v = 0; v < this.VERTS_PER_SEG; v++) {
-      const vIdx = (s * this.VERTS_PER_SEG + v) * 3;
+      const vIdx = (slot * this.VERTS_PER_SEG + v) * 3;
       const origX = this.basePositions[vIdx + 0];
       const origY = this.basePositions[vIdx + 1];
       const origZ = this.basePositions[vIdx + 2];
@@ -243,84 +245,51 @@ export class CarvedSnowTrail {
       this.positions[vIdx + 1] = vGroundY + h;
       this.positions[vIdx + 2] = pz;
 
-      const aIdx = s * this.VERTS_PER_SEG + v;
+      const aIdx = slot * this.VERTS_PER_SEG + v;
       this.alphas[aIdx] = this.baseAlphas[aIdx] * aScale;
     }
   }
 
-  private rebuildIndexBuffer(): void {
-    if (!this.hasActiveGaps) return;
+  private taperActiveRun(posAttr: THREE.BufferAttribute, alphaAttr: THREE.BufferAttribute): void {
+    if (this.segCount <= 0 || this.currentRunLen <= 0) return;
 
-    const numQuadsPerSegment = this.VERTS_PER_SEG - 1;
-    const indicesAttr = this.geometry.getIndex();
-    if (!indicesAttr) return;
-    const indices = indicesAttr.array as Uint32Array;
-    const maxS = Math.min(this.count - 1, this.maxSegments - 1);
-    let anyGapRemaining = false;
+    const taperSteps = 4;
+    const runLen = this.currentRunLen;
+    const runStartSlot = (this.headSlot - (runLen - 1) + this.maxSegments) % this.maxSegments;
 
-    for (let s = 0; s < maxS; s++) {
-      const isGap = this.segmentGaps[s] === 1;
-      if (isGap) anyGapRemaining = true;
-      const idx = s * numQuadsPerSegment * 6;
+    if (runLen > taperSteps + 4) {
+      const exitedSlot = (this.headSlot - taperSteps + this.maxSegments) % this.maxSegments;
+      this.restoreSlice(exitedSlot);
+      posAttr.addUpdateRange(exitedSlot * this.VERTS_PER_SEG * 3, this.VERTS_PER_SEG * 3);
+      alphaAttr.addUpdateRange(exitedSlot * this.VERTS_PER_SEG, this.VERTS_PER_SEG);
+    }
 
-      if (isGap) {
-        indices.fill(0, idx, idx + numQuadsPerSegment * 6);
-      } else {
-        let curIdx = idx;
-        const sliceA = s * this.VERTS_PER_SEG;
-        const sliceB = (s + 1) * this.VERTS_PER_SEG;
-        for (let q = 0; q < numQuadsPerSegment; q++) {
-          const a = sliceA + q;
-          const b = sliceA + q + 1;
-          const c = sliceB + q;
-          const d = sliceB + q + 1;
+    if (runLen === 1) {
+      this.applySliceScale(this.headSlot, 0.0, 0.0, 0.0);
+      posAttr.addUpdateRange(this.headSlot * this.VERTS_PER_SEG * 3, this.VERTS_PER_SEG * 3);
+      alphaAttr.addUpdateRange(this.headSlot * this.VERTS_PER_SEG, this.VERTS_PER_SEG);
+      return;
+    }
 
-          indices[curIdx++] = a;
-          indices[curIdx++] = c;
-          indices[curIdx++] = b;
+    const maxTaper = Math.min(taperSteps, Math.ceil(runLen / 2));
+    for (let d = 0; d < maxTaper; d++) {
+      const u = d / taperSteps;
+      const w = Math.sqrt(Math.max(0.0, u * (2.0 - u)));
+      const hScale = w * w;
+      const aScale = u;
 
-          indices[curIdx++] = b;
-          indices[curIdx++] = c;
-          indices[curIdx++] = d;
-        }
+      if (runLen <= taperSteps * 2) {
+        const startSlot = (runStartSlot + d) % this.maxSegments;
+        this.applySliceScale(startSlot, w, hScale, aScale);
+        posAttr.addUpdateRange(startSlot * this.VERTS_PER_SEG * 3, this.VERTS_PER_SEG * 3);
+        alphaAttr.addUpdateRange(startSlot * this.VERTS_PER_SEG, this.VERTS_PER_SEG);
       }
+
+      const endSlot = (this.headSlot - d + this.maxSegments) % this.maxSegments;
+      this.applySliceScale(endSlot, w, hScale, aScale);
+      posAttr.addUpdateRange(endSlot * this.VERTS_PER_SEG * 3, this.VERTS_PER_SEG * 3);
+      alphaAttr.addUpdateRange(endSlot * this.VERTS_PER_SEG, this.VERTS_PER_SEG);
     }
-
-    if (!anyGapRemaining) {
-      this.hasActiveGaps = false;
-      this.restoreAllIndices();
-    } else {
-      indicesAttr.needsUpdate = true;
-    }
-  }
-
-  private restoreAllIndices(): void {
-    const numQuadsPerSegment = this.VERTS_PER_SEG - 1;
-    const indicesAttr = this.geometry.getIndex();
-    if (!indicesAttr) return;
-    const indices = indicesAttr.array as Uint32Array;
-    let idx = 0;
-
-    for (let s = 0; s < this.maxSegments - 1; s++) {
-      const sliceA = s * this.VERTS_PER_SEG;
-      const sliceB = (s + 1) * this.VERTS_PER_SEG;
-
-      for (let q = 0; q < numQuadsPerSegment; q++) {
-        const a = sliceA + q;
-        const b = sliceA + q + 1;
-        const c = sliceB + q;
-        const d = sliceB + q + 1;
-
-        indices[idx++] = a;
-        indices[idx++] = c;
-        indices[idx++] = b;
-
-        indices[idx++] = b;
-        indices[idx++] = c;
-        indices[idx++] = d;
-      }
-    }
-    indicesAttr.needsUpdate = true;
   }
 
   public update(
@@ -333,15 +302,17 @@ export class CarvedSnowTrail {
     isDrifting: boolean,
     carveTurn: number = 0.0
   ): void {
-    // 1. Airtime handling & segment decay
+    const alphaAttr = this.geometry.attributes.aAlpha as THREE.BufferAttribute;
+
     if (!isGrounded || speed < 0.8) {
-      this.decayTrail();
+      alphaAttr.clearUpdateRanges();
+      this.decayTrail(alphaAttr);
       return;
     }
 
     const dist = pos.distanceTo(this.lastEmitPos);
     if (dist >= this.emitDist || this.pendingJumpGap) {
-      const isJumpLanding = this.pendingJumpGap && this.count > 0;
+      const isJumpLanding = this.pendingJumpGap && this.segCount > 0;
       this.lastEmitPos.copy(pos);
       if (isJumpLanding) {
         this.cumulativeDistance += this.emitDist;
@@ -350,27 +321,16 @@ export class CarvedSnowTrail {
         this.cumulativeDistance += dist;
       }
 
-      // Dynamic rut width:
-      // Clean carving: ~0.15m width per rut (half-width 0.075m)
-      // Drift / skid turn / hockey stop: widens up to 0.26m
       const slipT = THREE.MathUtils.clamp(slipAngleDeg / 40.0, 0, 1);
       const halfWidth = isDrifting
         ? THREE.MathUtils.lerp(0.075, 0.130, Math.max(slipT, 0.55))
         : 0.075;
 
       const bermWidth = isDrifting ? 0.140 : 0.115;
-      const shoulderDx = 0.050; // Gentle rounded curve from crest down to rut
-
-      // Soft, Realistic 3D Rut Depth & Rounded Berm Heights:
-      // Shallow, natural rut floor (+0.013m above ground surface)
+      const shoulderDx = 0.050;
       const rutFloorY = 0.013;
-      // Powder surface reference elevation (+0.028m)
       const powderSurfaceY = 0.028;
 
-      // Dynamic Asymmetric Snow Accumulation during Carving & Turning:
-      // When carving left (carveTurn < 0), centrifugal force pushes churned snow to the RIGHT (outer edge).
-      // When carving right (carveTurn > 0), centrifugal force pushes churned snow to the LEFT (outer edge).
-      // Scaled proportionally with player speed: faster speed = higher and wider thrown snow berm.
       const speedFactor = THREE.MathUtils.clamp(speed / 10.0, 0.6, 2.8);
       const turnEffort = THREE.MathUtils.clamp(carveTurn, -1.0, 1.0);
       const carveFactor = turnEffort * speedFactor;
@@ -381,24 +341,20 @@ export class CarvedSnowTrail {
       let rightBermExtraW = 0.0;
 
       if (carveFactor < 0.0) {
-        // Carving Left: Centrifugal force dynamically throws snow to the Right outside edge
         const rightPush = Math.min(2.5, -carveFactor);
-        rightBermExtraH = rightPush * 0.090; // Subtle elevated outer snow berm
-        rightBermExtraW = rightPush * 0.220; // Wide displaced snow displayed outward
-        leftBermExtraH = -rightPush * 0.005; // Compressed inside edge
+        rightBermExtraH = rightPush * 0.090;
+        rightBermExtraW = rightPush * 0.220;
+        leftBermExtraH = -rightPush * 0.005;
       } else if (carveFactor > 0.0) {
-        // Carving Right: Centrifugal force dynamically throws snow to the Left outside edge
         const leftPush = Math.min(2.5, carveFactor);
-        leftBermExtraH = leftPush * 0.090;  // Subtle elevated outer snow berm
-        leftBermExtraW = leftPush * 0.220;  // Wide displaced snow displayed outward
-        rightBermExtraH = -leftPush * 0.005; // Compressed inside edge
+        leftBermExtraH = leftPush * 0.090;
+        leftBermExtraW = leftPush * 0.220;
+        rightBermExtraH = -leftPush * 0.005;
       }
 
-      // Drift / skid / hockey stop adds extra symmetric pushed snow volume
       const driftExtraH = isDrifting ? 0.009 : 0.0;
       const driftExtraW = isDrifting ? 0.025 : 0.0;
 
-      // Soft natural micro-wobble along the berm crest
       const wobble = Math.sin(this.cumulativeDistance * 8.0) * 0.0025 + Math.cos(this.cumulativeDistance * 18.0) * 0.0015;
       const bermHeight = (isDrifting ? 0.027 : 0.022) + wobble;
 
@@ -410,37 +366,49 @@ export class CarvedSnowTrail {
       const rightBermWidth = bermWidth + rightBermExtraW + driftExtraW;
       const rightShoulderY = rutFloorY + (rightBermHeight - rutFloorY) * 0.58;
 
-      // Gentle center median spine between skis (softly rounded)
       const medianY = powderSurfaceY + 0.012;
       const innerShoulderY = rutFloorY + (medianY - rutFloorY) * 0.55;
 
-      // Shift existing vertices down by 1 slice (19 vertices)
-      const stride = this.VERTS_PER_SEG * 3;
-      const uvStride = this.VERTS_PER_SEG * 2;
-      const alphaStride = this.VERTS_PER_SEG;
-
-      this.basePositions.copyWithin(stride, 0, (this.maxSegments - 1) * stride);
-      this.baseAlphas.copyWithin(alphaStride, 0, (this.maxSegments - 1) * alphaStride);
-      this.normals.copyWithin(stride, 0, (this.maxSegments - 1) * stride);
-      this.uvs.copyWithin(uvStride, 0, (this.maxSegments - 1) * uvStride);
-
-      this.count = Math.min(this.count + 1, this.maxSegments);
-      this.segmentGaps.copyWithin(1, 0, this.maxSegments - 1);
-      this.segmentGaps[0] = isJumpLanding ? 1 : 0;
-      if (isJumpLanding) {
-        this.hasActiveGaps = true;
+      const prevSlot = this.headSlot;
+      const writeSlot = (this.headSlot + 1) % this.maxSegments;
+      this.headSlot = writeSlot;
+      if (this.segCount < this.maxSegments) {
+        this.segCount++;
       }
-      if (this.hasActiveGaps) {
-        this.rebuildIndexBuffer();
+      if (prevSlot < 0 || isJumpLanding) {
+        this.currentRunLen = 1;
+      } else {
+        this.currentRunLen = Math.min(this.currentRunLen + 1, this.maxSegments);
       }
 
-      // Exact terrain contact origin: root position minus normal * sphereRadius (0.45m)
+      const indexAttr = this.geometry.getIndex() as THREE.BufferAttribute;
+      indexAttr.clearUpdateRanges();
+      let indexDirty = false;
+      if (prevSlot >= 0) {
+        if (isJumpLanding) {
+          this.segmentGaps[prevSlot] = 1;
+          this.setSegmentIndices(prevSlot, false);
+        } else {
+          this.segmentGaps[prevSlot] = 0;
+          this.setSegmentIndices(prevSlot, true);
+        }
+        indexAttr.addUpdateRange(prevSlot * this.INDICES_PER_SEG, this.INDICES_PER_SEG);
+        indexDirty = true;
+      }
+      if (this.segCount === this.maxSegments) {
+        this.segmentGaps[writeSlot] = 1;
+        this.setSegmentIndices(writeSlot, false);
+        indexAttr.addUpdateRange(writeSlot * this.INDICES_PER_SEG, this.INDICES_PER_SEG);
+        indexDirty = true;
+      }
+      if (indexDirty) {
+        indexAttr.needsUpdate = true;
+      }
+
       const contactX = pos.x - normal.x * 0.45;
       const contactY = pos.y - normal.y * 0.45;
       const contactZ = pos.z - normal.z * 0.45;
 
-      // Left ski and Right ski centers along lateral right vector
-      // Skier stance: ~0.135m to left and right (27cm stance width, matching real skis)
       const leftCenterX = contactX - right.x * 0.135;
       const leftCenterZ = contactZ - right.z * 0.135;
       const rightCenterX = contactX + right.x * 0.135;
@@ -452,66 +420,47 @@ export class CarvedSnowTrail {
       const ny = normal.y;
       const nz = normal.z;
 
-      // 19 cross-sectional nodes forming a continuous, soft, parabolic-curved snow sculpture
-      const nodes = [
-        // 0: Outer left feather (softly blends into untouched snow)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 1.80), h: 0.007, u: 0.00, alpha: 0.0, isRut: false, wallTilt: 0.0 },
-        // 1: Outer left flank (gentle outer ramp)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.95), h: powderSurfaceY + 0.006 + leftBermExtraH * 0.60, u: 0.05, alpha: 0.70, isRut: false, wallTilt: -0.28 },
-        // 2: Left berm crest (smooth rounded peak)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + leftBermWidth * 0.40), h: leftBermHeight, u: 0.10, alpha: 1.0, isRut: false, wallTilt: -0.16 },
-        // 3: Left outer rounded shoulder (soft S-curve roll down into rut)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -(halfWidth + (shoulderDx + leftBermExtraW * 0.25) * 0.4), h: leftShoulderY, u: 0.15, alpha: 1.0, isRut: false, wallTilt: 0.42 },
-        // 4: Left rut outer bowl edge (shallow concave dip)
-        { cx: leftCenterX, cz: leftCenterZ, lat: -halfWidth * 0.70, h: rutFloorY + 0.004, u: 0.20, alpha: 1.0, isRut: true, wallTilt: 0.26 },
-        // 5: Left rut floor center (ski base trough)
-        { cx: leftCenterX, cz: leftCenterZ, lat: 0.0, h: rutFloorY, u: 0.27, alpha: 1.0, isRut: true, wallTilt: 0.0 },
-        // 6: Left rut inner bowl edge
-        { cx: leftCenterX, cz: leftCenterZ, lat: halfWidth * 0.70, h: rutFloorY + 0.004, u: 0.34, alpha: 1.0, isRut: true, wallTilt: -0.26 },
-        // 7: Left inner rounded shoulder (soft curve rolling up to median)
-        { cx: leftCenterX, cz: leftCenterZ, lat: halfWidth + shoulderDx * 0.3, h: innerShoulderY, u: 0.39, alpha: 1.0, isRut: false, wallTilt: -0.36 },
-        // 8: Left median flank
-        { cx: leftCenterX, cz: leftCenterZ, lat: halfWidth + shoulderDx * 0.8, h: medianY * 0.92, u: 0.44, alpha: 1.0, isRut: false, wallTilt: -0.16 },
+      this.setNode(0, leftCenterX, leftCenterZ, -(halfWidth + leftBermWidth * 1.80), 0.007, 0.00, 0.0, 0.0);
+      this.setNode(1, leftCenterX, leftCenterZ, -(halfWidth + leftBermWidth * 0.95), powderSurfaceY + 0.006 + leftBermExtraH * 0.60, 0.05, 0.70, -0.28);
+      this.setNode(2, leftCenterX, leftCenterZ, -(halfWidth + leftBermWidth * 0.40), leftBermHeight, 0.10, 1.0, -0.16);
+      this.setNode(3, leftCenterX, leftCenterZ, -(halfWidth + (shoulderDx + leftBermExtraW * 0.25) * 0.4), leftShoulderY, 0.15, 1.0, 0.42);
+      this.setNode(4, leftCenterX, leftCenterZ, -halfWidth * 0.70, rutFloorY + 0.004, 0.20, 1.0, 0.26);
+      this.setNode(5, leftCenterX, leftCenterZ, 0.0, rutFloorY, 0.27, 1.0, 0.0);
+      this.setNode(6, leftCenterX, leftCenterZ, halfWidth * 0.70, rutFloorY + 0.004, 0.34, 1.0, -0.26);
+      this.setNode(7, leftCenterX, leftCenterZ, halfWidth + shoulderDx * 0.3, innerShoulderY, 0.39, 1.0, -0.36);
+      this.setNode(8, leftCenterX, leftCenterZ, halfWidth + shoulderDx * 0.8, medianY * 0.92, 0.44, 1.0, -0.16);
+      this.setNode(9, (leftCenterX + rightCenterX) * 0.5, (leftCenterZ + rightCenterZ) * 0.5, 0.0, medianY, 0.50, 1.0, 0.0);
+      this.setNode(10, rightCenterX, rightCenterZ, -(halfWidth + shoulderDx * 0.8), medianY * 0.92, 0.56, 1.0, 0.16);
+      this.setNode(11, rightCenterX, rightCenterZ, -(halfWidth + shoulderDx * 0.3), innerShoulderY, 0.61, 1.0, 0.36);
+      this.setNode(12, rightCenterX, rightCenterZ, -halfWidth * 0.70, rutFloorY + 0.004, 0.66, 1.0, 0.26);
+      this.setNode(13, rightCenterX, rightCenterZ, 0.0, rutFloorY, 0.73, 1.0, 0.0);
+      this.setNode(14, rightCenterX, rightCenterZ, halfWidth * 0.70, rutFloorY + 0.004, 0.80, 1.0, -0.26);
+      this.setNode(15, rightCenterX, rightCenterZ, halfWidth + (shoulderDx + rightBermExtraW * 0.25) * 0.4, rightShoulderY, 0.85, 1.0, -0.42);
+      this.setNode(16, rightCenterX, rightCenterZ, halfWidth + rightBermWidth * 0.40, rightBermHeight, 0.90, 1.0, 0.16);
+      this.setNode(17, rightCenterX, rightCenterZ, halfWidth + rightBermWidth * 0.95, powderSurfaceY + 0.006 + rightBermExtraH * 0.60, 0.95, 0.70, 0.28);
+      this.setNode(18, rightCenterX, rightCenterZ, halfWidth + rightBermWidth * 1.80, 0.007, 1.00, 0.0, 0.0);
 
-        // 9: Center median crest (gentle rounded mound between skis)
-        { cx: (leftCenterX + rightCenterX) * 0.5, cz: (leftCenterZ + rightCenterZ) * 0.5, lat: 0.0, h: medianY, u: 0.50, alpha: 1.0, isRut: false, wallTilt: 0.0 },
-
-        // 10: Right median flank
-        { cx: rightCenterX, cz: rightCenterZ, lat: -(halfWidth + shoulderDx * 0.8), h: medianY * 0.92, u: 0.56, alpha: 1.0, isRut: false, wallTilt: 0.16 },
-        // 11: Right inner rounded shoulder
-        { cx: rightCenterX, cz: rightCenterZ, lat: -(halfWidth + shoulderDx * 0.3), h: innerShoulderY, u: 0.61, alpha: 1.0, isRut: false, wallTilt: 0.36 },
-        // 12: Right rut inner bowl edge
-        { cx: rightCenterX, cz: rightCenterZ, lat: -halfWidth * 0.70, h: rutFloorY + 0.004, u: 0.66, alpha: 1.0, isRut: true, wallTilt: 0.26 },
-        // 13: Right rut floor center
-        { cx: rightCenterX, cz: rightCenterZ, lat: 0.0, h: rutFloorY, u: 0.73, alpha: 1.0, isRut: true, wallTilt: 0.0 },
-        // 14: Right rut outer bowl edge
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth * 0.70, h: rutFloorY + 0.004, u: 0.80, alpha: 1.0, isRut: true, wallTilt: -0.26 },
-        // 15: Right outer rounded shoulder (soft S-curve roll up to berm)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + (shoulderDx + rightBermExtraW * 0.25) * 0.4, h: rightShoulderY, u: 0.85, alpha: 1.0, isRut: false, wallTilt: -0.42 },
-        // 16: Right berm crest (smooth rounded peak)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.40, h: rightBermHeight, u: 0.90, alpha: 1.0, isRut: false, wallTilt: 0.16 },
-        // 17: Outer right flank (gentle outer ramp)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 0.95, h: powderSurfaceY + 0.006 + rightBermExtraH * 0.60, u: 0.95, alpha: 0.70, isRut: false, wallTilt: 0.28 },
-        // 18: Outer right feather (softly blends into untouched snow)
-        { cx: rightCenterX, cz: rightCenterZ, lat: halfWidth + rightBermWidth * 1.80, h: 0.007, u: 1.00, alpha: 0.0, isRut: false, wallTilt: 0.0 }
-      ];
-
-      // Populate new slice at index 0..18
+      const baseVert = writeSlot * this.VERTS_PER_SEG;
       for (let i = 0; i < this.VERTS_PER_SEG; i++) {
-        const node = nodes[i];
-        const px = node.cx + rx * node.lat + nx * node.h;
-        const pz = node.cz + rz * node.lat + nz * node.h;
-        // Sample exact ground elevation at every vertex to hug the terrain across any slope
-        const groundY = this.terrainSampler ? this.terrainSampler(px, pz) : contactY;
-        const py = groundY + ny * node.h;
+        const cx = this._nodeCx[i];
+        const cz = this._nodeCz[i];
+        const lat = this._nodeLat[i];
+        const h = this._nodeH[i];
 
-        const vIdx = i * 3;
+        const px = cx + rx * lat + nx * h;
+        const pz = cz + rz * lat + nz * h;
+        const groundY = this.terrainSampler ? this.terrainSampler(px, pz) : contactY;
+        const py = groundY + ny * h;
+
+        const vIdx = (baseVert + i) * 3;
         this.basePositions[vIdx + 0] = px;
         this.basePositions[vIdx + 1] = py;
         this.basePositions[vIdx + 2] = pz;
+        this.positions[vIdx + 0] = px;
+        this.positions[vIdx + 1] = py;
+        this.positions[vIdx + 2] = pz;
 
-        // Calculate 3D surface normal:
-        const wallTilt = node.wallTilt;
+        const wallTilt = this._nodeWallTilt[i];
         const normX = nx + rx * wallTilt;
         const normY = ny;
         const normZ = nz + rz * wallTilt;
@@ -521,70 +470,80 @@ export class CarvedSnowTrail {
         this.normals[vIdx + 1] = normY * invLen;
         this.normals[vIdx + 2] = normZ * invLen;
 
-        // Vertex color: pure luminous alpine white snow across entire trail
-        this.colors[vIdx + 0] = 1.0;
-        this.colors[vIdx + 1] = 1.0;
-        this.colors[vIdx + 2] = 1.0;
-
-        const uvIdx = i * 2;
-        this.uvs[uvIdx + 0] = node.u;
+        const uvIdx = (baseVert + i) * 2;
+        this.uvs[uvIdx + 0] = this._nodeU[i];
         this.uvs[uvIdx + 1] = this.cumulativeDistance * 0.8;
 
-        this.baseAlphas[i] = node.alpha;
+        const a = this._nodeAlpha[i];
+        this.baseAlphas[baseVert + i] = a;
+        this.alphas[baseVert + i] = a;
       }
 
-      this.applyTrailCaps();
-      const numQuadsPerSegment = this.VERTS_PER_SEG - 1;
-      this.geometry.setDrawRange(0, Math.max(0, this.count - 1) * numQuadsPerSegment * 6);
-      this.notifyGeometryUpdate();
+      const posAttr = this.geometry.attributes.position as THREE.BufferAttribute;
+      const normAttr = this.geometry.attributes.normal as THREE.BufferAttribute;
+      const uvAttr = this.geometry.attributes.uv as THREE.BufferAttribute;
+
+      posAttr.clearUpdateRanges();
+      normAttr.clearUpdateRanges();
+      uvAttr.clearUpdateRanges();
+      alphaAttr.clearUpdateRanges();
+
+      posAttr.addUpdateRange(baseVert * 3, this.VERTS_PER_SEG * 3);
+      normAttr.addUpdateRange(baseVert * 3, this.VERTS_PER_SEG * 3);
+      uvAttr.addUpdateRange(baseVert * 2, this.VERTS_PER_SEG * 2);
+      alphaAttr.addUpdateRange(baseVert, this.VERTS_PER_SEG);
+
+      this.taperActiveRun(posAttr, alphaAttr);
+
+      posAttr.needsUpdate = true;
+      normAttr.needsUpdate = true;
+      uvAttr.needsUpdate = true;
+      alphaAttr.needsUpdate = true;
+
+      const activeSegs = this.segCount < this.maxSegments ? Math.max(0, this.segCount - 1) : this.maxSegments;
+      this.geometry.setDrawRange(0, activeSegs * this.INDICES_PER_SEG);
+
+      this.decayTrail(alphaAttr);
+      return;
     }
 
-    this.decayTrail();
+    alphaAttr.clearUpdateRanges();
+    this.decayTrail(alphaAttr);
   }
 
-  private decayTrail(): void {
-    if (this.count <= 0) return;
+  private decayTrail(alphaAttr: THREE.BufferAttribute): void {
+    const fadeThreshold = 950;
+    if (this.segCount <= fadeThreshold) return;
 
-    // Keep active trail behind player completely crisp and solid (100% alpha)
-    // Only fade smoothly at the tail end of the buffer (beyond segment 950)
-    const fadeStart = Math.min(this.count, 950);
-    const fadeLen = this.maxSegments - fadeStart;
-    if (this.count > fadeStart && fadeLen > 0) {
-      let needsUpdate = false;
-      for (let s = fadeStart; s < this.count; s++) {
-        const segAlpha = 1.0 - (s - fadeStart) / fadeLen;
-        const offset = s * this.VERTS_PER_SEG;
-        for (let v = 0; v < this.VERTS_PER_SEG; v++) {
-          const idx = offset + v;
-          if (v !== 0 && v !== 18) {
-            this.baseAlphas[idx] = Math.min(this.baseAlphas[idx], segAlpha);
-            this.alphas[idx] = Math.min(this.alphas[idx], segAlpha);
-            needsUpdate = true;
-          }
+    const fadeLen = this.segCount - fadeThreshold;
+    const oldestSlot = this.segCount < this.maxSegments
+      ? 0
+      : (this.headSlot + 1) % this.maxSegments;
+
+    let anyUpdated = false;
+    for (let k = 0; k < fadeLen; k++) {
+      const slot = (oldestSlot + k) % this.maxSegments;
+      const segAlpha = k / fadeLen;
+      const offset = slot * this.VERTS_PER_SEG;
+      for (let v = 1; v < this.VERTS_PER_SEG - 1; v++) {
+        const idx = offset + v;
+        if (this.alphas[idx] > segAlpha) {
+          this.baseAlphas[idx] = Math.min(this.baseAlphas[idx], segAlpha);
+          this.alphas[idx] = Math.min(this.alphas[idx], segAlpha);
+          anyUpdated = true;
         }
       }
-      if (needsUpdate) {
-        const start = fadeStart * this.VERTS_PER_SEG;
-        const count = (this.count - fadeStart) * this.VERTS_PER_SEG;
-        this.setAttributeUpdateRange(this.geometry.attributes.aAlpha as THREE.BufferAttribute, start, count);
-      }
     }
-  }
 
-  private setAttributeUpdateRange(attr: THREE.BufferAttribute, offset: number, count: number): void {
-    if (count <= 0) return;
-    attr.clearUpdateRanges();
-    attr.addUpdateRange(offset, count);
-    attr.needsUpdate = true;
-  }
-
-  private notifyGeometryUpdate(): void {
-    if (this.count <= 0) return;
-    const activeVerts = this.count * this.VERTS_PER_SEG;
-    this.setAttributeUpdateRange(this.geometry.attributes.position as THREE.BufferAttribute, 0, activeVerts * 3);
-    this.setAttributeUpdateRange(this.geometry.attributes.normal as THREE.BufferAttribute, 0, activeVerts * 3);
-    this.setAttributeUpdateRange(this.geometry.attributes.uv as THREE.BufferAttribute, 0, activeVerts * 2);
-    this.setAttributeUpdateRange(this.geometry.attributes.aAlpha as THREE.BufferAttribute, 0, activeVerts);
+    if (anyUpdated) {
+      const firstLen = Math.min(fadeLen, this.maxSegments - oldestSlot);
+      alphaAttr.addUpdateRange(oldestSlot * this.VERTS_PER_SEG, firstLen * this.VERTS_PER_SEG);
+      const rem = fadeLen - firstLen;
+      if (rem > 0) {
+        alphaAttr.addUpdateRange(0, rem * this.VERTS_PER_SEG);
+      }
+      alphaAttr.needsUpdate = true;
+    }
   }
 
   public dispose(scene?: THREE.Scene): void {
@@ -594,6 +553,5 @@ export class CarvedSnowTrail {
       this.mesh.parent.remove(this.mesh);
     }
     this.geometry.dispose();
-    this.material.dispose();
   }
 }

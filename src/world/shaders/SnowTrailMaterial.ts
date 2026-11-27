@@ -26,11 +26,11 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
     roughness: 0.80,
     metalness: 0.02,
     transparent: true,
-    depthWrite: true,
+    depthWrite: false,
     polygonOffset: true,
     polygonOffsetFactor: -3.0,
     polygonOffsetUnits: -6.0,
-    side: THREE.DoubleSide
+    side: THREE.FrontSide
   });
 
   material.onBeforeCompile = (shader) => {
@@ -279,7 +279,6 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
       /* glsl */ `
       #include <dithering_fragment>
       gl_FragColor.a *= vTrailAlpha;
-      if (gl_FragColor.a < 0.01) discard;
       `
     );
   };
@@ -299,4 +298,35 @@ export function createSnowTrailMaterial(options: SnowTrailMaterialOptions = {}):
 
   (material as any).customUniforms = uniforms;
   return material;
+}
+
+let _sharedSnowTrailMaterial: THREE.MeshStandardMaterial | null = null;
+
+export function getSharedSnowTrailMaterial(): THREE.MeshStandardMaterial {
+  if (!_sharedSnowTrailMaterial) {
+    _sharedSnowTrailMaterial = createSnowTrailMaterial();
+  }
+  return _sharedSnowTrailMaterial;
+}
+
+export function updateSharedSnowTrailUniforms(
+  time: number,
+  sunDirection: THREE.Vector3,
+  cameraPos: THREE.Vector3,
+  nightFactor: number = 0.0,
+  sunColor?: THREE.Color,
+  shadowColor?: THREE.Color,
+  goldenFactor: number = 0.0
+): void {
+  if (_sharedSnowTrailMaterial && _sharedSnowTrailMaterial.userData.update) {
+    _sharedSnowTrailMaterial.userData.update(
+      time,
+      sunDirection,
+      cameraPos,
+      nightFactor,
+      sunColor,
+      shadowColor,
+      goldenFactor
+    );
+  }
 }
