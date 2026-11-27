@@ -6,10 +6,8 @@ import { GmaPlayerPhysics } from '../mechanics/GmaPlayerPhysics';
 import { TrickScoringSystem } from '../mechanics/TrickScoring';
 import { SportType, TurnType, MovementState } from '../mechanics/GmaConfig';
 import { InputState } from '../mechanics/ControlsProcessor';
-import { CarvedSnowTrail } from '../world/trails/CarvedSnowTrail';
-import { SnowSpraySystem, SnowSprayParams } from '../world/trails/SnowSpraySystem';
-import { SnowAudio } from '../audio/SnowAudio';
-import { updateSkierFootGrounding, emitSkierSnowSpray } from './SkierVisualHelpers';
+import { SkierEffects } from './SkierEffects';
+import { updateSkierFootGrounding } from './SkierVisualHelpers';
 export interface SkierInput {
   forward: boolean; // W / Up: pole staking push on flats/uphills + aero tuck
   brake: boolean;   // S / Down: dig edges to brake / snowplow wedge
@@ -142,32 +140,8 @@ export class SkierController {
   private wasCrashingPhysics = false;
   private prevJumpInput = false;
 
-  // Audio, Trail Ribbon and Particles
-  private readonly audio = new SnowAudio();
-  private trailRibbon!: CarvedSnowTrail;
-  private snowSpray!: SnowSpraySystem;
-  private readonly _sprayParams: SnowSprayParams = {
-    posX: 0,
-    posY: 0,
-    posZ: 0,
-    fwdX: 0,
-    fwdY: 0,
-    fwdZ: 0,
-    rightX: 1,
-    rightY: 0,
-    rightZ: 0,
-    normalX: 0,
-    normalY: 1,
-    normalZ: 0,
-    speed: 0,
-    leanAngle: 0,
-    slipAngleDeg: 0,
-    vLateral: 0,
-    isGrounded: false,
-    isDrifting: false,
-    isSharpTurn: false,
-    sphereRadius: 0.45
-  };
+  // Audio, Trail Ribbon and Particles presentation layer
+  private readonly effects: SkierEffects;
 
   // Scratch objects (zero allocations in hot path)
   private readonly _up = new THREE.Vector3(0, 1, 0);
@@ -195,7 +169,6 @@ export class SkierController {
   private terrainSampler: ((x: number, z: number) => number) | null = null;
   private groundClearanceOffset = 0.0;
   private scene: THREE.Scene;
-  private audioInitHandler: (() => void) | null = null;
 
   // Persistent Rapier & simulation scratch objects (zero per-frame allocations)
   private readonly _rayCenter: RAPIER.Ray;
@@ -266,27 +239,9 @@ export class SkierController {
     });
     scene.add(this.root);
 
-    // 3. Build Snow Spray Particle System & Trail Ribbon
-    this.initSnowSpray(scene);
-    this.trailRibbon = new CarvedSnowTrail(scene);
-    if (this.terrainSampler) {
-      this.trailRibbon.setTerrainSampler(this.terrainSampler);
-    }
-
-    // 4. Setup Audio gesture trigger
-    const initAudio = () => {
-      this.audio.init();
-      window.removeEventListener('keydown', initAudio);
-      window.removeEventListener('pointerdown', initAudio);
-      this.audioInitHandler = null;
-    };
-    this.audioInitHandler = initAudio;
-    window.addEventListener('keydown', initAudio, { once: true });
-    window.addEventListener('pointerdown', initAudio, { once: true });
-  }
-
-  private initSnowSpray(scene: THREE.Scene): void {
-    this.snowSpray = new SnowSpraySystem(scene, 900);
+    // 3. Build Snow Spray Particle System, Trail Ribbon & Audio
+    this.effects = new SkierEffects(scene);
+    this.animator.onPolePlantAudio = () => this.effects.playPolePlant();
   }
 
   public get mesh(): THREE.Group {
@@ -354,7 +309,6 @@ export class SkierController {
   private buildCharacterMesh(): void {
     this.skierCharacter = buildSkierCharacter(PALETTES.coral);
     this.animator = new SkierAnimator(this.skierCharacter);
-    this.animator.onPolePlantAudio = () => this.audio.playPolePlant();
     this.skierCharacter.root.position.y = -this.cfg.sphereRadius + 0.02;
     this.visualRoot.add(this.skierCharacter.root);
     this.updateSportVisuals();
@@ -385,7 +339,7 @@ export class SkierController {
     this.airTimer = 0;
     this.isGrounded = false;
     this.wasCrashingPhysics = false;
-    if (this.trailRibbon) this.trailRibbon.onRespawn();
+    this.effects.onRespawn();
     this.root.position.set(x, bodyY, z);
     this.visualRoot.quaternion.setFromAxisAngle(this._up, yaw);
     this.skierCharacter.resetPose();
@@ -529,9 +483,7 @@ export class SkierController {
       } else {
         this.animator.pickRandomJumpVariation();
       }
-      if (this.trailRibbon) {
-        this.trailRibbon.onJumpStart();
-      }
+      this.effects.onJumpStart();
     }
     this.prevJumpInput = !!input.jump;
 
@@ -540,12 +492,10 @@ export class SkierController {
     this.speed = this.gmaPhysics.speed;
     const isCrashing = this.gmaPhysics.state === MovementState.Crashing;
     this.isGrounded = this.gmaPhysics.state !== MovementState.Airborne && !isCrashing;
-    if (this.trailRibbon) {
-      if (isCrashing && !this.wasCrashingPhysics) {
-        this.trailRibbon.onCrash();
-      } else if (!isCrashing && this.wasCrashingPhysics) {
-        this.trailRibbon.onRespawn();
-      }
+    if (isCrashing && !this.wasCrashingPhysics) {
+      this.effects.onCrash();
+    } else if (!isCrashing && this.wasCrashingPhysics) {
+      this.effects.onRespawn();
     }
     this.wasCrashingPhysics = isCrashing;
     this.isDrifting = this.gmaPhysics.currentTurnType === TurnType.SlideTurn || this.gmaPhysics.currentTurnType === TurnType.OverTurn || input.brake;
@@ -581,7 +531,7 @@ export class SkierController {
     // Land audio thump & trick notification
     if (this.wasGrounded !== this.isGrounded) {
       if (this.isGrounded && this.airTimer > 0.25) {
-        this.audio.playLandThump(this.gmaPhysics.state !== MovementState.Crashing);
+        this.effects.playLandThump(this.gmaPhysics.state !== MovementState.Crashing);
         if ((!this.gmaPhysics.trickScoring.lastFinalizedTrickName || this.gmaPhysics.trickScoring.lastFinalizedTrickName === 'BIG AIR') && this.gmaPhysics.state !== MovementState.Crashing) {
           const varNames: Record<string, string> = {
             grab: 'SAFETY GRAB',
@@ -765,7 +715,7 @@ export class SkierController {
       // 4. Staking Sound Trigger
       if (this.isGrounded && this.gmaPhysics.isStaking) {
         if (this.gmaPhysics.stakingPlantTriggered) {
-          this.audio.playPolePlant();
+          this.effects.playPolePlant();
           this.gmaPhysics.stakingPlantTriggered = false;
         }
       } else {
@@ -774,20 +724,26 @@ export class SkierController {
     }
 
     // 6. Snow Spray Particles, Persistent Trail Ribbon & Audio
-    this.updateSnowSpray(dt);
-    if (this.trailRibbon) {
-      this.trailRibbon.update(
-        this.root.position,
-        this._right,
-        this.smoothNormal,
-        this.isGrounded,
-        this.slipAngleDeg,
-        this.speed,
-        this.isDrifting,
-        this.leanAngle
-      );
-    }
-    this.audio.update(this.speed, this.vLateral, this.isGrounded, this.isDrifting, this.gripUtilization);
+    this.effects.updateFrame({
+      dt,
+      position: this.root.position,
+      forward: this._forward,
+      right: this._right,
+      interpNormal: this._interpNormal,
+      smoothNormal: this.smoothNormal,
+      speed: this.speed,
+      vLateral: this.vLateral,
+      leanAngle: this.leanAngle,
+      steerX: this._inputState.steerX,
+      slipAngleDeg: this.slipAngleDeg,
+      gripUtilization: this.gripUtilization,
+      isGrounded: this.isGrounded,
+      isDrifting: this.isDrifting,
+      isSlashing: this.isSlashing,
+      isSlideTurn: this.isDrifting || this.gmaPhysics.currentTurnType === TurnType.SlideTurn,
+      isSharpTurn: this.isSlashing || this.gmaPhysics.currentTurnType === TurnType.SharpTurn,
+      sphereRadius: this.cfg.sphereRadius
+    });
 
     this.gmaPhysics.trickScoring.updateDisplay(dt);
   }
@@ -801,63 +757,22 @@ export class SkierController {
     _shadowColor?: THREE.Color,
     _goldenFactor: number = 0.0
   ): void {
-    if (this.snowSpray) {
-      this.snowSpray.setLightingColor(sunColor);
-    }
+    this.effects.updateLighting(sunColor);
   }
 
   public setTerrainSampler(sampler: (x: number, z: number) => number): void {
     this.terrainSampler = sampler;
     this.gmaPhysics.ragdoll.setTerrainSampler(sampler);
-    if (this.trailRibbon) {
-      this.trailRibbon.setTerrainSampler(sampler);
-    }
+    this.effects.setTerrainSampler(sampler);
   }
 
   private triggerCrashSpray(): void {
-    if (!this.snowSpray) return;
     const pos = this._rbTranslation;
-    this.snowSpray.emitCrashBurst(pos.x, pos.y, pos.z, this.cfg.sphereRadius);
-  }
-
-  private updateSnowSpray(dt: number): void {
-    const sprayLean = Math.sign(this.leanAngle || this._inputState.steerX) * Math.min(
-      1.0,
-      Math.max(
-        Math.abs(this._inputState.steerX),
-        Math.abs(this.leanAngle) * (this.isDrifting || this.isSlashing ? 1.0 : 0.65)
-      )
-    );
-    emitSkierSnowSpray(
-      this.snowSpray,
-      dt,
-      this._sprayParams,
-      this.root.position,
-      this._forward,
-      this._right,
-      this._interpNormal,
-      this.speed,
-      sprayLean,
-      this.slipAngleDeg,
-      this.vLateral,
-      this.isGrounded,
-      this.isDrifting || this.gmaPhysics.currentTurnType === TurnType.SlideTurn,
-      this.isSlashing || this.gmaPhysics.currentTurnType === TurnType.SharpTurn,
-      this.cfg.sphereRadius
-    );
+    this.effects.emitCrashBurst(pos.x, pos.y, pos.z, this.cfg.sphereRadius);
   }
 
   public dispose(): void {
-    if (this.audioInitHandler) {
-      window.removeEventListener('keydown', this.audioInitHandler);
-      window.removeEventListener('pointerdown', this.audioInitHandler);
-      this.audioInitHandler = null;
-    }
-    this.audio.dispose();
-    this.trailRibbon.dispose(this.scene);
-    if (this.snowSpray) {
-      this.snowSpray.dispose(this.scene);
-    }
+    this.effects.dispose();
     if (this.skierCharacter) {
       disposeCharacter(this.skierCharacter);
     }

@@ -1,6 +1,7 @@
 import { SkierController } from '../player/SkierController';
 import { DynamicCameraDirector } from '../camera/CameraDirector';
 import { TurnType } from '../mechanics/GmaConfig';
+import './overlays.css';
 
 export class HudOverlay {
   private hudElement!: HTMLElement;
@@ -65,6 +66,7 @@ export class HudOverlay {
 
     this.hudElement = document.createElement('div');
     this.hudElement.id = 'hud';
+    this.hudElement.className = 'hud-blur';
     this.hudElement.style.cssText = `
       position: absolute;
       top: 16px;
@@ -73,7 +75,6 @@ export class HudOverlay {
       font-family: 'Segoe UI', Roboto, monospace;
       font-size: 13px;
       background: rgba(15, 23, 42, 0.82);
-      backdrop-filter: blur(10px);
       border: 1px solid rgba(255, 255, 255, 0.18);
       border-radius: 8px;
       padding: 12px 18px;

@@ -24,6 +24,7 @@ export class LightingControls {
 
     this.container = document.createElement('div');
     this.container.id = 'lighting-toggle-container';
+    this.container.className = 'hud-blur';
     this.container.style.cssText = `
       position: absolute;
       top: 18px;
@@ -32,7 +33,6 @@ export class LightingControls {
       align-items: center;
       gap: 10px;
       background: rgba(15, 23, 42, 0.82);
-      backdrop-filter: blur(12px);
       border: 1px solid rgba(255, 255, 255, 0.22);
       border-radius: 24px;
       padding: 6px 14px;

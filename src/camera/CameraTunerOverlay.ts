@@ -1,5 +1,13 @@
 import { DynamicCameraDirector } from './CameraDirector';
 import { CameraSettings, defaultCameraSettings } from './CameraConfig';
+import type { QualityTier } from '../core/QualitySettings';
+
+export interface CameraTunerQualityOptions {
+  tier: QualityTier;
+  backdropBlur: boolean;
+  onQualityChange?: (tier: QualityTier) => void;
+  onBackdropBlurChange?: (enabled: boolean) => void;
+}
 
 export class CameraTunerOverlay {
   private director: DynamicCameraDirector;
@@ -7,10 +15,12 @@ export class CameraTunerOverlay {
   private panelElement!: HTMLElement;
   private toggleBtnElement!: HTMLElement;
   private isVisible: boolean = false;
+  private qualityOptions: CameraTunerQualityOptions;
 
-  constructor(director: DynamicCameraDirector) {
+  constructor(director: DynamicCameraDirector, qualityOptions?: CameraTunerQualityOptions) {
     this.director = director;
     this.settings = director.getSettings();
+    this.qualityOptions = qualityOptions ?? { tier: 'high', backdropBlur: true };
     this.createUI();
     this.bindEvents();
   }
@@ -28,13 +38,13 @@ export class CameraTunerOverlay {
     // 1. Minimized floating pill button (visible when collapsed)
     this.toggleBtnElement = document.createElement('button');
     this.toggleBtnElement.id = 'camera-tuner-toggle-btn';
+    this.toggleBtnElement.className = 'hud-blur';
     this.toggleBtnElement.innerHTML = '⚙ Camera Tuner <span style="opacity:0.6;font-size:11px;">[O]</span>';
     this.toggleBtnElement.style.cssText = `
       position: fixed;
       top: 16px;
       right: 16px;
       background: rgba(15, 23, 42, 0.85);
-      backdrop-filter: blur(8px);
       border: 1px solid rgba(255, 255, 255, 0.25);
       color: #38bdf8;
       font-family: 'Segoe UI', Roboto, sans-serif;
@@ -61,6 +71,7 @@ export class CameraTunerOverlay {
     // 2. Full Tuning Studio Panel
     this.panelElement = document.createElement('div');
     this.panelElement.id = 'camera-tuner-panel';
+    this.panelElement.className = 'hud-blur';
     this.panelElement.style.cssText = `
       position: fixed;
       top: 16px;
@@ -69,7 +80,6 @@ export class CameraTunerOverlay {
       max-height: calc(100vh - 32px);
       overflow-y: auto;
       background: rgba(15, 23, 42, 0.92);
-      backdrop-filter: blur(12px);
       border: 1px solid rgba(255, 255, 255, 0.18);
       border-radius: 10px;
       padding: 14px 16px;
@@ -203,6 +213,20 @@ export class CameraTunerOverlay {
         </div>
       </div>
 
+      <!-- GRAPHICS QUALITY TIER -->
+      <div style="border:1px solid rgba(255,255,255,0.12);border-radius:8px;padding:10px;margin-bottom:12px;background:rgba(255,255,255,0.02);">
+        <div style="font-weight:700;color:#94a3b8;margin-bottom:8px;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">Graphics Quality</div>
+        <div style="display:flex;gap:6px;margin-bottom:8px;">
+          <button id="quality-btn-low" style="flex:1;padding:5px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:${this.qualityOptions.tier === 'low' ? '#0284c7' : 'rgba(255,255,255,0.06)'};color:#fff;font-weight:600;font-size:11px;cursor:pointer;">LOW</button>
+          <button id="quality-btn-medium" style="flex:1;padding:5px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:${this.qualityOptions.tier === 'medium' ? '#0284c7' : 'rgba(255,255,255,0.06)'};color:#fff;font-weight:600;font-size:11px;cursor:pointer;">MEDIUM</button>
+          <button id="quality-btn-high" style="flex:1;padding:5px;border-radius:6px;border:1px solid rgba(255,255,255,0.2);background:${this.qualityOptions.tier === 'high' ? '#0284c7' : 'rgba(255,255,255,0.06)'};color:#fff;font-weight:600;font-size:11px;cursor:pointer;">HIGH</button>
+        </div>
+        <label style="display:flex;align-items:center;justify-content:space-between;font-size:11px;color:#cbd5e1;cursor:pointer;">
+          <span>UI Backdrop Blur</span>
+          <input type="checkbox" id="chk-backdrop-blur" ${this.qualityOptions.backdropBlur ? 'checked' : ''} />
+        </label>
+      </div>
+
       <!-- ACTIONS -->
       <div style="display:flex;flex-direction:column;gap:8px;">
         <button id="cam-copy-btn" style="background:#0284c7;color:#fff;border:none;padding:10px;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;box-shadow:0 2px 8px rgba(2,132,199,0.4);transition:all 0.15s ease;">
@@ -308,6 +332,39 @@ export class CameraTunerOverlay {
         updateModeStyles();
       });
     }
+
+    // Quality tier buttons & backdrop-filter toggle
+    const qButtons: Record<QualityTier, HTMLButtonElement | null> = {
+      low: this.panelElement.querySelector('#quality-btn-low'),
+      medium: this.panelElement.querySelector('#quality-btn-medium'),
+      high: this.panelElement.querySelector('#quality-btn-high')
+    };
+    const blurCheckbox = this.panelElement.querySelector('#chk-backdrop-blur') as HTMLInputElement | null;
+
+    const updateQualityStyles = (activeTier: QualityTier) => {
+      (['low', 'medium', 'high'] as QualityTier[]).forEach((t) => {
+        const btn = qButtons[t];
+        if (!btn) return;
+        btn.style.background = t === activeTier ? '#0284c7' : 'rgba(255,255,255,0.06)';
+        btn.style.borderColor = t === activeTier ? '#38bdf8' : 'rgba(255,255,255,0.2)';
+      });
+    };
+    updateQualityStyles(this.qualityOptions.tier);
+
+    (['low', 'medium', 'high'] as QualityTier[]).forEach((t) => {
+      qButtons[t]?.addEventListener('click', () => {
+        this.qualityOptions.tier = t;
+        this.qualityOptions.backdropBlur = t !== 'low';
+        if (blurCheckbox) blurCheckbox.checked = this.qualityOptions.backdropBlur;
+        updateQualityStyles(t);
+        this.qualityOptions.onQualityChange?.(t);
+      });
+    });
+
+    blurCheckbox?.addEventListener('change', () => {
+      this.qualityOptions.backdropBlur = blurCheckbox.checked;
+      this.qualityOptions.onBackdropBlurChange?.(blurCheckbox.checked);
+    });
   }
 
   private slidersMap = new Map<string, { slider: HTMLInputElement; label: HTMLElement }>();

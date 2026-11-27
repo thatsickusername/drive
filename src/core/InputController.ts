@@ -89,6 +89,10 @@ export class UnifiedInputController {
     window.addEventListener('mousemove', this.boundMouseMove);
   }
 
+  public resetState(): void {
+    this.onWindowBlur();
+  }
+
   private onWindowBlur(): void {
     this.keyState = {};
     this.isPointerActive = false;

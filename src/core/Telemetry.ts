@@ -96,6 +96,10 @@ export class Telemetry {
     }
   }
 
+  public setStartupMeasure(name: string, durationMs: number): void {
+    this.startupMeasures[name] = durationMs;
+  }
+
   public measure(name: string, startMark: string, endMark?: string): number {
     try {
       if (endMark) {

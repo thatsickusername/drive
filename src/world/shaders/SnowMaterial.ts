@@ -6,6 +6,8 @@ export interface SnowMaterialOptions {
   sunColor?: THREE.Color;
   shadowColor?: THREE.Color;
   anisotropy?: number;
+  detailTexture?: THREE.DataTexture;
+  detailSize?: number;
 }
 
 export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.MeshStandardMaterial {
@@ -13,8 +15,9 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
   const sunColor = options.sunColor || new THREE.Color(0xfff6ec);
   const shadowColor = options.shadowColor || new THREE.Color(0x9ca9cb);
 
-  // Generate or retrieve shared 1024x1024 procedural detail texture
-  const detailTexture = createSnowDetailTexture(options.anisotropy ?? 4);
+  // Use provided detail texture or generate/retrieve shared procedural detail texture
+  const detailTexture =
+    options.detailTexture ?? createSnowDetailTexture(options.anisotropy ?? 4, options.detailSize ?? 1024);
 
   const uniforms = {
     uDetailTex: { value: detailTexture },
@@ -309,6 +312,9 @@ export function createSnowMaterial(options: SnowMaterialOptions = {}): THREE.Mes
       uniforms.uGoldenFactor.value = goldenFactor;
       if (sunColor) uniforms.uSunColor.value.copy(sunColor);
       if (shadowColor) uniforms.uShadowColor.value.copy(shadowColor);
+    },
+    setDetailTexture(texture: THREE.DataTexture) {
+      uniforms.uDetailTex.value = texture;
     }
   };
 

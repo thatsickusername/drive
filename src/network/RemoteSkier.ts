@@ -46,6 +46,19 @@ const _scratchToCam = new THREE.Vector3();
 const _scratchContactPos = new THREE.Vector3();
 const REMOTE_SPHERE_RADIUS = 0.45;
 
+let cachedViewportW = typeof window !== 'undefined' ? window.innerWidth : 1280;
+let cachedViewportH = typeof window !== 'undefined' ? window.innerHeight : 720;
+let viewportListenerBound = false;
+
+function ensureViewportListener(): void {
+  if (viewportListenerBound || typeof window === 'undefined') return;
+  viewportListenerBound = true;
+  window.addEventListener('resize', () => {
+    cachedViewportW = window.innerWidth;
+    cachedViewportH = window.innerHeight;
+  });
+}
+
 export class RemoteSkier {
   public readonly id: number;
   public readonly root = new THREE.Group();
@@ -139,6 +152,7 @@ export class RemoteSkier {
 
   // Overhead Nametag / Trick popup UI element
   private tagElement: HTMLElement | null = null;
+  private trickElement: HTMLElement | null = null;
   private trickPopupTimer = 0;
   private lastTrickText = '';
 
@@ -183,11 +197,14 @@ export class RemoteSkier {
   }
 
   private createNameTag(paletteName: string): void {
+    ensureViewportListener();
     this.tagElement = document.createElement('div');
     this.tagElement.className = 'remote-skier-tag';
     this.tagElement.style.cssText = `
       position: absolute;
-      transform: translate(-50%, -100%);
+      left: 0;
+      top: 0;
+      will-change: transform;
       pointer-events: none;
       user-select: none;
       display: flex;
@@ -204,6 +221,7 @@ export class RemoteSkier {
         Skier #${this.id} <span style="color:#38bdf8;font-size:10px;">[${paletteName.toUpperCase()}]</span>
       </div>
     `;
+    this.trickElement = this.tagElement.querySelector(`#remote-trick-${this.id}`) as HTMLElement | null;
     document.body.appendChild(this.tagElement);
   }
 
@@ -278,10 +296,9 @@ export class RemoteSkier {
   public showTrick(trickName: string, points: number): void {
     this.trickPopupTimer = 2.5;
     this.lastTrickText = points > 0 ? `${trickName} +${points}` : trickName;
-    const el = document.getElementById(`remote-trick-${this.id}`);
-    if (el) {
-      el.textContent = this.lastTrickText;
-      el.style.display = 'block';
+    if (this.trickElement) {
+      this.trickElement.textContent = this.lastTrickText;
+      this.trickElement.style.display = 'block';
     }
   }
 
@@ -515,13 +532,12 @@ export class RemoteSkier {
       this.updateSnowSpray(dt, isCrashing);
     }
 
-    // Update screen-space name tag & trick banner position
+    // Update screen-space name tag & trick banner position via GPU-composited transform
     if (this.tagElement) {
       if (this.trickPopupTimer > 0) {
         this.trickPopupTimer -= dt;
-        if (this.trickPopupTimer <= 0) {
-          const el = document.getElementById(`remote-trick-${this.id}`);
-          if (el) el.style.display = 'none';
+        if (this.trickPopupTimer <= 0 && this.trickElement) {
+          this.trickElement.style.display = 'none';
         }
       }
 
@@ -536,11 +552,10 @@ export class RemoteSkier {
         if (_scratchProjected.z > 1.0) {
           this.tagElement.style.display = 'none';
         } else {
-          const x = (_scratchProjected.x * 0.5 + 0.5) * window.innerWidth;
-          const y = (-(_scratchProjected.y * 0.5) + 0.5) * window.innerHeight;
+          const x = (_scratchProjected.x * 0.5 + 0.5) * cachedViewportW;
+          const y = (-(_scratchProjected.y * 0.5) + 0.5) * cachedViewportH;
           this.tagElement.style.display = 'flex';
-          this.tagElement.style.left = `${x.toFixed(1)}px`;
-          this.tagElement.style.top = `${y.toFixed(1)}px`;
+          this.tagElement.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) translate(-50%, -100%)`;
         }
       }
     }

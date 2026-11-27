@@ -12,21 +12,22 @@ Alpine Freeride — Production-Readiness Audit Report
   Pre-Phase-1 baseline: 1,812 frames (30,172.1 ms wall elapsed, 0 page errors).
   Post-Phase-1 re-measurement: 1,808 frames / 1,800 sampled (30,153.7 ms wall elapsed, 0 page errors).
   Post-Phase-2 re-measurement: 1,800 sampled frames (0 page errors, 1280×720 ANGLE/D3D11 ?perf=1).
+  Post-Phase-3 re-measurement: 1,888 frames / 1,800 sampled (31,478.2 ms wall elapsed, 0 page errors, 1280×720 ANGLE/D3D11 ?perf=1).
 
-   Metric                                     │ Pre-Phase-1 Baseline                                         │ Post-Phase-1 Observed                                    │ Post-Phase-2 Observed                                     │ Phase 1 → Phase 2 Delta
-  ────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────
-   Average FPS / 1% Low FPS                   │ 60.02 FPS / 48.87 FPS                                        │ 59.97 FPS / 47.51 FPS                                    │ 59.97 FPS / 49.09 FPS                                     │ +1.58 FPS 1% low; headless D3D11 VSync jitter (CPU p99 0.80 ms)
-   JS CPU Frame Time                          │ avg 0.74 ms, p50 0.70 ms, p95 1.00 ms, p99 1.40 ms, max 8.00 │ avg 0.76 ms, p50 0.70 ms, p95 1.00 ms, p99 1.30 ms, max  │ avg 0.43 ms, p50 0.40 ms, p95 0.60 ms, p99 0.80 ms, max   │ -43.4% avg CPU (-0.33 ms); p99 1.30 → 0.80 ms (-38.5%)
-                                              │ ms                                                           │ 7.50 ms                                                  │ 7.40 ms                                                   │
-   Physics vs. Render CPU Time                │ Physics: avg 0.24 ms (p95 0.40 ms, max 6.20 ms)Render        │ Physics: avg 0.25 ms (p95 0.40 ms, max 1.50 ms)Render    │ Physics: avg 0.14 ms (p95 0.20 ms, max 1.00 ms)Render     │ Physics avg -44.0% (0.25 → 0.14 ms); Render avg -44.7% (0.47 →
-                                              │ dispatch: avg 0.47 ms (p95 0.60 ms, max 7.60 ms)             │ dispatch: avg 0.47 ms (p95 0.60 ms, max 6.90 ms)         │ dispatch: avg 0.26 ms (p95 0.40 ms, max 7.10 ms)          │ 0.26 ms)
-   Draw Calls (renderer.info.render.calls)    │ min 92, avg 112.9, max 124                                   │ min 85, avg 104.9, max 124                               │ min 35, avg 60.1, max 73                                  │ -44.8 avg draw calls (-42.7% vs Ph1; -46.8% vs pre-Ph1)
-   Triangles (renderer.info.render.triangles) │ min 319,186, avg 529,569, max 709,330                        │ min 137,008, avg 411,831, max 709,330                    │ min 112,392, avg 156,227, max 186,528                     │ -255,604 avg tris/frame (-62.1% vs Ph1; -70.5% vs pre-Ph1)
-   GPU Memory (renderer.info.memory)          │ 83 geometries, 2 textures, 12 shader programs                │ 85 geometries, 2 textures, 13 shader programs            │ 81 geometries, 2 textures, 13 shader programs             │ -4 geometries despite 3× terrain LODs + low-poly pine LODs
-   JS Heap (performance.memory)               │ 41.34 MB start → 43.71 MB end (min 41.28, max 49.74 MB)      │ 10.11 MB flat (gcDropsOver1MB: 0, maxGcDropMB: 0,        │ 10.11 MB flat (gcDropsOver1MB: 0, maxGcDropMB: 0,         │ 0 GC drops > 1 MB; 0 GC spike frames
-                                              │ (~90 GC drops > 1 MB in 30s)                                 │ gcSpikeFrames: 0)                                        │ gcSpikeFrames: 0)                                         │
-   Startup (?perf=1 marks)                    │ wasmInitMs: 16.3 ms, massifBuildMs: 567.9 ms,                │ wasmInitMs: 13.9 ms, massifBuildMs: 546.2 ms,            │ wasmInitMs: 14.3 ms, massifBuildMs: 543.4 ms,             │ TTFF 953.2 ms (844–985 ms across captures); massifBuildMs
-                                              │ timeToFirstFrameMs: 1,081.6 ms                               │ timeToFirstFrameMs: 997.9 ms                             │ timeToFirstFrameMs: 953.2 ms                              │ awaits Phase 3 workerization
+   Metric                                     │ Pre-Phase-1 Baseline                                         │ Post-Phase-1 Observed                                    │ Post-Phase-2 Observed                                     │ Post-Phase-3 Observed                                     │ Phase 2 → Phase 3 Delta
+  ────────────────────────────────────────────┼──────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────
+   Average FPS / 1% Low FPS                   │ 60.02 FPS / 48.87 FPS                                        │ 59.97 FPS / 47.51 FPS                                    │ 59.97 FPS / 49.09 FPS                                     │ 59.94 FPS / 48.14 FPS                                     │ VSync-locked ~60 FPS; max CPU frame spike cut 7.40 → 5.20 ms
+   JS CPU Frame Time                          │ avg 0.74 ms, p50 0.70 ms, p95 1.00 ms, p99 1.40 ms, max 8.00 │ avg 0.76 ms, p50 0.70 ms, p95 1.00 ms, p99 1.30 ms, max  │ avg 0.43 ms, p50 0.40 ms, p95 0.60 ms, p99 0.80 ms, max   │ avg 0.40 ms, p50 0.40 ms, p95 0.60 ms, p99 0.80 ms, max   │ -7.0% avg CPU (0.43 → 0.40 ms); max spike -29.7% (7.40 → 5.20
+                                              │ ms                                                           │ 7.50 ms                                                  │ 7.40 ms                                                   │ 5.20 ms                                                   │ ms)
+   Physics vs. Render CPU Time                │ Physics: avg 0.24 ms (p95 0.40 ms, max 6.20 ms)Render        │ Physics: avg 0.25 ms (p95 0.40 ms, max 1.50 ms)Render    │ Physics: avg 0.14 ms (p95 0.20 ms, max 1.00 ms)Render     │ Physics: avg 0.14 ms (p95 0.30 ms, max 1.20 ms)Render     │ Render avg -7.7% (0.26 → 0.24 ms); render max -29.6% (7.10 →
+                                              │ dispatch: avg 0.47 ms (p95 0.60 ms, max 7.60 ms)             │ dispatch: avg 0.47 ms (p95 0.60 ms, max 6.90 ms)         │ dispatch: avg 0.26 ms (p95 0.40 ms, max 7.10 ms)          │ dispatch: avg 0.24 ms (p95 0.40 ms, max 5.00 ms)          │ 5.00 ms via compileAsync)
+   Draw Calls (renderer.info.render.calls)    │ min 92, avg 112.9, max 124                                   │ min 85, avg 104.9, max 124                               │ min 35, avg 60.1, max 73                                  │ min 34, avg 45.9, max 69                                  │ 45.9 avg draw calls (-59.3% vs pre-Ph1)
+   Triangles (renderer.info.render.triangles) │ min 319,186, avg 529,569, max 709,330                        │ min 137,008, avg 411,831, max 709,330                    │ min 112,392, avg 156,227, max 186,528                     │ min 72,766, avg 122,572, max 170,626                      │ 122,572 avg tris/frame (-76.9% vs pre-Ph1)
+   GPU Memory (renderer.info.memory)          │ 83 geometries, 2 textures, 12 shader programs                │ 85 geometries, 2 textures, 13 shader programs            │ 81 geometries, 2 textures, 13 shader programs             │ 90 geometries, 2 textures, 12 shader programs             │ 12 shader programs pre-warmed via compileAsync
+   JS Heap (performance.memory)               │ 41.34 MB start → 43.71 MB end (min 41.28, max 49.74 MB)      │ 10.11 MB flat (gcDropsOver1MB: 0, maxGcDropMB: 0,        │ 10.11 MB flat (gcDropsOver1MB: 0, maxGcDropMB: 0,         │ 10.68 MB flat (gcDropsOver1MB: 0, maxGcDropMB: 0,         │ 0 GC drops > 1 MB; 0 GC spike frames
+                                              │ (~90 GC drops > 1 MB in 30s)                                 │ gcSpikeFrames: 0)                                        │ gcSpikeFrames: 0)                                         │ gcSpikeFrames: 0)                                         │
+   Startup (?perf=1 marks)                    │ wasmInitMs: 16.3 ms, massifBuildMs: 567.9 ms,                │ wasmInitMs: 13.9 ms, massifBuildMs: 546.2 ms,            │ wasmInitMs: 14.3 ms, massifBuildMs: 543.4 ms,             │ wasmInitMs: 17.6 ms, massifBuildMs: 14.9 ms (main thread),│ Main-thread massifBuildMs -97.3% (543.4 → 14.9 ms; 15.3 ms in
+                                              │ timeToFirstFrameMs: 1,081.6 ms                               │ timeToFirstFrameMs: 997.9 ms                             │ timeToFirstFrameMs: 953.2 ms                              │ timeToFirstFrameMs: 988.0 ms                              │ prod dist/); workerized + compileAsync behind BootOverlay
 
   Requires additional live profiling (not covered by this desktop trace):
 
@@ -145,20 +146,18 @@ Alpine Freeride — Production-Readiness Audit Report
 
    Metric           │ Score (/10) │ Key Evidence & Justification
   ──────────────────┼─────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────   
-   Optimization     │   8 / 10    │ Pros: Slot-aware rig merging (75 → 22–25 meshes, avg 60.1 draw calls), 3-tier terrain & 2-tier pine LODs (avg 156k tris), ring-buffered
-                    │             │ CarvedSnowTrail with slice-only uploads & shared FrontSide SnowTrailMaterial, SnowMaterial LOD texture gating, texel-snapped shadows.
-                    │             │ Remaining (Ph 3): 543 ms synchronous DetailTexture/massif boot stall, 1024×1024 uncompressed DetailTexture, quality tier presets.
-   Performance      │   8 / 10    │ Pros: 59.97 avg FPS, 0.43 ms avg CPU frame time (0.80 ms p99), 0.14 ms avg physics, 0.26 ms avg render dispatch, 60.1 avg draw calls
-                    │             │ (< 65 target), 156,227 avg tris (< 250k target), 0 GC drops > 1 MB, 60 Hz physics render interpolation wired.
-                    │             │ Remaining (Ph 3): Off-main-thread massif startup (TTFF 953 ms -> < 100 ms main thread) and real mobile GPU profiling.
-   Code Quality     │   7 / 10    │ Pros: tsconfig.json strict: true, shared SkierVisualHelpers (foot grounding & spray), clean ring buffers in Telemetry, SnowSpraySystem,
-                    │             │ CarvedSnowTrail, and RemoteSkier. Remaining (Ph 3): UI innerHTML decoupling & SkierController physics/VFX split.
-   Refactoring Need │   7 / 10    │ Pros: Eliminated duplicated foot-clamping and snow-spray logic between SkierController and RemoteSkier; SkierRig slot-merged.
-                    │             │ Remaining (Ph 3): Split SkierController (physics bridge vs VFX/audio), CameraDirector (841 lines), and consolidate duplicate #hud HTML.
-   Maintainability  │   7 / 10    │ Pros: Logical folder taxonomy, shared SkierVisualHelpers, slot-modular SkierRig ready for future cosmetics, shared SnowTrailMaterial.
-                    │             │ Remaining (Ph 3): UI DOM template decoupling (HudOverlay.ts, CameraTunerOverlay.ts) and automated regression tests.
-   Robustness       │   6 / 10    │ Pros: Zero leaked geometries/programs across 10-peer churn, full AlpineMassif & character disposal, window.blur & e.repeat input guards,
-                    │             │ visibilitychange reset. Remaining (Ph 3): webglcontextlost/webglcontextrestored recovery and Low/Med/High adaptive quality tiers.
+   Optimization     │   9 / 10    │ Slot-aware rig merging (22–25 meshes), 3-tier terrain & 2-tier pine LODs, ring-buffered CarvedSnowTrail with shared FrontSide material,
+                    │             │ SnowMaterial LOD texture gating, workerized massif/DetailTexture synthesis, Low/Medium/High quality tiers, and translate3d nametags.
+   Performance      │   9 / 10    │ 59.94 avg FPS, 0.40 ms avg CPU frame time (0.80 ms p99, 5.20 ms max), 0.14 ms avg physics, 0.24 ms avg render dispatch, 45.9 avg draw
+                    │             │ calls, 122,572 avg tris, 0 GC drops > 1 MB, and 14.9 ms main-thread massifBuildMs (15.3 ms in prod dist/). Awaits real mobile GPU validation.
+   Code Quality     │   8 / 10    │ tsconfig.json strict: true, shared SkierVisualHelpers & massifBuilder, clean ring buffers, SkierEffects/SkierController split, and
+                    │             │ consolidated UI overlay CSS/markup.
+   Refactoring Need │   8 / 10    │ Eliminated duplicated terrain/pine builder, foot-clamping, snow-spray, and #hud markup; extracted SkierEffects and BootOverlay; CameraDirector
+                    │             │ remains modular within its camera-mode boundary.
+   Maintainability  │   8 / 10    │ Logical folder taxonomy, shared SkierVisualHelpers, slot-modular SkierRig, worker-safe massifBuilder & detailTextureData, centralized
+                    │             │ QualitySettings, and automated Playwright regression checks (tests/regression.mjs).
+   Robustness       │   9 / 10    │ Zero leaked geometries/programs across 10-peer churn, full Game.dispose() DOM & WebGL teardown, window.blur/visibilitychange guards,
+                    │             │ webglcontextlost/webglcontextrestored recovery, and Low/Medium/High quality tiers verified in headless Chromium.
   ──────
   3. Critical Bottlenecks & Code Smells
 
@@ -168,16 +167,15 @@ Alpine Freeride — Production-Readiness Audit Report
   2. [Severity: P0] [FIXED IN PHASE 2] Unbounded Terrain Triangles & Missing LODs (530k Avg / 709k Max Tris/Frame)
       • Location: src/world/AlpineMassif.ts, src/core/Game.ts
       • Status: Fixed via 3-tier THREE.LOD terrain chunks (100×100 @ 0m, 50×50 @ 480m, 25×25 @ 950m with 45m perimeter skirts and unchanged 101×101 Rapier heightfields) and 2-tier InstancedMesh pine LODs switching at 450m while sharing instanceMatrix buffers. Average triangles dropped from 411,831 (Ph1) to 156,227 (-62.1%).
-  3. [Severity: P0] [PARTIAL — PHASE 1] Missing webglcontextlost Recovery & Input Stickiness on Window Blur
-      • Location: src/core/Renderer.ts:95-140, src/core/InputController.ts:78-110, src/core/Game.ts:31-46
-      • Status: window.blur input reset, e.repeat hotkey guards, and gamepad D-pad edge-detection fixed in Phase 1. webglcontextlost/webglcontextrestored recovery remains for Phase 3.
+  3. [Severity: P0] [FIXED IN PHASE 3] Missing webglcontextlost Recovery & Input Stickiness on Window Blur
+      • Location: src/core/Renderer.ts, src/core/InputController.ts, src/core/Game.ts
+      • Status: window.blur input reset, e.repeat hotkey guards, and gamepad D-pad edge-detection fixed in Phase 1. Phase 3 added webglcontextlost/webglcontextrestored handling (loop pause, accumulator/input reset, recovery banner, detail-texture refresh, and compileAsync re-warm) verified via WEBGL_lose_context Playwright simulation.
   4. [Severity: P1] [FIXED IN PHASE 2] CarvedSnowTrail Shifts 273 KB & Uploads Full Buffer Instead of Ring Buffer
       • Location: src/world/trails/CarvedSnowTrail.ts, src/world/shaders/SnowTrailMaterial.ts, src/core/Game.ts
       • Status: Fixed via true circular ring buffer (headSlot / segCount, pre-allocated 19-node typed arrays, O(1) index slot seam/gap updates, slice-scoped addUpdateRange uploads) and singleton SnowTrailMaterial updated once per frame.
-  5. [Severity: P1] Synchronous 543–568 ms Startup Stall (DetailTexture + AlpineMassif)
-      • Location: src/world/shaders/DetailTexture.ts:18-186, src/world/AlpineMassif.ts, src/core/Game.ts:80-174
-      • Problem: Main thread freezes for ~543 ms (massifBuildMs) generating a 1024×1024 Voronoi texture (~20M ops) and evaluating 381,924 heightfield samples + 36 Rapier colliders synchronously, pushing timeToFirstFrameMs to 953.2 ms (down from 1,081.6 ms).
-      • Recommended Fix (Phase 3): Move DetailTexture (512×512 on mobile / 1024×1024 on desktop, or pre-baked KTX2/WebP asset) and chunk heightfield generation into a Web Worker (transferring ArrayBuffers via postMessage), time-slice chunk/collider upload across frames or start with the spawn chunk first, and pre-compile shaders with await renderer.compileAsync(scene, camera) behind a loading indicator.
+  5. [Severity: P1] [FIXED IN PHASE 3] Synchronous 543–568 ms Startup Stall (DetailTexture + AlpineMassif)
+      • Location: src/world/shaders/detailTextureData.ts, src/world/massifBuilder.ts, src/world/massifWorker.ts, src/world/AlpineMassif.ts, src/core/Game.ts
+      • Status: Fixed by moving DetailTexture synthesis and 36-chunk heightfield/LOD/skirt/pine generation into massifWorker.ts (zero-copy ArrayBuffer transfer), mounting the spawn chunk first with batched collider uploads, and pre-warming shaders via renderer.compileAsync() behind BootOverlay. Main-thread massifBuildMs dropped from 543.4 ms to 14.9 ms (15.3 ms in prod dist/).
   6. [Severity: P1] [FIXED IN PHASE 2] Hot-Path GC Pressure (90 Heap Drops > 1 MB in 30s)
       • Location: src/core/Renderer.ts, src/player/SkierController.ts, src/core/Game.ts, src/network/RemoteSkier.ts
       • Status: Phase 1 eliminated local hot-path drops (0 drops > 1 MB); Phase 2 completed the remaining RemoteSkier 30-slot ring snapshot pool and pre-allocated _animParams.
@@ -361,16 +359,14 @@ Alpine Freeride — Production-Readiness Audit Report
       • 30s headless Playwright ?perf=1 trace (1280×720, ANGLE/D3D11) measured avg 59.97 FPS (49.09 FPS 1% low due to headless D3D11 VSync jitter while JS CPU p99 dropped to 0.80 ms / max 7.40 ms), avg drawCalls reduced from 104.9 to 60.1 (min 35, max 73; < 65 target), avg triangles reduced from 411,831 to 156,227 (min 112,392, max 186,528; < 250k target), avg CPU frame time reduced from 0.76 ms to 0.43 ms, avg physics reduced from 0.25 ms to 0.14 ms, TTFF 953.2 ms, and gcDropsOver1MB = 0.
       • 10-peer RemoteSkier churn check verified 0 leaked geometries or shader programs (wave1: 53 → 59 after caching 3 additional palette geometries; wave2: 59 → 79 → 59 geometries, 11 → 11 shader programs, 285–301 draw calls with 11 visible skiers).
 
-  Phase 3 — Production Hardening (Robustness & Polish)
+  Phase 3 — Production Hardening (Robustness & Polish) [COMPLETED]
 
-  1. Workerized Startup & Async Shader Pre-Warming: Move DetailTexture synthesis and chunk heightfield generation into a Web Worker, and use renderer.
-  compileAsync(scene, camera) with a non-blocking boot progress overlay to push massifBuildMs off the main thread.
-  2. WebGL Context Loss & Adaptive Quality Tiers: Add webglcontextlost/webglcontextrestored handling in src/core/Renderer.ts, plus Low/Medium/High presets scaling       
-  shadow resolution (1024 vs 2048), DPR cap (1.0–1.5 vs 2.0), MSAA, and DetailTexture size (512 vs 1024), plus transform: translate3d for RemoteSkier nametags and       
-  optional toggle for backdrop-filter.
-  3. UI & Lifecycle Decoupling: Consolidate duplicate #hud markup in index.html and src/ui/HudOverlay.ts, split SkierController responsibilities (physics bridge vs.     
-  VFX/audio), and add automated regression tests for Game.dispose(), window.blur, and webglcontextlost simulation.
+  1. [DONE] Workerized Startup & Async Shader Pre-Warming: Moved DetailTexture synthesis (src/world/shaders/detailTextureData.ts) and 36-chunk heightfield/LOD/pine generation (src/world/massifBuilder.ts) into src/world/massifWorker.ts with zero-copy ArrayBuffer transfers, spawn-first batched Rapier collider assembly in src/world/AlpineMassif.ts, non-blocking src/ui/BootOverlay.ts, and renderer.compileAsync() pre-warming in src/core/Renderer.ts and src/core/Game.ts.
+  2. [DONE] WebGL Context Loss & Adaptive Quality Tiers: Added webglcontextlost/webglcontextrestored recovery in src/core/Renderer.ts and src/core/Game.ts; added Low/Medium/High presets in src/core/QualitySettings.ts and src/camera/CameraTunerOverlay.ts scaling shadow resolution (1024 vs 2048), PCFShadowMap vs PCFSoftShadowMap, DPR cap (1.0–1.5 vs 2.0), startup antialias, fillLight, DetailTexture size (512 vs 1024), and UI backdrop-filter toggle; switched RemoteSkier nametags to cached elements/viewport and GPU-composited transform: translate3d in src/network/RemoteSkier.ts.
+  3. [DONE] UI & Lifecycle Decoupling: Consolidated duplicate #hud markup out of index.html into src/ui/overlays.css and src/ui/HudOverlay.ts, extracted audio/trail/spray presentation from src/player/SkierController.ts into src/player/SkierEffects.ts, and added automated Playwright regression checks in tests/regression.mjs (npm run test:regression).
 
-  • Verification / Acceptance Check: Simulate WEBGL_lose_context (loseContext() / restoreContext()) in Playwright and verify clean recovery; run window.blur during      
-  active key holds and verify zero stuck steering; run npm run build and verify production bundle loads cleanly on npm start with massifBuildMs < 100 ms on the main     
-  thread.
+  • Verification / Acceptance Check (Observed):
+      • npx tsc --noEmit and npm run build passed with 0 errors.
+      • npm run test:regression against production server/index.js (dist/) passed all 5 checks with 0 page errors: startup massifBuildMs=15.3 ms (< 100 ms target, TTFF=1,058.1 ms), window.blur cleared active keyState/steering, Low <-> High quality switching updated shadow map/DPR/fillLight/backdrop-blur, WEBGL_lose_context loseContext()/restoreContext() recovered rendering (51 -> 71 frames), and Game.dispose() cleanly removed all DOM overlays and loops.
+      • vision/capture.mjs visual cross-check passed with 0 page errors on acceptance_criteria_1_latest.png (Massif: 16.7 ms, 60 calls, 163,640 tris, 12 shader programs, 10.68 MB heap).
+      • 31.48s headless Playwright ?perf=1 trace (1280×720, ANGLE/D3D11, 1,888 frames / 1,800 sampled, 0 page errors) measured avg 59.94 FPS (48.14 FPS 1% low), avg CPU frame time 0.40 ms (p99 0.80 ms, max 5.20 ms), avg physics 0.14 ms, avg render dispatch 0.24 ms (max 5.00 ms), avg drawCalls 45.9 (min 34, max 69), avg triangles 122,572 (min 72,766, max 170,626), 12 shader programs, 10.68 MB flat heap (gcDropsOver1MB = 0), and main-thread massifBuildMs = 14.9 ms.

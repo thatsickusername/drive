@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { SkyDome } from '../world/environment/SkyDome';
 import { AirborneSparkles } from '../world/environment/AirborneSparkles';
 import { DayNightCycle } from '../world/environment/DayNightCycle';
+import { QualityPreset, QualityTier, detectDefaultQualityTier, getQualityPreset } from './QualitySettings';
 
 export type LightingMode = 'day' | 'golden' | 'night';
 
@@ -80,11 +81,31 @@ export class Renderer {
   private readonly _snappedTarget = new THREE.Vector3();
   private readonly _lightOffset = new THREE.Vector3(-190, 130, -50);
   private readonly _lightDir = new THREE.Vector3(-190, 130, -50).normalize();
-  private readonly _shadowTexelSize: number = 200.0 / 2048.0;
+  private _shadowTexelSize: number = 200.0 / 2048.0;
+  private dprCap: number = 2.0;
+  private qualityPreset: QualityPreset;
+
+  public isContextLost: boolean = false;
+  public onContextLost?: () => void;
+  public onContextRestored?: () => void;
 
   private readonly boundResize = () => this.onWindowResize();
+  private readonly boundContextLost = (e: Event) => {
+    e.preventDefault();
+    this.isContextLost = true;
+    this.onContextLost?.();
+  };
+  private readonly boundContextRestored = () => {
+    this.isContextLost = false;
+    this.lastAppliedLightingFactor = -1.0;
+    this.onContextRestored?.();
+  };
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, quality?: QualityPreset) {
+    this.qualityPreset = quality ?? getQualityPreset(detectDefaultQualityTier());
+    this.dprCap = this.qualityPreset.dprCap;
+    this._shadowTexelSize = 200.0 / this.qualityPreset.shadowMapSize;
+
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xf6eef3);
     this.scene.fog = new THREE.Fog(0xf8ebe6, 180, 1500);
@@ -102,13 +123,15 @@ export class Renderer {
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      antialias: this.qualityPreset.antialias,
       powerPreference: 'high-performance'
     });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.dprCap));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = this.qualityPreset.softShadows
+      ? THREE.PCFSoftShadowMap
+      : THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
 
@@ -116,8 +139,8 @@ export class Renderer {
     this.dirLight = new THREE.DirectionalLight(0xfff6ec, 2.05);
     this.dirLight.position.set(140, 110, -50);
     this.dirLight.castShadow = true;
-    this.dirLight.shadow.mapSize.width = 2048;
-    this.dirLight.shadow.mapSize.height = 2048;
+    this.dirLight.shadow.mapSize.width = this.qualityPreset.shadowMapSize;
+    this.dirLight.shadow.mapSize.height = this.qualityPreset.shadowMapSize;
     this.dirLight.shadow.camera.near = 1;
     this.dirLight.shadow.camera.far = 450;
     const shadowD = 100;
@@ -136,6 +159,7 @@ export class Renderer {
     // Subtle neutral fill light
     this.fillLight = new THREE.DirectionalLight(0xdedbe0, 0.12);
     this.fillLight.position.set(130, 80, 80);
+    this.fillLight.visible = this.qualityPreset.fillLightEnabled;
     this.scene.add(this.fillLight);
 
     // Stylized gradient SkyDome & floating diamond sparkles
@@ -146,6 +170,8 @@ export class Renderer {
     this.scene.add(this.sparkles.points);
 
     window.addEventListener('resize', this.boundResize);
+    this.renderer.domElement.addEventListener('webglcontextlost', this.boundContextLost);
+    this.renderer.domElement.addEventListener('webglcontextrestored', this.boundContextRestored);
   }
 
   public setLightingMode(mode: LightingMode, instant: boolean = false): void {
@@ -275,19 +301,68 @@ export class Renderer {
     this.sparkles.update(time, targetPos);
   }
 
+  public getQualityTier(): QualityTier {
+    return this.qualityPreset.tier;
+  }
+
+  public getQualityPreset(): QualityPreset {
+    return this.qualityPreset;
+  }
+
+  public applyQualityPreset(preset: QualityPreset): void {
+    this.qualityPreset = preset;
+    this.dprCap = preset.dprCap;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.dprCap));
+    this.renderer.setSize(window.innerWidth, window.innerHeight);
+
+    const nextShadowSize = preset.shadowMapSize;
+    if (
+      this.dirLight.shadow.mapSize.width !== nextShadowSize ||
+      this.dirLight.shadow.mapSize.height !== nextShadowSize
+    ) {
+      this.dirLight.shadow.mapSize.set(nextShadowSize, nextShadowSize);
+      if (this.dirLight.shadow.map) {
+        this.dirLight.shadow.map.dispose();
+        (this.dirLight.shadow as any).map = null;
+      }
+    }
+    this._shadowTexelSize = 200.0 / nextShadowSize;
+
+    const targetShadowType = preset.softShadows ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    if (this.renderer.shadowMap.type !== targetShadowType) {
+      this.renderer.shadowMap.type = targetShadowType;
+      this.renderer.shadowMap.needsUpdate = true;
+    }
+
+    this.fillLight.visible = preset.fillLightEnabled;
+  }
+
+  public async compileAsync(): Promise<void> {
+    if (this.isContextLost) return;
+    const anyRenderer = this.renderer as any;
+    if (typeof anyRenderer.compileAsync === 'function') {
+      await anyRenderer.compileAsync(this.scene, this.camera);
+    } else {
+      this.renderer.compile(this.scene, this.camera);
+    }
+  }
+
   private onWindowResize(): void {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.dprCap));
   }
 
   public render(): void {
+    if (this.isContextLost) return;
     this.renderer.render(this.scene, this.camera);
   }
 
   public dispose(): void {
     window.removeEventListener('resize', this.boundResize);
+    this.renderer.domElement.removeEventListener('webglcontextlost', this.boundContextLost);
+    this.renderer.domElement.removeEventListener('webglcontextrestored', this.boundContextRestored);
     this.skyDome.dispose();
     this.sparkles.dispose();
     if (this.dirLight.shadow.map) {

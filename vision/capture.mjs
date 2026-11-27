@@ -133,6 +133,10 @@ async function run() {
     await page.goto(navUrl, { waitUntil: 'networkidle' });
 
     await page.waitForSelector('#game-canvas', { timeout: 10000 });
+    await page.waitForFunction(
+      () => Boolean(window.game && window.game.massif && !document.getElementById('boot-overlay')),
+      { timeout: 20000 }
+    );
     console.log('[vision] Canvas loaded. Waiting for 3D scene initialization...');
     await page.evaluate(({ isNight, isGolden }) => {
       const btn = document.getElementById('camera-tuner-toggle-btn');

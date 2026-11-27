@@ -10,7 +10,10 @@ import { SkierController } from '../player/SkierController';
 import { AlpineMassif } from '../world/AlpineMassif';
 import { HudOverlay } from '../ui/HudOverlay';
 import { LightingControls } from '../ui/LightingControls';
+import { BootOverlay } from '../ui/BootOverlay';
 import { NetworkManager } from '../network/NetworkManager';
+import { QualityTier, detectDefaultQualityTier, getQualityPreset, saveQualityTier } from './QualitySettings';
+import { getCachedSnowDetailTexture } from '../world/shaders/DetailTexture';
 
 export class Game {
   public renderer!: Renderer;
@@ -28,6 +31,9 @@ export class Game {
   private lastTime: number = 0;
   private lastHudUpdateTime: number = 0;
   private animFrameId: number | null = null;
+  private isDisposed: boolean = false;
+  private bootOverlay: BootOverlay | null = null;
+  private contextLostBanner: HTMLDivElement | null = null;
   private _networkLightingParams: {
     time: number;
     sunDir: THREE.Vector3;
@@ -88,10 +94,22 @@ export class Game {
       throw new Error('Canvas element #game-canvas not found');
     }
 
+    const qualityTier = detectDefaultQualityTier();
+    const qualityPreset = getQualityPreset(qualityTier);
+    this.setBackdropBlur(qualityPreset.backdropBlur);
+
+    this.bootOverlay = new BootOverlay();
+    this.bootOverlay.setProgress('Initializing renderer...', 0.05);
+
     // 1. Initialize PBR ACES Renderer
-    this.renderer = new Renderer(canvas);
+    this.renderer = new Renderer(canvas, qualityPreset);
+    this.renderer.onContextLost = () => this.handleContextLost();
+    this.renderer.onContextRestored = () => {
+      void this.handleContextRestored();
+    };
 
     // 2. Initialize Rapier 3D WASM Physics Engine
+    this.bootOverlay.setProgress('Initializing physics...', 0.12);
     if (this.telemetry) this.telemetry.mark('wasm-init-start');
     this.physics = new PhysicsEngine();
     await this.physics.init();
@@ -100,17 +118,25 @@ export class Game {
       this.telemetry.measure('wasm-init', 'wasm-init-start', 'wasm-init-end');
     }
 
-    // 3. Build 2.4km x 2.4km Alpine Massif
-    if (this.telemetry) this.telemetry.mark('massif-init-start');
-    this.massif = new AlpineMassif(
+    // 3. Build 2.4km x 2.4km Alpine Massif via Web Worker + batched main-thread upload
+    this.massif = await AlpineMassif.createAsync(
       this.renderer.scene,
       this.physics.rapier,
-      this.physics.world
+      this.physics.world,
+      {
+        detailSize: qualityPreset.detailTexSize,
+        anisotropy: qualityPreset.detailAnisotropy,
+        spawnX: this.currentSpawn.x,
+        spawnZ: this.currentSpawn.z,
+        onProgress: (label, progress01) => {
+          this.bootOverlay?.setProgress(label, progress01);
+        }
+      }
     );
     if (this.telemetry) {
-      this.telemetry.mark('massif-init-end');
-      this.telemetry.measure('massif-init', 'massif-init-start', 'massif-init-end');
+      this.telemetry.setStartupMeasure('massif-init', this.massif.mainThreadBuildMs);
     }
+    if (this.isDisposed) return;
 
     // 4. Sample ground altitude at Summit Peak
     const initialGround = this.massif.heightfield.sampleTerrain(this.currentSpawn.x, this.currentSpawn.z);
@@ -145,7 +171,12 @@ export class Game {
     // 8. Setup UI Overlays & Realtime Multiplayer Client
     this.hudOverlay = new HudOverlay(this.player, this.cameraDirector);
     this.lightingControls = new LightingControls(this.renderer);
-    this.cameraTuner = new CameraTunerOverlay(this.cameraDirector);
+    this.cameraTuner = new CameraTunerOverlay(this.cameraDirector, {
+      tier: qualityTier,
+      backdropBlur: qualityPreset.backdropBlur,
+      onQualityChange: (tier) => this.setQualityTier(tier),
+      onBackdropBlurChange: (enabled) => this.setBackdropBlur(enabled)
+    });
 
     this.networkManager = new NetworkManager(
       this.renderer.scene,
@@ -179,9 +210,83 @@ export class Game {
     // Handle tab switching / visibility changes to pause accumulation cleanly
     document.addEventListener('visibilitychange', this.boundVisibilityChange);
 
-    // 9. Start Game Loop
+    // 9. Async shader pre-warming before first frame
+    this.bootOverlay?.setProgress('Warming shaders...', 0.92);
+    await this.renderer.compileAsync();
+    this.bootOverlay?.dispose();
+    this.bootOverlay = null;
+    if (this.isDisposed) return;
+
+    // 10. Start Game Loop
     this.lastTime = performance.now();
     this.animFrameId = requestAnimationFrame(this.boundLoop);
+  }
+
+  public setQualityTier(tier: QualityTier): void {
+    const preset = getQualityPreset(tier);
+    saveQualityTier(tier);
+    this.renderer?.applyQualityPreset(preset);
+    this.massif?.setDetailQuality(preset.detailTexSize, preset.detailAnisotropy);
+    this.setBackdropBlur(preset.backdropBlur);
+  }
+
+  public setBackdropBlur(enabled: boolean): void {
+    document.body.classList.toggle('no-backdrop-blur', !enabled);
+  }
+
+  private handleContextLost(): void {
+    if (this.animFrameId !== null) {
+      cancelAnimationFrame(this.animFrameId);
+      this.animFrameId = null;
+    }
+    this.physics?.resetAccumulator();
+    this.inputController?.resetState();
+    this.showContextLostBanner(true);
+  }
+
+  private async handleContextRestored(): Promise<void> {
+    if (this.isDisposed) return;
+    const detailTex = getCachedSnowDetailTexture();
+    if (detailTex) {
+      detailTex.needsUpdate = true;
+    }
+    await this.renderer.compileAsync();
+    if (this.isDisposed || this.renderer.isContextLost) return;
+    this.showContextLostBanner(false);
+    this.lastTime = performance.now();
+    if (this.animFrameId === null) {
+      this.animFrameId = requestAnimationFrame(this.boundLoop);
+    }
+  }
+
+  private showContextLostBanner(visible: boolean): void {
+    if (visible) {
+      if (!this.contextLostBanner) {
+        const banner = document.createElement('div');
+        banner.id = 'webgl-context-lost-banner';
+        banner.style.cssText = `
+          position: fixed;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          background: rgba(15, 23, 42, 0.94);
+          color: #f8fafc;
+          border: 1px solid rgba(56, 189, 248, 0.45);
+          border-radius: 10px;
+          padding: 14px 22px;
+          font-family: 'Segoe UI', Roboto, sans-serif;
+          font-size: 13px;
+          font-weight: 600;
+          z-index: 2500;
+        `;
+        banner.textContent = 'WebGL context lost — restoring graphics...';
+        document.body.appendChild(banner);
+        this.contextLostBanner = banner;
+      }
+      this.contextLostBanner.style.display = 'block';
+    } else if (this.contextLostBanner) {
+      this.contextLostBanner.style.display = 'none';
+    }
   }
 
   public teleportTo(loc: { name: string; x: number; z: number; heading: number }): void {
@@ -219,6 +324,7 @@ export class Game {
   }
 
   private loop(currentTime: number): void {
+    if (this.isDisposed || this.renderer.isContextLost) return;
     const frameStart = performance.now();
     const delta = Math.min((currentTime - this.lastTime) / 1000, 0.1);
     this.lastTime = currentTime;
@@ -360,9 +466,18 @@ export class Game {
   }
 
   public dispose(): void {
+    this.isDisposed = true;
     if (this.animFrameId !== null) {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
+    }
+    if (this.bootOverlay) {
+      this.bootOverlay.dispose();
+      this.bootOverlay = null;
+    }
+    if (this.contextLostBanner && this.contextLostBanner.parentNode) {
+      this.contextLostBanner.parentNode.removeChild(this.contextLostBanner);
+      this.contextLostBanner = null;
     }
     window.removeEventListener('keydown', this.boundKeyDown);
     document.removeEventListener('visibilitychange', this.boundVisibilityChange);
